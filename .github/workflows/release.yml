@@ -1,0 +1,2 @@
+# Placeholder workflow: Release
+# TODO: Trigger on tags; build `.deb`, container image, live-build ISO; sign artifacts.

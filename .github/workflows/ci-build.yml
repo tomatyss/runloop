@@ -1,0 +1,3 @@
+# Placeholder workflow: CI Build
+# TODO: Configure on push/pull_request to main.
+# TODO: Steps: fmt, clippy, cargo test, artifact notes.

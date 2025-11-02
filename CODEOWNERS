@@ -1,0 +1,6 @@
+# CODEOWNERS — tomatyss (solo)
+# The last matching rule wins.
+
+# Default: you own everything
+* @tomatyss
+

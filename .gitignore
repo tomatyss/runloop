@@ -1,0 +1,14 @@
+# Build artifacts
+/target/
+**/*.rs.bk
+
+# Tooling cache
+/.cargo/
+/.rustup/
+
+# Environment files
+.env
+
+# OS junk
+**/.DS_Store
+Thumbs.db
