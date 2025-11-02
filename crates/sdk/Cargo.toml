@@ -1,0 +1,15 @@
+[package]
+name = "runloop-sdk"
+version = "0.1.0"
+edition = "2024"
+description = "Runloop agent SDK"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+runloop-rmp = { path = "../rmp" }
+runloop-bus = { path = "../bus" }

@@ -4,6 +4,8 @@
 
 Schema identifiers (`schema_id`) are 16-bit unsigned integers carried in every RMP header. The ranges below reserve space for core, extensions, and vendor-defined payloads.
 
+> Runtime constants live in `crates/rmp::registry`; update both locations together.
+
 | Range | Ownership | Notes |
 | ----- | --------- | ----- |
 | `0x0000` | Reserved | Never used; helps catch default/zero bugs. |

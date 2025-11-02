@@ -1,0 +1,18 @@
+[package]
+name = "runloopd"
+version = "0.1.0"
+edition = "2024"
+description = "Runloop daemon"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+runloop-core = { path = "../core" }
+runloop-bus = { path = "../bus" }
+runloop-rmp = { path = "../rmp" }
+runloop-kb = { path = "../kb" }
+runloop-model-broker = { path = "../model-broker" }
+tokio = { workspace = true }

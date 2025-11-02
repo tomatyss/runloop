@@ -1,0 +1,12 @@
+[package]
+name = "agtop"
+version = "0.1.0"
+edition = "2024"
+description = "Runloop observability CLI"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }

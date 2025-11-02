@@ -1,0 +1,13 @@
+[package]
+name = "runloop-openings"
+version = "0.1.0"
+edition = "2024"
+description = "Runloop openings DSL"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+indexmap = { workspace = true }

@@ -1,0 +1,25 @@
+[package]
+name = "runloop-rmp"
+version = "0.1.0"
+edition = "2024"
+description = "Runloop message protocol codec"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+hex = { workspace = true }
+bitflags = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+rmp-serde = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+rand = { workspace = true }
+rand_chacha = { workspace = true }
+uuid = { workspace = true }

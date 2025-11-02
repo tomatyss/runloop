@@ -1,0 +1,17 @@
+[package]
+name = "runloop-model-broker"
+version = "0.1.0"
+edition = "2024"
+description = "Runloop model broker"
+license = "Apache-2.0"
+publish = false
+
+[features]
+default = []
+streaming = []
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+runloop-core = { path = "../core" }

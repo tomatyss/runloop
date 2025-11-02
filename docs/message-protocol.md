@@ -10,52 +10,28 @@ The Runloop Message Protocol (RMP) is a binary envelope for agent messages. It p
 
 ## 1. Wire framing (normative)
 
-All multi-byte integers are big-endian.
+RMP v0 uses a **fixed 60-byte header** followed by a MsgPack body. All integers are big-endian.
 
-```
-+-----------------+-----------+-----------+-------------+-------------+-----------+--------------------+
-| Magic "RMP1"    | ver u16   | flags u16 | hdr_len u32 | body_len u32| sig_len u16 | PAYLOAD ...       |
-+-----------------+-----------+-----------+-------------+-------------+-----------+--------------------+
-| Header bytes (MsgPack map) | Body bytes | Signature (optional)                          |
-```
+| Offset | Field | Type | Notes |
+| ------ | ----- | ---- | ----- |
+| 0 | Magic | `[u8;4]` | ASCII `RMP0` |
+| 4 | `header_version` | `u16` | Always `0` for v0 |
+| 6 | `header_len` | `u16` | Always `60` |
+| 8 | `flags` | `u16` | bit 0 = signed, bit 1 = zstd; others reserved |
+| 10 | `schema_id` | `u16` | Payload schema ID |
+| 12 | `body_len` | `u32` | Length of the MsgPack body |
+| 16 | `created_at_ms` | `u64` | UTC milliseconds when the header was produced |
+| 24 | `ttl_ms` | `u32` | Relative TTL; `0` disables expiry |
+| 28 | `trace_id` | `[u8;16]` | UUIDv7 recommended |
+| 44 | `msg_id` | `[u8;16]` | UUIDv7 recommended |
 
-- **Magic:** ASCII `RMP1` (0x52 0x4D 0x50 0x31)
-- **ver:** frame version (initially `1`)
-- **flags:** bitmask (bit 0 = signed, bit 1 = compressed-zstd, others reserved)
-- **hdr_len / body_len:** lengths in bytes of the MsgPack header/body payloads
-- **sig_len:** `0` (no signature) or `64` for Ed25519 signatures. Additional signature algorithms require a new flag + length convention.
-- **Signature input:** the concatenation of everything before the signature field (magic through body bytes).
+Receivers MUST drop frames whose TTL has expired relative to the local clock and publish a drop event on `rlp/sys/drops`. Senders SHOULD generate monotonically increasing UUIDv7 IDs to keep dedupe caches efficient. Duplicate detection is performed on `(trace_id, msg_id)` pairs with an LRU cache per receiver.
 
-## 2. Header map (MsgPack, normative)
+The flags field reserves space for signatures and compression. Signatures and ACK/NAK handshakes ship as part of **RMP 0.2**; implementations MAY ignore unknown flag bits but MUST log them.
 
-Every header MUST contain the following keys.
+## 2. Body envelope (normative)
 
-| Key | Type | Description |
-| --- | ---- | ----------- |
-| `v` | u16 | Header schema version (currently `1`). |
-| `schema_id` | u16 | Payload schema (see [Schema registry](rmp-registry.md)). |
-| `msg_id` | bytes(16) | UUIDv7 (or equivalent monotonic) identifier scoped to sender. |
-| `trace_id` | bytes(16) | UUIDv7 trace identifier for end-to-end observability. |
-| `opening_id` | u64 | Opening/run identifier (0 if not in an opening). |
-| `from` | str | Sender identity (`agent:<name>@<version>` or `router`). |
-| `to` | str | Recipient (`agent:<name>` or bus topic). |
-| `ttl_ms` | u32 | Time-to-live relative to `ts`. |
-| `ts` | u64 | Unix time in nanoseconds when header created. |
-| `body_hash` | bytes(32) | BLAKE3-256 of body bytes after compression. |
-
-Recommended keys (processed when present):
-
-| Key | Type | Notes |
-| --- | ---- | ----- |
-| `budget` | map | `{ "tokens": u32, "usd": f32, "wall_ms": u32 }`. |
-| `caps` | map | Capability snapshot, e.g. `{ "kb_read": ["contacts"], "model": true }`. |
-| `provenance` | map | `{ "model": str, "provider": str, "parameters": map, "tooling": [str] }`. |
-| `deadline_unix_ms` | u64 | Absolute deadline. |
-| `priority` | u8 | 0 (default) – 7 (highest). |
-| `qos` | str | `"durable"` or `"ephemeral"`. |
-| `reply_to` | str | Optional reply subject. |
-
-Optional/experimental keys MUST be documented in `docs/rmp-registry.md` before production use.
+Body bytes are MsgPack maps of the form `{ "type": <schema_id>, "payload": <schema-specific> }`. The `type` field MUST equal the `schema_id` declared in the fixed header. Payload schemas are registered in [`docs/rmp-registry.md`](rmp-registry.md); additive changes within a schema are handled with in-payload versioning.
 
 ## 3. Payload schemas & versions (normative)
 
@@ -93,6 +69,7 @@ Reference JSON schema drafts will land alongside implementation.
 - Intra-host bus uses Unix domain sockets; delivery is at-least-once. `Control.Ack` + `msg_id` provide idempotence.
 - Router retries failed deliveries with exponential backoff unless `qos = "ephemeral"`.
 - TTL expiration results in a `Control.Error` with code `TTL_EXPIRED` routed back to sender.
+- Receivers emit drop metrics (`DropNotice{topic,reason,trace_id,msg_id}`) on `rlp/sys/drops` for TTL and duplicate rejections.
 
 ## 6. Schema registry & test vectors
 
@@ -100,7 +77,7 @@ See [`docs/rmp-registry.md`](rmp-registry.md) for reserved ranges and assignment
 
 ## 7. Backwards compatibility rules (normative)
 
-1. **Header fields:** new optional keys are allowed; never remove or rename existing keys without bumping frame version.
+1. **Header struct:** the 60-byte header is fixed; adding or reordering fields requires a new `header_version` (e.g., v1) and likely a different `header_len`.
 2. **Bodies:** additive fields must be ignored by older agents; removing/renaming requires new `schema_id`.
 3. **Flags:** toggling new bits requires documentation and negotiation via config; unknown bits MUST be ignored but logged with warning.
 

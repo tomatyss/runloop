@@ -1,0 +1,21 @@
+[package]
+name = "runloop-bus"
+version = "0.1.0"
+edition = "2024"
+description = "Runloop message bus"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+chrono = { workspace = true }
+hex = { workspace = true }
+lru = { workspace = true }
+once_cell = { workspace = true }
+parking_lot = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+runloop-rmp = { path = "../rmp" }
+uuid = { workspace = true }

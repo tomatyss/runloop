@@ -180,10 +180,17 @@ runloop/
 │  └─ adr/
 │     └─ README.md
 ├─ crates/
-│  ├─ runloopd/ (daemon)         ├─ rlp/ (CLI)
-│  ├─ agtop/ (monitor TUI)       ├─ runtime/ (WASM runtime, caps)
-│  ├─ rmp/ (message protocol)    ├─ kb/ (knowledge base)
-│  ├─ model-broker/              └─ sdk/ (agent SDK)
+│  ├─ core/ (shared types & config loader)
+│  ├─ bus/ (local message bus + TTL/dupe handling)
+│  ├─ rmp/ (Runloop Message Protocol codec)
+│  ├─ kb/ (knowledge base)
+│  ├─ openings/ (DSL parser)
+│  ├─ model-broker/ (LLM broker)
+│  ├─ runtime/ (WASM runtime, capabilities)
+│  ├─ sdk/ (agent SDK)
+│  ├─ rlp/ (CLI)
+│  ├─ runloopd/ (daemon)
+│  └─ agtop/ (monitor TUI)
 ├─ agents/ (agent bundles + capability manifests)
 ├─ examples/
 │  ├─ openings/ (YAML samples)   └─ config/ (sample configs)
@@ -250,50 +257,38 @@ cargo test --workspace
 
 ## Configuration
 
-Global config lives at `~/.runloop/config.yaml` (user‑scoped). Example:
+Global config lives at `~/.runloop/config.yaml` (user‑scoped). Example (schema **v1**):
 
 ```yaml
-runtime:
-  agent_container: "wasm32-wasi"
-  caps_override_dir: "~/.runloop/caps/overrides"
-models:
-  default: "local:llama3.1-8b"
-  providers:
-    - id: "local"
-      rate_limits: { tpm: 0, rpm: 0, burst: 0 }  # TODO: fill in per provider
-    - id: "openai"
-      rate_limits: { tpm: 80000, rpm: 3000, burst: 2 }
-  budgets:
-    system:
-      tokens_soft: 500000
-      tokens_hard: 750000
-      usd_soft: 10.00
-      usd_hard: 15.00
-    opening_default:
-      tokens_soft: 8000
-      tokens_hard: 12000
-      usd_soft: 0.05
-      usd_hard: 0.10
+version: 1
 kb:
-  ledger: "~/.runloop/pog/events.sqlite"
-  materialized: "~/.runloop/pog/pog.sqlite"
-  vectors: "~/.runloop/pog/vectors"
-security:
-  confirm_external_actions: true
-  secrets_backend: "auto"          # secret-service | pass | age
-  secrets_namespace: "runloop"
+  root_dir: "~/.runloop"
+  events_db: "pog/events.sqlite"
+  view_db: "pog/views.sqlite"
+logging:
+  level: info
+  format: text                # valid: text | json
+  file: null
 observability:
-  logs_format: "json"
   otlp_endpoint: ""
-  otlp_protocol: "http"
-  sampling:
-    traces_parent_based: true
-    traces_ratio: 0.01
-ui:
-  theme: "mono"
+  traces_sampling_ratio: 0.01
+security:
+  secrets:
+    provider: "auto"          # stub | os-keyring | age | auto
+router:
+  default_opening: "compose_email"
+  confirm_external: true
+models:
+  broker:
+    endpoint: "http://127.0.0.1:8082"
+    cache_ttl_sec: 30
 ```
 
-Runloopd will create `~/.runloop/` (and subdirectories) with `0700` permissions on first start, initialize both SQLite databases, and select a secrets backend automatically (`secret-service` → `pass` → `age`) when configured with `auto`. CLI helpers such as `rlp kb init` and `rlp secrets put` will land alongside the runtime scaffolding.
+Legacy aliases — `kb.ledger`, `kb.materialized`, `security.secrets_backend`, `observability.logs_format` — map to the v1 keys and emit a warning when encountered. Prefer the canonical fields above. Every key can be overridden from the environment using `RUNLOOP__` prefixes, e.g. `RUNLOOP__MODELS__BROKER__ENDPOINT=https://broker.internal`.
+
+User-mode runs keep state under `~/.runloop/**` and expose the bus at `~/.runloop/run/runloopd.sock`. Packaged/systemd deployments run as `runloop:runloop`, store state in `/var/lib/runloop`, and bind the bus at `/run/runloop/runloopd.sock`.
+
+Runloopd bootstraps the directory structure (`0700`), initializes both SQLite databases, and selects a secrets provider automatically when `security.secrets.provider = "auto"`. If no platform keyring is available it falls back to the stub provider, storing only opaque `secret_id` references. CLI helpers such as `rlp kb init` and `rlp secrets put` operate against the same layout.
 
 ---
 
@@ -333,6 +328,7 @@ A **local‑first** store for events, facts, and artifacts:
 * **Automatic init** → first run creates the directories (`0700`) and seeds the schema; `rlp kb init` will re-initialize/verify
 * **Usage ledger** → broker/app subsystems append cost + token usage events for auditing
 * **APIs** (conceptual): `kb.propose(delta)`, `kb.query(sql_like)`, `kb.search(q, k, filter)`, `kb.why(id)`
+* **Content hashing** → ledger stores canonical JSON payloads with a `BLOB(32)` BLAKE3 digest; tooling renders hex only for logs/UI.
 
 Provenance chains link outputs to inputs, models, and agent versions for **explainability**.
 
@@ -340,19 +336,28 @@ Provenance chains link outputs to inputs, models, and agent versions for **expla
 
 ## Message Protocol (RMP)
 
-A small, typed protocol for agent messages.
+MVP ships **RMP v0**: a fixed 60‑byte header plus a MsgPack body `{ type: schema_id, payload: ... }`. The header carries real-time metadata, including creation time, so receivers can enforce time-to-live.
 
-**Header (concept):**
+**Header layout (60 bytes):**
 
-* `trace_id` (u128), `opening_id` (u64), `msg_id` (u64), `ttl_ms` (u32)
-* `caps_bitmap` (u32), `tokens_budget` (u32), `schema_id` (u16), `priority` (u8)
+| Offset | Field | Type | Notes |
+| ------ | ----- | ---- | ----- |
+| 0 | Magic | `[u8;4]` | ASCII `RMP0` |
+| 4 | `header_version` | `u16` | `0` for v0 |
+| 6 | `header_len` | `u16` | Always `60` |
+| 8 | `flags` | `u16` | bit0 = signed, bit1 = zstd |
+| 10 | `schema_id` | `u16` | See registry |
+| 12 | `body_len` | `u32` | MsgPack bytes |
+| 16 | `created_at_ms` | `u64` | Header timestamp |
+| 24 | `ttl_ms` | `u32` | Relative TTL; `0` = infinite |
+| 28 | `trace_id` | `[u8;16]` | UUIDv7 suggested |
+| 44 | `msg_id` | `[u8;16]` | UUIDv7 suggested |
 
-**Body:** msgpack payload tagged with a **schema**.
+Receivers drop frames with expired TTLs, dedupe on `(trace_id, msg_id)`, and emit metrics via `rlp/sys/drops`. Signatures and reliability ACKs remain on the roadmap for **RMP 0.2**.
 
-**Primitives:** `Observation`, `Intent`, `ToolCall`, `ToolResult`, `Artifact`, `Critique`, `StateDelta`.
-**Protocol frames:** `Ack`, `Error`, and `Control` provide delivery guarantees and flow control; most agents interact only with the core primitives unless they implement transport adapters.
+Core payload schemas map to the registry (`docs/rmp-registry.md`): `Observation`, `Intent`, `ToolCall`, `ToolResult`, `Artifact`, `Critique`, `StateDelta`, and control frames (`Control.Heartbeat`, `Control.Ack`, `Control.Error`).
 
-See: `docs/message-protocol.md`.
+See the normative description in `docs/message-protocol.md`.
 
 ---
 
@@ -397,6 +402,7 @@ See: `docs/openings-dsl.md`.
 * **Replay**: deterministic re‑execution for debugging and self‑improvement.
 * **OpenTelemetry**: traces + metrics export over OTLP; configure sampling/endpoints in `observability`.
 * **Structured logs**: JSON lines by default with `trace_id`, `opening_id`, and agent metadata.
+* **Logging knobs**: `logging.*` handles level/file/format; `observability.*` is reserved for tracing/OTLP (the legacy `observability.logs_format` alias still works with a warning).
 
 See: `docs/tui.md`, `docs/ops.md`.
 
@@ -408,6 +414,7 @@ Runloop ships in **phases** (Seed → Openings/SDK → KB Hardening → Reliabil
 
 * `docs/roadmap.md`
 * `docs/adr/` (architecture decisions)
+* **MVP constraint:** the model broker only serves non-streaming completions; streaming toggles on behind a Phase-3 feature flag (`docs/roadmap.md` M5/M6).
 
 ---
 

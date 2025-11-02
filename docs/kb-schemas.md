@@ -15,28 +15,28 @@ The Personal Operations Graph (POG) comprises two SQLite databases plus derived 
 ```sql
 CREATE TABLE IF NOT EXISTS events (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  ts            INTEGER NOT NULL,              -- unix ns
+  ts_ms         INTEGER NOT NULL,              -- unix time in milliseconds
   actor         TEXT NOT NULL,                 -- agent:<id> or user
   kind          TEXT NOT NULL,                 -- e.g. contact.upserted
   scope         TEXT NOT NULL,                 -- user|system|agent:<id>
-  payload       BLOB NOT NULL,                 -- msgpack/json
-  provenance    BLOB NOT NULL,                 -- msgpack/json (model, inputs hash, etc.)
-  hash          TEXT NOT NULL UNIQUE           -- blake3-256(kind|payload|prov)
+  payload_json  TEXT NOT NULL,                 -- JCS canonical JSON blob
+  provenance_json TEXT NOT NULL,               -- JCS canonical JSON (model, inputs hash, etc.)
+  hash_blake3   BLOB NOT NULL UNIQUE           -- BLAKE3 digest of canonical envelope
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_kind_ts
-  ON events(kind, ts);
+  ON events(kind, ts_ms);
 CREATE INDEX IF NOT EXISTS idx_events_actor_ts
-  ON events(actor, ts);
+  ON events(actor, ts_ms);
 ```
 
 `meta(schema_version TEXT, dirty INTEGER, ts DATETIME)` tracks migrations. `schema_version` uses SemVer.
 
 ### 1.2 Constraints
 
-- `payload` and `provenance` must be canonical MsgPack.
+- `payload_json` and `provenance_json` MUST be [JCS](https://www.rfc-editor.org/rfc/rfc8785) canonical JSON strings.
 - Insertions must occur within transactions; never update/delete existing rows.
-- `hash` validation occurs during `rlp kb verify`.
+- `hash_blake3` validation occurs during `rlp kb verify`; the digest is stored as raw BLOB(32) and rendered in hex only for logs/UIs.
 
 ## 2. Materialized views (`pog.sqlite`)
 

@@ -151,6 +151,11 @@ See `docs/security-model.md` for secret-store details. Ops tasks:
 - Tracing & metrics via OpenTelemetry OTLP. Configure endpoint, protocol, and sampling under `observability` in config.
 - `agtop` pane + `rlp trace` rely on the metrics exported by agents.
 
+## 8. Message bus topics _(normative)_
+
+- Only UI/TUI processes may publish `action.decision`; the bus rejects other publishers and emits an audit event.
+- The runtime publishes drop notices (`DropNotice`) on `rlp/sys/drops` whenever TTL expiry or duplicate suppression occurs. Operators should scrape this topic for reliability dashboards.
+
 ## Appendix A. Repo admin checklist
 
 ### Branch protection (owner: @release-eng)

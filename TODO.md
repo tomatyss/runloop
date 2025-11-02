@@ -1,396 +1,439 @@
-## Phase 0 — Create the repository shell
-
-1. **Create a new repo**
-
-* [x] Repo name: `runloop`
-* [x] Default branch: `main`
-* [x] Visibility: your choice (private while incubating; public if ready)
-* [x] Initialize with **no** sample code
-
-2. **Top‑level scaffolding (empty files are okay)**
-
-* [x] `README.md`
-* [x] `LICENSE` (choose: Apache‑2.0 recommended)
-* [x] `CODE_OF_CONDUCT.md` (Contributor Covenant v2.1 template)
-* [x] `CONTRIBUTING.md`
-* [x] `SECURITY.md` (how to report vulnerabilities)
-* [x] `SUPPORT.md` (where to get help)
-* [x] `CODEOWNERS` (set ownership by path)
-* [x] `.gitignore` (Rust, Cargo, target/, build artifacts, OS junk)
-* [x] `.gitattributes` (text=auto, eol=lf; mark binaries)
-* [x] `.editorconfig` (tabs/spaces, utf‑8, newline rules)
-* [x] `rust-toolchain.toml` (pin to `stable`, add `clippy`, `rustfmt`)
-* [x] `CHANGELOG.md` (empty; explain Conventional Commits)
-* [x] `Justfile` or `Makefile` (task aliases; can be empty/commented)
-* [x] `.env.example` (document expected env vars; **no secrets**)
-
-**Definition of Done (DoD):** Repo contains these files with initial headings and TODOs, committed to `main`.
+> **MVP scope (explicit):**
+>
+> * Single‑machine, single‑user.
+> * Debian host, terminal‑only.
+> * Agents run as **WASM/WASI** tasks under Wasmtime with **capabilities**.
+> * Message bus (local UDS), **RMP** (Runloop Message Protocol) v0.
+> * Knowledge Base (**Pog**) with SQLite **event log + materialized views**; **FTS** optional; embeddings **postponed** (semantic search can be mocked).
+> * Router v0: shell fast‑path + heuristic route to a single opening.
+> * Opening engine v0: **DAG**, retries, timeouts, **replay**.
+> * Canonical opening: **“compose_email”** (contact_resolver → context_gatherer → writer → critic → mailer). Mailer does **dry‑run** (prints), human confirm required.
+> * Observability v0: `agtop` (cpu/mem/tokens), `trace` ladder text, audit log for caps.
+> * Packaging: `.deb` + live‑build ISO (dev grade).
 
 ---
 
-## Phase 1 — Document the project intent & layout
+## Epic A — Core types, config, errors
 
-3. **README.md — initial content outline**
+**A1. Core crate for shared types**
 
-* [ ] One‑sentence elevator pitch (agent‑native, terminal‑first OS)
-* [ ] “Why Runloop?” (problem & philosophy)
-* [ ] High‑level architecture diagram placeholder (link to `docs/architecture.md`)
-* [ ] Quickstart table of contents pointing to docs (no commands yet)
-* [ ] Project status (alpha, roadmap link)
-* [ ] Contributing & community links
-* [ ] License & security disclosure
+* [ ] Path: `crates/core/` (add to workspace).
+* [ ] Define error enum (thin, `thiserror`): `Error::{Io, Config, Bus, Rmp, Runtime, Kb, Broker, Router, Opening, CapDenied, Timeout, BudgetExceeded}`.
+* [ ] Define core IDs: `AgentId`, `OpeningId`, `TraceId`, `EventId`.
+* [ ] Define **content types** registry constants (u16): `CT_OBSERVATION=1`, `CT_INTENT=2`, `CT_TOOLCALL=3`, `CT_TOOLRESULT=4`, `CT_ARTIFACT=5`, `CT_CRITIQUE=6`, `CT_STATEDELTA=7`.
 
-4. **/docs tree (no implementation)**
-   Create the following placeholders with headings and bullets (no code required):
+**DoD:** All types compile; docs comment each type’s purpose; used by other crates.
 
-* [x] `docs/architecture.md`
-  Sections: Goals, Non‑goals, Components (router, openings engine, runtime, KB, model broker, TUI), Data flow (messages, events), Trust & capabilities model, Portability plan (Debian→Redox).
-* [x] `docs/roadmap.md`
-  Sections: Phases A–F, milestones, exit criteria (link to your earlier roadmap).
-* [x] `docs/getting-started.md`
-  Sections: prerequisites, repo layout, how to read the repo, where to find tasks.
-* [x] `docs/contributor-guide.md`
-  Sections: how to pick an issue, style conventions, review process.
-* [x] `docs/release-process.md`
-  Sections: versioning & tags, CHANGELOG rules, release approvals, artifacts (deb, ISO).
-* [x] `docs/security-model.md`
-  Sections: sandbox/capabilities, secret handling, provenance & audit, threat model (to fill later).
-* [x] `docs/message-protocol.md`
-  Sections: header fields (trace_id etc), content types, schemas registry, delivery guarantees (conceptual).
-* [x] `docs/kb-schemas.md`
-  Sections: events (identity, contact, artifact…), materialized views, provenance rules, retention.
-* [x] `docs/openings-dsl.md`
-  Sections: basic grammar, nodes/edges/policy, replay semantics, examples (descriptive, no code).
-* [x] `docs/tui.md`
-  Sections: panes, keybinds, UX principles, accessibility.
-* [x] `docs/ops.md`
-  Sections: packaging, systemd units, live‑build, CI artifacts, SBOM plan.
+**A2. Config loader**
 
-**DoD:** All documents exist with section headings and TODO bullets; README links are not broken.
+* [ ] Path: `crates/core/src/config.rs`.
+* [ ] Structure mirrors `~/.runloop/config.yaml` (runtime, models, kb, security, ui).
+* [ ] Implement: `Config::load()` (env var override path), `Config::validate()` (required fields, sane ranges).
+
+**DoD:** A unit test loads a sample `tests/fixtures/config.yaml` and validates defaults.
 
 ---
 
-## Phase 2 — Define repository structure (directories only)
+## Epic B — RMP protocol & local bus
 
-5. **Top‑level layout (create empty dirs & placeholder READMEs)**
+**B1. RMP header & frame codec**
 
-* [x] `/crates/` (Rust workspace crates — **no code** yet)
+* [ ] Path: `crates/rmp/`.
+* [ ] Define fixed 60-byte header with `magic`, `header_version`, `header_len`, `flags`, `schema_id`, `body_len`, `created_at_ms`, `ttl_ms`, `trace_id`, `msg_id`.
+* [ ] Implement `{type, payload}` MsgPack envelope helpers + encode/decode APIs.
+* [ ] Parse/validate TTL, expose helpers for `expires_at_ms`, duplicate keys.
 
-  * [x] `/crates/runloopd/` (daemon) — add `README.md` (scope & interfaces to be implemented)
-  * [x] `/crates/rlp/` (CLI)
-  * [x] `/crates/agtop/` (monitor TUI)
-  * [x] `/crates/runtime/` (Wasm runtime, caps)
-  * [x] `/crates/rmp/` (Runloop Message Protocol types/codec)
-  * [x] `/crates/kb/` (knowledge base)
-  * [x] `/crates/model-broker/` (LLM provider abstraction)
-  * [x] `/crates/sdk/` (agent SDK)
-* [x] `/agents/` (agent bundles)
+**DoD:** Round‑trip test over a `tokio::io::duplex()` stream; fuzz decoder (corpus with corrupt lengths).
 
-  * [x] `/agents/contact_resolver/` (placeholder only)
-  * [x] `/agents/context_gatherer/`
-  * [x] `/agents/writer/`
-  * [x] `/agents/critic/`
-  * [x] `/agents/mailer/`
-* [x] `/examples/`
+**B2. Bus abstraction (UDS)**
 
-  * [x] `/examples/openings/` (YAML samples; put `.placeholder` files)
-  * [x] `/examples/config/` (`config.yaml` placeholder)
-* [x] `/packaging/`
+* [ ] Path: `crates/bus/`.
+* [ ] Public API: `Bus::bind(path)`, `Bus::connect(path)`, `Bus::publish(topic,msg)`, `Bus::subscribe(topic) -> Stream<Message>`, `Bus::send(dest,msg)`.
+* [ ] Implement back‑pressure: bounded channel; drop policy = block writer with timeout, emit metric.
+* [ ] **Idempotency**: include `(trace_id,msg_id)` in a dedupe cache (LRU) on receivers, ignore dups.
+* [ ] TTL enforcement: drop messages beyond `ttl_ms`.
+* [ ] Surface drop counters and broadcast notifications on `rlp/sys/drops`.
 
-  * [x] `/packaging/systemd/` (`runloopd.service` placeholder, no unit spec yet)
-  * [x] `/packaging/live-build/` (folders only; see Phase 4)
-  * [x] `/packaging/container/` (Dockerfile.dev placeholder, no commands)
-* [x] `/docs/` (from Phase 1)
-* [x] `/infra/`
+**DoD:** Throughput test ≥ **600 msgs/s** loopback; TTL respected; duplicate injection ignored; drop counters observable via API/topic.
 
-  * [x] `/infra/ci/` (workflows live in `.github/workflows`, but keep notes here)
-  * [x] `/infra/release/` (release notes templates, SBOM plan)
-* [x] `/.github/`
+**B3. Trace propagation**
 
-  * [x] `/.github/ISSUE_TEMPLATE/bug_report.md` (template—headings only)
-  * [x] `/.github/ISSUE_TEMPLATE/feature_request.md`
-  * [x] `/.github/ISSUE_TEMPLATE/task.md`
-  * [x] `/.github/pull_request_template.md`
-  * [x] `/.github/workflows/` (empty for now; see Phase 3)
+* [ ] Ensure `trace_id` persists end‑to‑end; add helper to spawn child spans with same id.
 
-**DoD:** Directory tree exists, each directory has a short `README.md` explaining scope and interfaces to expect.
+**DoD:** `runloop trace` (later) shows consistent IDs through 3 hops in an integration test.
 
 ---
 
-## Phase G — Governance & Hygiene
+## Epic C — WASM runtime & agent container
 
-*Phase G is parallel and non-blocking; numeric phases in ROADMAP.md refer to product delivery only.*
+**C1. Wasmtime integration**
 
-6. **Contribution policy (CONTRIBUTING.md)**
+* [ ] Path: `crates/runtime/`.
+* [ ] Initialize `Engine`, `Store`, `Linker`.
+* [ ] Pre‑load allowed WASI functions; disable everything else by default.
 
-* [x] Project scope & expectations
-* [x] How to file issues (types: bug/feature/task)
-* [x] Branching model (e.g., feature branches, PRs to `main`)
-* [x] Coding style references (point to docs and rustfmt/clippy, but no code)
-* [x] Review & approval (required reviewers, CODEOWNERS)
-* [x] DCO or CLA policy (choose and document)
-* [x] Conventional Commits (types: feat/fix/chore/docs/refactor/test/build/ci)
+**DoD:** Load a trivial WASM and call `_start` without panic; process exits cleanly.
 
-7. **Code of Conduct (CODE_OF_CONDUCT.md)**
+**C2. Capabilities model**
 
-* [x] Add Contributor Covenant headings
-* [x] Maintainer contact for incidents
+* [ ] Define `Caps` struct (fs allowlist, net allowlist, time, kb_read/write, model, secrets, exec).
+* [ ] Manifest parser: read `policy.caps` (TOML) → `Caps`.
+* [ ] Implement **hostcalls** that check caps before performing:
 
-8. **Security policy (SECURITY.md)**
+  * FS: open/read/write within allowed roots; symlink traversal blocked outside root.
+  * NET: only HTTP(S) to allowed domains (DNS resolution gate).
+  * TIME: allow monotonic/now only if cap set.
+  * KB: map to `kb` client (see Epic E).
+  * MODEL: map to broker (Epic F).
+  * SECRETS: return opaque `secret_id` values only.
+* [ ] Record **audit events** for denied attempts.
 
-* [x] Disclosure email or process
-* [x] Target response windows
-* [x] Supported branches policy
+**DoD:** Attempting a forbidden operation yields `CapDenied` and writes an audit event to KB.
 
-9. **CODEOWNERS**
+**C3. Agent lifecycle**
 
-* [x] Assign owners by path (`/crates/*`, `/docs/*`, `/packaging/*`, etc.)
-* [x] Fallback owner for root
+* [ ] API: `spawn(AgentSpec) -> AgentHandle`, `send(AgentId, Message)`, `stats(AgentId)`, `kill(AgentId)`.
+* [ ] Implement stdout/stderr ring buffer per agent (for TUI log).
+* [ ] Track RSS/CPU via `/proc` (best‑effort) and expose via `stats`.
 
-10. **Repository settings (admin UI tasks)**
-
-* [x] Protect `main` (require PR, 1+ reviews, linear history, no force push)
-* [x] Require status checks (to be added in Phase 5)
-* [x] Enable secret scanning, Dependabot alerts (if using GitHub)
-* [x] Default labels: `bug`, `feature`, `task`, `infra`, `docs`, `security`, `good-first-issue`
-
-**DoD:** Policies are merged; branch protections enabled; labels exist.
+**DoD:** Spawn 50 idle agents; p50 cold‑start < **40 ms**; stats show non‑zero RSS.
 
 ---
 
-## Phase 4 — Packaging skeletons (no implementation)
+## Epic D — Router v0 (shell vs agent)
 
-11. **Systemd unit placeholders**
+**D1. Shell fast‑path**
 
-* [ ] `packaging/systemd/README.md` (describe units to come: `runloopd.service`, others)
-* [ ] `packaging/systemd/runloopd.service.placeholder`
-  Content bullets: description, After/Wants, ExecStart path, Restart policy, WantedBy.
+* [ ] Path: `crates/rlp/` (CLI) + `crates/router/` (logic).
+* [ ] Implement simple classifier: if input parses as POSIX pipeline/redirection (`|`, `>`, `<`, `;`, `&&`, `||`) or `^[a-zA-Z0-9_\-./]+(\s+.+)?$` **and** known shell builtins/commands present → `Shell`.
+* [ ] Else route to configured opening (`compose_email` by default).
 
-12. **Live‑build skeleton (folders only, doc pointers)**
+**DoD:** Corpus of 100 prompts (50 shell, 50 agentable) → ≥ **98%** correct.
 
-* [ ] `packaging/live-build/auto/` (explain `lb config` parameters in README)
-* [ ] `packaging/live-build/config/package-lists/` (note: where packages get listed)
-* [ ] `packaging/live-build/config/hooks/normal/` (note: where install hooks run)
-* [ ] `packaging/live-build/config/includes.chroot/` (note: where files land inside ISO)
-* [ ] `packaging/live-build/README.md`
-  Sections: image type (iso‑hybrid), Debian release (bookworm), how our `.deb`s are staged (conceptual only)
+**D2. Explainability**
 
-13. **Container skeleton**
+* [ ] `rlp why "<prompt>"` prints features used and matched rule.
 
-* [ ] `packaging/container/README.md`
-  Sections: dev container purpose; difference from VM/ISO; volumes layout; no Dockerfile yet
-
-**DoD:** Packaging dirs exist with READMEs that explain intent and expected artifacts.
+**DoD:** Unit test shows stable string with rule id.
 
 ---
 
-## Phase 5 — CI/CD scaffold (workflows names only; no build steps)
+## Epic E — Knowledge Base (Pog) v0
 
-14. **Workflow placeholders in `.github/workflows/`**
+**E1. Event log schema**
 
-* [ ] `ci-build.yml`
-  Sections: triggers (PR, push to main); goals (build, lint, test); artifact note (future)
-* [ ] `ci-security.yml`
-  Sections: dependency audit, license scan (concept), code scanning
-* [ ] `release.yml`
-  Sections: trigger on tag; build artifacts (.deb, ISO); sign & upload (concept)
-* [ ] `docs-check.yml`
-  Sections: broken links, spellcheck, Markdown lint
+* [ ] Path: `crates/kb/`.
+* [ ] SQLite file `events.sqlite` (+ WAL): table `events(id, ts_ms, actor, kind, payload_json, provenance_json, scope, hash_blake3 BLOB(32))`.
+* [ ] Payloads stored as **JCS canonical JSON TEXT**; compute `hash_blake3` over `{kind,actor,scope,payload,provenance}` and enforce uniqueness.
+* [ ] Migration scaffold: version table, `migrate_up()`.
 
-15. **CI documentation**
+**DoD:** Insert/read event; duplicate hash rejected; migrations apply idempotently.
 
-* [ ] `infra/ci/README.md`
-  Sections: workflow purposes, required secrets, caching policy (concept), branch policies
+**E2. Materialized views**
 
-**DoD:** Workflows are present as placeholders with clear goals and TODO comments (no jobs yet).
+* [ ] Separate `pog.sqlite`: tables `contacts`, `accounts`, `artifacts`, `runs`.
+* [ ] Materializer service reads new events and updates views (+ indexes).
+* [ ] `kb.why(<entity_id>)` returns ordered source events.
 
----
+**DoD:** `contact.upserted` creates/updates a row; `why` returns the upserting event id.
 
-## Phase 6 — Configuration, styles, conventions
+**E3. API layer**
 
-16. **.editorconfig**
+* [ ] `propose(StateDelta) -> EventId` (validator checks schema & caps).
+* [ ] `query(sql) -> rows` (read‑only).
+* [ ] `search(keyword) -> rows` (FTS optional; if absent, LIKE fallback).
+* [ ] Validation rules: referential integrity (evidence events exist), scope rules, provenance fill.
 
-* [ ] UTF‑8
-* [ ] LF newlines
-* [ ] 2 or 4 spaces (choose and document)
-* [ ] Trim trailing whitespace, insert final newline
+**DoD:** Invalid deltas rejected with reason; tests for each rule.
 
-17. **.gitattributes**
+**E4. Seed schemas**
 
-* [ ] `* text=auto eol=lf`
-* [ ] `*.png binary` and other binaries flagged
-* [ ] Mark large generated artifacts to be treated as binary
+* [ ] `contact.upserted {name,email,org,trust,evidence[]}`
+* [ ] `artifact.created {kind,path,sha256,summary}`
+* [ ] `email.sent {to[],cc[],subject,artifact_id}`
+* [ ] `run.started/finished {opening_id,status}`
 
-18. **Commit conventions**
-
-* [ ] Document Conventional Commits in `CONTRIBUTING.md`
-* [ ] Add examples (no code; show message format only)
-
-19. **Versioning & releases (`docs/release-process.md`)**
-
-* [ ] SemVer policy (pre‑1.0 rules)
-* [ ] Tagging scheme (`v0.x.y`)
-* [ ] CHANGELOG sections (Added/Changed/Fixed/Deprecated/Removed/Security)
-* [ ] Release approvals & checklist
-
-**DoD:** Style and release conventions are documented and referenced from README.
+**DoD:** JSON schemas exist in `docs/kb-schemas.md` and are enforced.
 
 ---
 
-## Phase 7 — Architecture records & traceability
+## Epic F — Model Broker v0
 
-20. **ADRs (Architecture Decision Records)**
+**F1. Broker interface**
 
-* [ ] `docs/adr/0001-debian-wasm-wasi-sqlite.md`
-  Sections: context, decision, consequences, alternatives considered
-* [ ] `docs/adr/0002-message-protocol-rmp.md`
-* [ ] `docs/adr/0003-kb-event-sourcing.md`
-* [ ] `docs/adr/0004-capabilities-security-model.md`
-* [ ] `docs/adr/README.md` (how to add ADRs; numbering conventions)
+* [ ] Path: `crates/model-broker/`.
+* [ ] `complete(ModelRequest) -> ModelOutput` with `budget_tokens`, `timeout`, `cache_key`.
+* [ ] Providers: `NullProvider` (echo), `HttpProvider` (configurable base URL + `secret_id`).
 
-**DoD:** ADRs exist with decision titles and outlines; linked from `docs/architecture.md`.
+**DoD:** Budget/timeout enforced; `NullProvider` available for offline tests; `stream=true` returns a deterministic `StreamingUnsupported` error until the Phase‑3 feature flag lands.
 
----
+**F2. Simple cache**
 
-## Phase 8 — Issue taxonomy & initial backlog (no code)
+* [ ] LRU in‑memory keyed by `(model,prompt,params)`; TTL configurable.
 
-21. **Issue templates (content prompts only)**
-
-* [ ] Bug report: expected/actual, repro steps, logs (concept), environment
-* [ ] Feature request: user story, acceptance criteria, out‑of‑scope
-* [ ] Task: description, definition of done, dependencies
-
-22. **Seed the first epic issues (links to docs)**
-
-* [ ] “Repo bootstrap” epic linking this checklist
-* [ ] “Runtime skeleton” epic (description only)
-* [ ] “Protocol docs” epic (docs only)
-* [ ] “KB schemas doc” epic
-* [ ] “Packaging plan doc” epic
-* [ ] “CI design doc” epic
-
-**DoD:** Backlog exists with epics and child tasks tied to docs pages.
+**DoD:** Cache hit metric increments; unit test hits after warm.
 
 ---
 
-## Phase 9 — Developer UX notes (no build/run)
+## Epic G — Opening engine v0
 
-23. **docs/local-dev-setup.md**
+**G1. DSL parser**
 
-* [ ] Host OS assumptions (Debian/Ubuntu or dev container)
-* [ ] Tooling list (Rust toolchain, `just`, etc.—without install commands)
-* [ ] Folder structure tour
-* [ ] How to navigate TUI docs, openings DSL docs, protocol docs
+* [ ] Path: `crates/openings/`.
+* [ ] YAML→IR: nodes (name,use,with), edges (from,to), policy (budget,timeout,confirm_external).
+* [ ] Templating: `{{params.foo}}` expansion only (no loops/logic).
 
-24. **Editor setup (`.vscode/` optional)**
+**DoD:** Parse `examples/openings/compose_email.yaml` into IR; validation errors include line/col.
 
-* [ ] `.vscode/extensions.json` (suggest rust‑analyzer, markdown lint)
-* [ ] `.vscode/settings.json` (format on save, end‑of‑line LF)
+**G2. Runner & scheduler**
 
-**DoD:** New contributors can read and understand how to get oriented without running code.
+* [ ] Topological execution; fan‑in waits; fan‑out sends clones of artifacts.
+* [ ] Retries with backoff from policy; per‑node timeout; propagate failure with reason.
+* [ ] Pass **Artifacts** and simple scalars between nodes.
 
----
+**DoD:** End‑to‑end run with recorded per‑node status.
 
-## Phase 10 — Final sanity checklist before inviting contributors
+**G3. Replay**
 
-* [ ] `README.md` has a clear “What this repo is” and “What it is not” section
-* [ ] All links inside README → docs resolve
-* [ ] Every directory has a `README.md` explaining its purpose
-* [ ] Policies present: `CONTRIBUTING`, `CODE_OF_CONDUCT`, `SECURITY`, `LICENSE`
-* [ ] Governance: `CODEOWNERS` set, branch protections enabled
-* [ ] `.github` templates exist; default labels are created
-* [ ] ADRs exist; architecture and roadmap are sketched
-* [ ] No secrets, tokens, or private data in repo history
+* [ ] Record inputs/outputs per node (message ids); `replay(trace_id)` re‑feeds inputs to produce same outputs (when providers deterministic).
+* [ ] Diff tool: show mismatches (if any).
 
-**DoD:** A new developer can clone the repo, read the docs, understand scope and structure, and open issues/PRs—**without needing any implementation code.**
+**DoD:** Replay of a deterministic run matches outputs hash.
 
 ---
 
-## Optional extras (still no code)
+## Epic H — Canonical agents (MVP set)
 
-* [ ] `docs/terminology.md` (Runloop vocabulary: trajectories, crossings, openings)
-* [ ] `docs/checklists/` (release checklist, security review checklist)
-* [ ] `docs/style-guides/` (doc style, API naming)
-* [ ] `GOVERNANCE.md` (decision‑making, maintainers)
-* [ ] `FUNDING.yml` or `SPONSORS.md` (if relevant)
+> All agents are WASM bundles with `manifest.toml`, `policy.caps`, `README.md`. For MVP you can implement them as *native processes* first (behind a host “shim”) to validate flow, then convert to WASM—**but** the runtime and caps checks must be in place.
+
+**H1. contact_resolver**
+
+* [ ] Inputs: `recipient_query` (string).
+* [ ] Action: `kb.query` for contact; if none, create stub with low trust and request human confirm.
+* [ ] Outputs: `ResolvedContact {name,email,confidence,contact_id}`.
+
+**DoD:** Given seeded KB with “John [john@acme.com](mailto:john@acme.com)”, returns correct email, confidence ≥ 0.8.
+
+**H2. context_gatherer**
+
+* [ ] Inputs: `topic`, `contact_id`.
+* [ ] Action: fetch recent artifacts tagged with contact/topic; summarize via broker or simple heuristic (fallback).
+* [ ] Outputs: `ContextBundle {bullets[], citations[event_id[]]}`.
+
+**DoD:** Returns ≥1 bullet and citations referencing KB events.
+
+**H3. writer**
+
+* [ ] Inputs: `recipient, topic, context`.
+* [ ] Action: prompt template; call broker; generate `Artifact(draft_email.md)`.
+* [ ] Outputs: `Draft {artifact_id, rationale}`.
+
+**DoD:** Draft ≤ 180 words; artifact recorded; rationale present.
+
+**H4. critic**
+
+* [ ] Inputs: `Draft`.
+* [ ] Action: check for tone/length; if failing, propose edits; set `ok:boolean`.
+* [ ] Outputs: `Review {ok, notes}`.
+
+**DoD:** For a too‑long draft, sets `ok=false` and suggests trimming.
+
+**H5. mailer (dry‑run)**
+
+* [ ] Inputs: `Draft`, `ResolvedContact`, `Review`.
+* [ ] Action: if `review.ok` → **require human confirm**; on confirm, record `email.sent` with `artifact_id`, print to stdout (no network send).
+* [ ] Outputs: `MailResult {status:'dry-run', recipients[]}`.
+
+**DoD:** Confirmation gate works; KB has `email.sent` event referencing the draft artifact.
 
 ---
 
-### Copy‑ready repo tree (placeholders only)
+## Epic I — CLI (`rlp`) & TUI (`agtop`)
 
-```
-runloop/
-├─ README.md
-├─ LICENSE
-├─ CODE_OF_CONDUCT.md
-├─ CONTRIBUTING.md
-├─ SECURITY.md
-├─ SUPPORT.md
-├─ CODEOWNERS
-├─ .gitignore
-├─ .gitattributes
-├─ .editorconfig
-├─ rust-toolchain.toml
-├─ CHANGELOG.md
-├─ .env.example
-├─ Justfile        # or Makefile (can be empty)
-├─ docs/
-│  ├─ architecture.md
-│  ├─ roadmap.md
-│  ├─ getting-started.md
-│  ├─ contributor-guide.md
-│  ├─ release-process.md
-│  ├─ security-model.md
-│  ├─ message-protocol.md
-│  ├─ kb-schemas.md
-│  ├─ openings-dsl.md
-│  ├─ tui.md
-│  ├─ ops.md
-│  └─ adr/
-│     ├─ 0001-debian-wasm-wasi-sqlite.md
-│     ├─ 0002-message-protocol-rmp.md
-│     ├─ 0003-kb-event-sourcing.md
-│     ├─ 0004-capabilities-security-model.md
-│     └─ README.md
-├─ crates/
-│  ├─ runloopd/README.md
-│  ├─ rlp/README.md
-│  ├─ agtop/README.md
-│  ├─ runtime/README.md
-│  ├─ rmp/README.md
-│  ├─ kb/README.md
-│  ├─ model-broker/README.md
-│  └─ sdk/README.md
-├─ agents/
-│  ├─ contact_resolver/README.md
-│  ├─ context_gatherer/README.md
-│  ├─ writer/README.md
-│  ├─ critic/README.md
-│  └─ mailer/README.md
-├─ examples/
-│  ├─ openings/README.md
-│  └─ config/README.md
-├─ packaging/
-│  ├─ systemd/
-│  │  ├─ runloopd.service.placeholder
-│  │  └─ README.md
-│  ├─ live-build/
-│  │  ├─ auto/        # empty; explained in README
-│  │  └─ config/      # empty; explained in README
-│  └─ container/
-│     └─ README.md
-├─ infra/
-│  ├─ ci/README.md
-│  └─ release/README.md
-└─ .github/
-   ├─ ISSUE_TEMPLATE/
-   │  ├─ bug_report.md
-   │  ├─ feature_request.md
-   │  └─ task.md
-   ├─ pull_request_template.md
-   └─ workflows/
-      ├─ ci-build.yml
-      ├─ ci-security.yml
-      ├─ release.yml
-      └─ docs-check.yml
-```
+**I1. CLI surface**
+
+* [ ] `rlp run openings/compose_email.yaml --params '{...}'`
+* [ ] `rlp why "<prompt>"`
+* [ ] `rlp replay <trace_id>`
+* [ ] `rlp kb query "<sql>"`
+* [ ] `rlp kb why <entity_id>`
+* [ ] `rlp config path` (prints active config path)
+
+**DoD:** Commands print structured output (table or JSON); exit codes sensible.
+
+**I2. TUI monitor (`agtop`)**
+
+* [ ] Status bar (mode, opening, tokens, health).
+* [ ] Panes: **Log** (streaming), **Plan** (DAG with node statuses), **agtop** (per‑agent cpu/mem/tokens), **Trace** (ladder text). Navigation keys: `Tab`, `q`, `?`.
+* [ ] Toggle confirm dialogs for external actions (mailer).
+
+**DoD:** While running the opening, panes update live; switching panes does not freeze updates.
+
+---
+
+## Epic J — Observability, audit, metrics
+
+**J1. Tracing**
+
+* [ ] Use `tracing` crate; span per crossing; include `trace_id`, `opening_id`, `agent_id`.
+* [ ] `runloop trace <id>` prints ladder: timestamps, sender→receiver, type, bytes.
+
+**DoD:** Run a composed opening and print its ladder with ≥5 steps.
+
+**J2. Metrics**
+
+* [ ] Counters: msgs sent/received, drops, cap_denied, broker_calls, cache_hits.
+* [ ] Gauges: agents_running, rss_total, bus_queue_depth.
+
+**DoD:** `agtop` shows these metrics; unit tests increment expected counters.
+
+**J3. Audit log (caps)**
+
+* [ ] KB event `cap.audit {agent,cap,args_hash,decision}` on deny and (optionally) allow.
+* [ ] Config toggle to limit volume.
+
+**DoD:** Attempted forbidden FS write produces an audit event.
+
+---
+
+## Epic K — Security & privacy
+
+**K1. Capability enforcement completeness**
+
+* [ ] Ensure **every** hostcall mapping checks caps (fs, net, time, kb, model, secrets, exec).
+* [ ] Deny by default; empty caps = inert agent.
+
+**DoD:** Static audit (grep/inspection) & tests verify enforcement paths.
+
+**K2. Secrets handling**
+
+* [ ] `secret_id` indirection only; no raw secrets in KB/events.
+* [ ] Stub “keyring” provider that returns opaque tokens (no real secrets for MVP).
+
+**DoD:** Search repo for “api_key” yields no values; unit tests pass with fake ids.
+
+**K3. Redaction**
+
+* [ ] KB returns redacted views for agents without `kb_read.contacts_raw` (example: embeddings or masked emails); for MVP, you can implement a simple mask `j***@acme.com`.
+
+**DoD:** Agent without cap cannot read full email values.
+
+---
+
+## Epic L — Packaging & runnable artifacts
+
+**L1. Debian packages (dev grade)**
+
+* [ ] Use `cargo-deb` for `runloopd`, `rlp`, `agtop`.
+* [ ] Install `runloopd.service` (enable but **do not start automatically** in dev package).
+* [ ] Postinst: create system user `runloop:runloop`, own `/var/lib/runloop`, and place the bus socket under `/run/runloop/runloopd.sock`.
+
+**DoD:** `dpkg -i` installs binaries; `systemctl enable --now runloopd` starts cleanly.
+
+**L2. Live ISO (dev grade)**
+
+* [ ] `packaging/live-build` hooks to copy `.deb`s and enable `runloopd`.
+* [ ] TTY autologin for easy TUI demo.
+
+**DoD:** ISO boots in QEMU; `rlp run ...` works; `agtop` renders.
+
+---
+
+## Epic M — Golden tasks & regression harness
+
+**M1. Golden corpus**
+
+* [ ] `tests/golden/compose_email/inputs.json` variants (recipient known/unknown, long/short topics).
+* [ ] Expected outputs (properties, not exact strings): recipient email equals, word count range, citations present.
+
+**DoD:** `cargo test -- --ignored golden` runs opening end‑to‑end (with `NullProvider`) and checks properties.
+
+**M2. Router corpus**
+
+* [ ] 50 shell prompts, 50 agent prompts; store as CSV with expected route.
+
+**DoD:** Router unit test ≥ **98%** accuracy.
+
+**M3. Replay fidelity**
+
+* [ ] Record a deterministic trace; ensure `rlp replay` reproduces identical artifacts (hash).
+
+**DoD:** Hash match asserted.
+
+---
+
+## Epic N — Documentation (implementation‑level)
+
+**N1. Docs that match what you built**
+
+* [ ] Update `docs/architecture.md` with **current** component boundaries.
+* [ ] `docs/message-protocol.md`: fill header fields table; example frame.
+* [ ] `docs/kb-schemas.md`: list MVP event kinds with fields.
+* [ ] `docs/openings-dsl.md`: grammar + `compose_email` example.
+* [ ] `docs/tui.md`: pane screenshots (ASCII ok).
+* [ ] `docs/ops.md`: how to run dev packages and ISO.
+
+**DoD:** README links render; no TODO placeholders remain for MVP sections.
+
+---
+
+## MVP Acceptance (end‑to‑end manual test)
+
+1. **Start daemon & monitor**
+
+   * [ ] `runloopd` running; `agtop` shows 0→N agents as run proceeds.
+
+2. **Seed KB**
+
+   * [ ] Insert `contact.upserted` for John (tool or `rlp kb query` with seed script).
+
+3. **Run opening**
+
+   * [ ] `rlp run examples/openings/compose_email.yaml --params '{"recipient":"john","topic":"Q4 plan"}'`
+   * [ ] Router’s `why` explains why prompt → opening.
+   * [ ] Opening executes nodes in order; DAG pane updates.
+
+4. **Confirm mailer**
+
+   * [ ] Confirm send; mailer prints “dry‑run send to [john@acme.com](mailto:john@acme.com)”.
+   * [ ] KB shows `email.sent` referencing draft artifact.
+
+5. **Trace & replay**
+
+   * [ ] `rlp trace <id>` prints ladder with ≥5 steps.
+   * [ ] `rlp replay <id>` reproduces identical draft hash.
+
+6. **Caps audit**
+
+   * [ ] Intentionally attempt forbidden FS write via a test agent; `cap.audit` event recorded.
+
+7. **ISO boot**
+
+   * [ ] Boot ISO in QEMU; repeat steps 3–5 successfully.
+
+---
+
+## Cut lines (what we purposely **skip** for MVP)
+
+* Real email sending (network off for mailer).
+* Multi‑user, multi‑machine, remote bus.
+* Semantic embeddings (vector index) — OK to stub.
+* Full secrets manager integration — use stub `secret_id`.
+* Rich router LLM classification — heuristics only.
+
+---
+
+## Suggested implementation sequencing (summary checklist)
+
+1. Core types & config (Epic A)
+2. RMP + Bus (Epic B)
+3. Runtime + Caps + Lifecycle (Epic C)
+4. KB events + views + API (Epic E)
+5. Broker (Null + HTTP stub) (Epic F)
+6. Router v0 (Epic D)
+7. Opening engine (parse + run + replay) (Epic G)
+8. Canonical agents (H1–H5)
+9. CLI/TUI & observability (I & J)
+10. Security polish (K)
+11. Packaging + ISO (L)
+12. Golden harness + docs sync (M & N)
