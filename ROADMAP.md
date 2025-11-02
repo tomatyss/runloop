@@ -9,6 +9,8 @@ The plan is milestone‑driven with clear exit criteria. Month counts are from p
 * **Core**: 1 runtime lead, 1 infra/ops, 2 systems engineers (Rust), 1 ML/LLM engineer, 1 TUI/UX engineer, 1 PM/TPM, 1 security/priv reviewer (part‑time), 1 QA/automation.
 * **Optional**: 1 tech writer, 1 developer relations.
 
+Governance & repo hygiene are tracked as Phase G in TODO.md and run in parallel to Phases 0–7.
+
 ---
 
 ### Phase 0 — Preflight & foundation (M0–M1)

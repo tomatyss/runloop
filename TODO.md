@@ -117,40 +117,42 @@
 
 ---
 
-## Phase 3 — Project policy & collaboration hygiene
+## Phase G — Governance & Hygiene
+
+*Phase G is parallel and non-blocking; numeric phases in ROADMAP.md refer to product delivery only.*
 
 6. **Contribution policy (CONTRIBUTING.md)**
 
-* [ ] Project scope & expectations
-* [ ] How to file issues (types: bug/feature/task)
-* [ ] Branching model (e.g., feature branches, PRs to `main`)
-* [ ] Coding style references (point to docs and rustfmt/clippy, but no code)
-* [ ] Review & approval (required reviewers, CODEOWNERS)
-* [ ] DCO or CLA policy (choose and document)
-* [ ] Conventional Commits (types: feat/fix/chore/docs/refactor/test/build/ci)
+* [x] Project scope & expectations
+* [x] How to file issues (types: bug/feature/task)
+* [x] Branching model (e.g., feature branches, PRs to `main`)
+* [x] Coding style references (point to docs and rustfmt/clippy, but no code)
+* [x] Review & approval (required reviewers, CODEOWNERS)
+* [x] DCO or CLA policy (choose and document)
+* [x] Conventional Commits (types: feat/fix/chore/docs/refactor/test/build/ci)
 
 7. **Code of Conduct (CODE_OF_CONDUCT.md)**
 
-* [ ] Add Contributor Covenant headings
-* [ ] Maintainer contact for incidents
+* [x] Add Contributor Covenant headings
+* [x] Maintainer contact for incidents
 
 8. **Security policy (SECURITY.md)**
 
-* [ ] Disclosure email or process
-* [ ] Target response windows
-* [ ] Supported branches policy
+* [x] Disclosure email or process
+* [x] Target response windows
+* [x] Supported branches policy
 
 9. **CODEOWNERS**
 
-* [ ] Assign owners by path (`/crates/*`, `/docs/*`, `/packaging/*`, etc.)
-* [ ] Fallback owner for root
+* [x] Assign owners by path (`/crates/*`, `/docs/*`, `/packaging/*`, etc.)
+* [x] Fallback owner for root
 
 10. **Repository settings (admin UI tasks)**
 
-* [ ] Protect `main` (require PR, 1+ reviews, linear history, no force push)
-* [ ] Require status checks (to be added in Phase 5)
-* [ ] Enable secret scanning, Dependabot alerts (if using GitHub)
-* [ ] Default labels: `bug`, `feature`, `task`, `infra`, `docs`, `security`, `good-first-issue`
+* [x] Protect `main` (require PR, 1+ reviews, linear history, no force push)
+* [x] Require status checks (to be added in Phase 5)
+* [x] Enable secret scanning, Dependabot alerts (if using GitHub)
+* [x] Default labels: `bug`, `feature`, `task`, `infra`, `docs`, `security`, `good-first-issue`
 
 **DoD:** Policies are merged; branch protections enabled; labels exist.
 

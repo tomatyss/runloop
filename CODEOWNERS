@@ -1,6 +1,32 @@
-# CODEOWNERS — tomatyss (solo)
+# CODEOWNERS — Runloop
 # The last matching rule wins.
 
-# Default: you own everything
-* @tomatyss
+# Global fallback
+*                                      @runloop-maintainers
 
+# Crates
+/crates/runloopd/                      @ops-systems @tomatyss
+/crates/runtime/                       @ops-systems
+/crates/rmp/                           @protocols
+/crates/kb/                            @kb-search
+/crates/model-broker/                  @ml-broker
+/crates/sdk/                           @sdk-owners
+/crates/rlp/                           @cli-owners
+/crates/agtop/                         @tui-owners
+
+# Agents
+/agents/contact_resolver/              @agents-core
+/agents/context_gatherer/              @agents-core
+/agents/writer/                        @agents-core
+/agents/critic/                        @agents-core
+/agents/mailer/                        @agents-core
+
+# Docs & specs
+/docs/                                 @docs-owners @protocols @kb-search
+/README.md                             @docs-owners
+/DESCRIPTION.md                        @docs-owners
+
+# Packaging & infra
+/packaging/                            @release-eng
+/infra/                                @release-eng
+/.github/                              @release-eng

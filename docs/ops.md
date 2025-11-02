@@ -151,6 +151,31 @@ See `docs/security-model.md` for secret-store details. Ops tasks:
 - Tracing & metrics via OpenTelemetry OTLP. Configure endpoint, protocol, and sampling under `observability` in config.
 - `agtop` pane + `rlp trace` rely on the metrics exported by agents.
 
+## Appendix A. Repo admin checklist
+
+### Branch protection (owner: @release-eng)
+- Protect `main`: require PRs, 1+ code owner review, dismiss stale reviews on changes.
+- Require status checks: build, test, clippy, fmt, docs-check, commitlint.
+- Require branch to be up to date before merging.
+- Disallow force-push to `main`.
+
+### Security features (owner: @release-eng)
+- Enable Dependabot alerts & updates.
+- Enable secret scanning & push protection.
+- Enable code scanning (CodeQL or equivalent).
+
+### Labels (owner: @pm)
+- Create: bug, feature, task, docs, infra, security, design, good-first-issue, epic, phase:g.
+
+### CI secrets (owner: @release-eng)
+- `CRATES_IO_TOKEN` (future), signing keys, release GPG key (optional).
+
+### Release gates (owner: @pm, @release-eng)
+- Tag pattern `v0.x.y`.
+- Required checks green.
+- CHANGELOG updated.
+- SBOM/signatures attached (when implemented).
+
 ---
 
 **Further reading:**
