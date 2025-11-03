@@ -2,16 +2,15 @@
 name = "runloop-model-broker"
 version = "0.1.0"
 edition = "2024"
-description = "Runloop model broker"
-license = "Apache-2.0"
-publish = false
 
-[features]
-default = []
-streaming = []
+[lib]
+name = "runloop_model_broker"
 
 [dependencies]
-serde = { workspace = true }
-thiserror = { workspace = true }
-tracing = { workspace = true }
 runloop-core = { path = "../core" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+tokio = { version = "1.38", features = ["rt-multi-thread", "macros", "time"] }
+thiserror = "1.0"
+lru = "0.12"

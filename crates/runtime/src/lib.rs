@@ -1,40 +1,12 @@
-//! WASM runtime scaffolding placeholder.
+//! Agent runtime integration (Wasmtime, capability enforcement, shims).
 
-use thiserror::Error;
+#![allow(dead_code)]
 
-#[derive(Debug, Error)]
-pub enum RuntimeError {
-    #[error("engine not initialised")]
-    NotInitialised,
-}
+pub struct Runtime;
 
-pub struct Engine {
-    initialised: bool,
-}
-
-impl Engine {
+impl Runtime {
+    #[must_use]
     pub fn new() -> Self {
-        Self { initialised: false }
-    }
-
-    pub fn initialise(&mut self) {
-        self.initialised = true;
-    }
-
-    pub fn is_ready(&self) -> bool {
-        self.initialised
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn engine_initialises() {
-        let mut engine = Engine::new();
-        assert!(!engine.is_ready());
-        engine.initialise();
-        assert!(engine.is_ready());
+        Self
     }
 }

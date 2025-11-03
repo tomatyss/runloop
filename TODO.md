@@ -17,18 +17,18 @@
 
 **A1. Core crate for shared types**
 
-* [ ] Path: `crates/core/` (add to workspace).
-* [ ] Define error enum (thin, `thiserror`): `Error::{Io, Config, Bus, Rmp, Runtime, Kb, Broker, Router, Opening, CapDenied, Timeout, BudgetExceeded}`.
-* [ ] Define core IDs: `AgentId`, `OpeningId`, `TraceId`, `EventId`.
+* [x] Path: `crates/core/` (add to workspace).
+* [x] Define error enum (thin, `thiserror`): `Error::{Io, Config, Bus, Rmp, Runtime, Kb, Broker, Router, Opening, CapDenied, Timeout, BudgetExceeded}`.
+* [x] Define core IDs: `AgentId`, `OpeningId`, `TraceId`, `EventId`.
 * [ ] Define **content types** registry constants (u16): `CT_OBSERVATION=1`, `CT_INTENT=2`, `CT_TOOLCALL=3`, `CT_TOOLRESULT=4`, `CT_ARTIFACT=5`, `CT_CRITIQUE=6`, `CT_STATEDELTA=7`.
 
 **DoD:** All types compile; docs comment each type’s purpose; used by other crates.
 
 **A2. Config loader**
 
-* [ ] Path: `crates/core/src/config.rs`.
-* [ ] Structure mirrors `~/.runloop/config.yaml` (runtime, models, kb, security, ui).
-* [ ] Implement: `Config::load()` (env var override path), `Config::validate()` (required fields, sane ranges).
+* [x] Path: `crates/core/src/config.rs`.
+* [x] Structure mirrors `~/.runloop/config.yaml` (runtime, models, kb, security, ui).
+* [x] Implement: `Config::load()` (env var override path), `Config::validate()` (required fields, sane ranges).
 
 **DoD:** A unit test loads a sample `tests/fixtures/config.yaml` and validates defaults.
 

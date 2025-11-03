@@ -1,136 +1,282 @@
-use std::{
-    env, fs,
-    path::{Path, PathBuf},
-};
-
+use crate::Error;
+use dirs::{config_dir, home_dir};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
-use thiserror::Error;
+use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
+use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
 use tracing::warn;
 
-/// Canonical Runloop configuration (version 1).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Canonical Runloop configuration.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
-    #[serde(default = "default_version")]
     pub version: u32,
     #[serde(default)]
-    pub kb: KbConfig,
+    pub runtime: RuntimeConfig,
     #[serde(default)]
-    pub logging: LoggingConfig,
+    pub models: ModelsConfig,
+    #[serde(default)]
+    pub kb: KbConfig,
     #[serde(default)]
     pub security: SecurityConfig,
     #[serde(default)]
     pub router: RouterConfig,
     #[serde(default)]
-    pub models: ModelsConfig,
+    pub ui: UiConfig,
     #[serde(default)]
-    pub observability: ObservabilityConfig,
+    pub logging: LoggingConfig,
+    #[serde(default)]
+    pub openings: SearchDirsConfig,
+    #[serde(default)]
+    pub agents: SearchDirsConfig,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            version: default_version(),
+            version: 1,
+            runtime: RuntimeConfig::default(),
+            models: ModelsConfig::default(),
             kb: KbConfig::default(),
-            logging: LoggingConfig::default(),
             security: SecurityConfig::default(),
             router: RouterConfig::default(),
-            models: ModelsConfig::default(),
-            observability: ObservabilityConfig::default(),
+            ui: UiConfig::default(),
+            logging: LoggingConfig::default(),
+            openings: SearchDirsConfig {
+                search_dirs: vec!["~/.runloop/openings".into(), "/etc/runloop/openings".into()],
+            },
+            agents: SearchDirsConfig {
+                search_dirs: vec!["~/.runloop/agents".into(), "/usr/lib/runloop/agents".into()],
+            },
         }
     }
 }
 
 impl Config {
-    pub fn load() -> Result<ConfigLoadOutcome, ConfigError> {
-        ConfigLoader::default().load(None::<&Path>)
+    /// Load configuration from defaults + files + environment overrides.
+    pub fn load() -> Result<Self, Error> {
+        Self::load_from_sources(config_candidate_paths(), env::vars())
     }
 
-    pub fn validate(&self) -> Result<Vec<ConfigWarning>, ConfigError> {
+    fn load_from_sources(
+        paths: Vec<PathBuf>,
+        env_pairs: impl IntoIterator<Item = (String, String)>,
+    ) -> Result<Self, Error> {
+        let mut base = serde_json::to_value(Config::default()).expect("serialize default config");
+
+        for path in paths {
+            match load_yaml_value(&path) {
+                Ok(Some(value)) => {
+                    warn_unknown_keys(&value, Path::new(""));
+                    merge_value(&mut base, value);
+                }
+                Ok(None) => {}
+                Err(err) => return Err(err),
+            }
+        }
+
+        if let Some(obj) = base.as_object_mut() {
+            apply_env_overrides(obj, env_pairs);
+        }
+
+        let mut config: Config = serde_json::from_value(base)
+            .map_err(|err| Error::Config(format!("config deserialization failed: {err}")))?;
+        config.expand_paths();
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Validate required invariants.
+    pub fn validate(&self) -> Result<(), Error> {
         if self.version != 1 {
-            return Err(ConfigError::UnsupportedVersion(self.version));
+            return Err(Error::Config(format!(
+                "unsupported config version {}; expected 1",
+                self.version
+            )));
+        }
+        if self.runtime.agent_container != "wasm32-wasi" {
+            return Err(Error::Config(format!(
+                "runtime.agent_container must be \"wasm32-wasi\" for MVP (found {})",
+                self.runtime.agent_container
+            )));
+        }
+        if self.security.confirm_external_actions && self.router.denylist.is_empty() {
+            warn!(
+                "router denylist empty while confirmations required; consider keeping protective entries"
+            );
+        }
+        Ok(())
+    }
+
+    fn expand_paths(&mut self) {
+        self.runtime.workdir = expand_path(&self.runtime.workdir);
+        self.runtime.sockets_dir = expand_path(&self.runtime.sockets_dir);
+
+        for provider in &mut self.models.broker.providers {
+            if let Some(dir) = &provider.model_dir {
+                provider.model_dir = Some(expand_path(dir));
+            }
         }
 
-        let mut warnings = Vec::new();
-
-        if self.logging.format == LoggingFormat::DeprecatedJson {
-            warnings.push(ConfigWarning::DeprecatedKey {
-                key: "logging.format=deprecated-json".to_string(),
-                note: "use logging.format = \"json\"".into(),
-            });
+        self.kb.root_dir = expand_path(&self.kb.root_dir);
+        if let Some(root) = &self.logging.file {
+            self.logging.file = Some(expand_path(root));
+        }
+        if let Some(root) = &self.security.secrets.root {
+            self.security.secrets.root = Some(expand_path(root));
         }
 
-        Ok(warnings)
+        for dir in &mut self.openings.search_dirs {
+            *dir = expand_path(dir);
+        }
+        for dir in &mut self.agents.search_dirs {
+            *dir = expand_path(dir);
+        }
     }
 }
 
-pub struct ConfigLoader {
-    env_prefix: String,
-    path_env_var: Option<String>,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RuntimeConfig {
+    #[serde(default = "default_runtime_base")]
+    pub base: String,
+    #[serde(default = "default_agent_container")]
+    pub agent_container: String,
+    #[serde(default = "default_runtime_workdir")]
+    pub workdir: String,
+    #[serde(default = "default_runtime_sockets_dir")]
+    pub sockets_dir: String,
+    #[serde(default)]
+    pub max_agents: u32,
+    #[serde(default)]
+    pub pressure_threshold: PressureThreshold,
 }
 
-impl ConfigLoader {
-    pub fn new(env_prefix: impl Into<String>, path_env_var: Option<String>) -> Self {
-        Self {
-            env_prefix: env_prefix.into(),
-            path_env_var,
-        }
-    }
-
-    pub fn load<P: AsRef<Path>>(
-        &self,
-        explicit_path: Option<P>,
-    ) -> Result<ConfigLoadOutcome, ConfigError> {
-        let root_path = explicit_path
-            .map(|p| p.as_ref().to_path_buf())
-            .or_else(|| {
-                self.path_env_var
-                    .as_ref()
-                    .and_then(|key| env::var_os(key).map(PathBuf::from))
-            })
-            .unwrap_or_else(default_config_path);
-
-        let mut warnings = Vec::new();
-        let mut root_value = match fs::read_to_string(&root_path) {
-            Ok(content) => serde_yaml::from_str::<Value>(&content)
-                .map_err(|err| ConfigError::Parse(root_path.clone(), err.to_string()))?,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Value::Object(Map::new()),
-            Err(err) => return Err(ConfigError::Io(root_path.clone(), err)),
-        };
-
-        ensure_object(&mut root_value);
-        apply_aliases(&mut root_value, &mut warnings);
-        apply_env_overrides(&mut root_value, &self.env_prefix, &mut warnings)?;
-
-        let mut config: Config = serde_json::from_value(root_value.clone())
-            .map_err(|err| ConfigError::Parse(root_path.clone(), err.to_string()))?;
-
-        config.kb.finalise_paths();
-
-        let mut validation_warnings = config.validate()?;
-        warnings.append(&mut validation_warnings);
-
-        Ok(ConfigLoadOutcome { config, warnings })
-    }
-}
-
-impl Default for ConfigLoader {
+impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
-            env_prefix: "RUNLOOP__".to_string(),
-            path_env_var: Some("RUNLOOP_CONFIG".to_string()),
+            base: default_runtime_base(),
+            agent_container: default_agent_container(),
+            workdir: default_runtime_workdir(),
+            sockets_dir: default_runtime_sockets_dir(),
+            max_agents: 0,
+            pressure_threshold: PressureThreshold::default(),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PressureThreshold {
+    #[serde(default = "default_cpu_pct")]
+    pub cpu_pct: u8,
+    #[serde(default = "default_mem_pct")]
+    pub mem_pct: u8,
+    #[serde(default = "default_io_wait_pct")]
+    pub io_wait_pct: u8,
+}
+
+impl Default for PressureThreshold {
+    fn default() -> Self {
+        Self {
+            cpu_pct: default_cpu_pct(),
+            mem_pct: default_mem_pct(),
+            io_wait_pct: default_io_wait_pct(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ModelsConfig {
+    #[serde(default = "default_models_default")]
+    pub default: String,
+    #[serde(default)]
+    pub broker: BrokerConfig,
+}
+
+impl Default for ModelsConfig {
+    fn default() -> Self {
+        Self {
+            default: default_models_default(),
+            broker: BrokerConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BrokerConfig {
+    #[serde(default)]
+    pub providers: Vec<ModelProvider>,
+    #[serde(default)]
+    pub routing: BTreeMap<String, String>,
+    #[serde(default)]
+    pub budgets: ModelBudgets,
+}
+
+impl Default for BrokerConfig {
+    fn default() -> Self {
+        let mut routing = BTreeMap::new();
+        routing.insert("*".into(), "local".into());
+        Self {
+            providers: Vec::new(),
+            routing,
+            budgets: ModelBudgets::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ModelProvider {
+    pub id: String,
+    pub kind: ProviderKind,
+    #[serde(default)]
+    pub model_dir: Option<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub auth: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProviderKind {
+    Local,
+    Http,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ModelBudgets {
+    #[serde(default = "default_broker_default_tokens")]
+    pub default_tokens: u32,
+    #[serde(default = "default_per_request_cap")]
+    pub per_request_tokens_cap: u32,
+    #[serde(default)]
+    pub hard_cap_usd: Option<f32>,
+}
+
+impl Default for ModelBudgets {
+    fn default() -> Self {
+        Self {
+            default_tokens: default_broker_default_tokens(),
+            per_request_tokens_cap: default_per_request_cap(),
+            hard_cap_usd: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct KbConfig {
     #[serde(default = "default_kb_root")]
-    pub root_dir: PathBuf,
+    pub root_dir: String,
     #[serde(default = "default_events_db")]
-    pub events_db: PathBuf,
+    pub events_db: String,
     #[serde(default = "default_view_db")]
-    pub view_db: PathBuf,
+    pub view_db: String,
+    #[serde(default = "default_true")]
+    pub wal: bool,
+    #[serde(default)]
+    pub fts: bool,
+    #[serde(default)]
+    pub redaction: KbRedactionConfig,
 }
 
 impl Default for KbConfig {
@@ -139,542 +285,555 @@ impl Default for KbConfig {
             root_dir: default_kb_root(),
             events_db: default_events_db(),
             view_db: default_view_db(),
+            wal: true,
+            fts: false,
+            redaction: KbRedactionConfig::default(),
         }
     }
 }
 
-impl KbConfig {
-    pub fn events_db_path(&self) -> PathBuf {
-        if self.events_db.is_absolute() {
-            self.events_db.clone()
-        } else {
-            self.root_dir.join(&self.events_db)
-        }
-    }
-
-    pub fn view_db_path(&self) -> PathBuf {
-        if self.view_db.is_absolute() {
-            self.view_db.clone()
-        } else {
-            self.root_dir.join(&self.view_db)
-        }
-    }
-
-    fn finalise_paths(&mut self) {
-        if !self.events_db.is_absolute() && self.events_db.components().next().is_none() {
-            self.events_db = PathBuf::from("events.sqlite");
-        }
-        if !self.view_db.is_absolute() && self.view_db.components().next().is_none() {
-            self.view_db = PathBuf::from("views.sqlite");
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct LoggingConfig {
-    #[serde(default = "default_log_level")]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct KbRedactionConfig {
+    #[serde(default = "default_true")]
+    pub mask_email: bool,
+    #[serde(default = "default_redaction_level")]
     pub level: String,
-    #[serde(default = "LoggingFormat::default")]
-    pub format: LoggingFormat,
-    #[serde(default)]
-    pub file: Option<PathBuf>,
+    #[serde(default = "default_true")]
+    pub at_query_time: bool,
+    #[serde(default = "default_true")]
+    pub materialize_masked_columns: bool,
+    #[serde(default = "default_url_param_denylist")]
+    pub url_param_denylist: Vec<String>,
 }
 
-impl Default for LoggingConfig {
+impl Default for KbRedactionConfig {
     fn default() -> Self {
         Self {
-            level: default_log_level(),
-            format: LoggingFormat::default(),
-            file: None,
+            mask_email: true,
+            level: default_redaction_level(),
+            at_query_time: true,
+            materialize_masked_columns: true,
+            url_param_denylist: default_url_param_denylist(),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LoggingFormat {
-    Text,
-    Json,
-    #[serde(rename = "deprecated-json")]
-    DeprecatedJson,
-}
-
-impl Default for LoggingFormat {
-    fn default() -> Self {
-        LoggingFormat::Text
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RouterConfig {
-    #[serde(default = "default_router_opening")]
-    pub default_opening: String,
-    #[serde(default)]
-    pub confirm_external: bool,
-}
-
-impl Default for RouterConfig {
-    fn default() -> Self {
-        Self {
-            default_opening: default_router_opening(),
-            confirm_external: true,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ModelsConfig {
-    #[serde(default)]
-    pub broker: BrokerConfig,
-}
-
-impl Default for ModelsConfig {
-    fn default() -> Self {
-        Self {
-            broker: BrokerConfig::default(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BrokerConfig {
-    #[serde(default)]
-    pub endpoint: Option<url::Url>,
-    #[serde(default)]
-    pub cache_ttl_sec: Option<u64>,
-}
-
-impl Default for BrokerConfig {
-    fn default() -> Self {
-        Self {
-            endpoint: None,
-            cache_ttl_sec: Some(30),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ObservabilityConfig {
-    #[serde(default)]
-    pub otlp_endpoint: Option<url::Url>,
-    #[serde(default = "default_sampling_ratio")]
-    pub traces_sampling_ratio: f32,
-}
-
-impl Default for ObservabilityConfig {
-    fn default() -> Self {
-        Self {
-            otlp_endpoint: None,
-            traces_sampling_ratio: default_sampling_ratio(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SecurityConfig {
+    #[serde(default = "default_true")]
+    pub confirm_external_actions: bool,
+    #[serde(default = "default_true")]
+    pub allow_unsigned_agents: bool,
+    #[serde(default)]
+    pub allowed_agent_signers: Vec<String>,
+    #[serde(default)]
+    pub caps: SecurityCapsConfig,
     #[serde(default)]
     pub secrets: SecretsConfig,
+    #[serde(default)]
+    pub testing: Option<TestingConfig>,
 }
 
 impl Default for SecurityConfig {
     fn default() -> Self {
         Self {
+            confirm_external_actions: true,
+            allow_unsigned_agents: true,
+            allowed_agent_signers: Vec::new(),
+            caps: SecurityCapsConfig::default(),
             secrets: SecretsConfig::default(),
+            testing: None,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SecurityCapsConfig {
+    #[serde(default)]
+    pub audit_on_allow: bool,
+    #[serde(default = "default_true")]
+    pub audit_on_deny: bool,
+}
+
+impl Default for SecurityCapsConfig {
+    fn default() -> Self {
+        Self {
+            audit_on_allow: false,
+            audit_on_deny: true,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SecretsConfig {
-    #[serde(default = "SecretsProvider::default")]
-    pub provider: SecretsProvider,
+    #[serde(default = "default_secrets_provider")]
+    pub provider: String,
+    #[serde(default)]
+    pub root: Option<String>,
+    #[serde(default = "default_secrets_encryption")]
+    pub encryption: String,
+    #[serde(default)]
+    pub master_key: Option<String>,
+    #[serde(default)]
+    pub allow_export: bool,
+    #[serde(default)]
+    pub allow_list: bool,
+    #[serde(default)]
+    pub default_ttl: u64,
 }
 
 impl Default for SecretsConfig {
     fn default() -> Self {
         Self {
-            provider: SecretsProvider::default(),
+            provider: default_secrets_provider(),
+            root: Some("~/.runloop/secrets".into()),
+            encryption: default_secrets_encryption(),
+            master_key: None,
+            allow_export: false,
+            allow_list: false,
+            default_ttl: 0,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SecretsProvider {
-    Stub,
-    OsKeyring,
-    Age,
-    Auto,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TestingConfig {
+    #[serde(default)]
+    pub broker_mode: Option<String>,
+    #[serde(default)]
+    pub broker_seed: Option<u64>,
 }
 
-impl SecretsProvider {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RouterConfig {
+    #[serde(default = "default_true")]
+    pub shell_fastpath: bool,
+    #[serde(default = "default_router_opening")]
+    pub default_opening: String,
+    #[serde(default = "default_router_denylist")]
+    pub denylist: Vec<String>,
+    #[serde(default)]
+    pub allowlist: Vec<String>,
+}
+
+impl Default for RouterConfig {
     fn default() -> Self {
-        SecretsProvider::Stub
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ConfigLoadOutcome {
-    pub config: Config,
-    pub warnings: Vec<ConfigWarning>,
-}
-
-impl ConfigLoadOutcome {
-    pub fn log_warnings(&self) {
-        for warning in &self.warnings {
-            warn!("{warning}");
+        Self {
+            shell_fastpath: true,
+            default_opening: default_router_opening(),
+            denylist: default_router_denylist(),
+            allowlist: Vec::new(),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum ConfigWarning {
-    AliasUsed { alias: String, canonical: String },
-    DeprecatedKey { key: String, note: String },
-    EnvOverride { key: String },
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UiConfig {
+    #[serde(default = "default_ui_theme")]
+    pub theme: String,
+    #[serde(default = "default_ui_confirm_prompts")]
+    pub confirm_prompts: String,
 }
 
-impl std::fmt::Display for ConfigWarning {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ConfigWarning::AliasUsed { alias, canonical } => {
-                write!(
-                    f,
-                    "config key `{alias}` is deprecated; mapped to `{canonical}`"
-                )
-            }
-            ConfigWarning::DeprecatedKey { key, note } => {
-                write!(f, "config `{key}` is deprecated: {note}")
-            }
-            ConfigWarning::EnvOverride { key } => {
-                write!(f, "environment override applied for `{key}`")
-            }
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            theme: default_ui_theme(),
+            confirm_prompts: default_ui_confirm_prompts(),
         }
     }
 }
 
-#[derive(Debug, Error)]
-pub enum ConfigError {
-    #[error("failed to read config {0}: {1}")]
-    Io(PathBuf, #[source] std::io::Error),
-    #[error("failed to parse config {0}: {1}")]
-    Parse(PathBuf, String),
-    #[error("config version {0} is not supported; expected 1")]
-    UnsupportedVersion(u32),
-    #[error("invalid environment override `{0}`: {1}")]
-    InvalidEnv(String, String),
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LoggingConfig {
+    #[serde(default = "default_logging_level")]
+    pub level: String,
+    #[serde(default)]
+    pub file: Option<String>,
+    #[serde(default = "default_logging_format")]
+    pub format: String,
 }
 
-fn default_version() -> u32 {
-    1
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            level: default_logging_level(),
+            file: None,
+            format: default_logging_format(),
+        }
+    }
 }
 
-fn default_kb_root() -> PathBuf {
-    home_dir()
-        .unwrap_or_else(|| PathBuf::from("~"))
-        .join(".runloop")
-        .join("kb")
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct SearchDirsConfig {
+    #[serde(default)]
+    pub search_dirs: Vec<String>,
 }
 
-fn default_events_db() -> PathBuf {
-    PathBuf::from("events.sqlite")
+// Defaults helpers
+fn default_runtime_base() -> String {
+    "debian".into()
 }
-
-fn default_view_db() -> PathBuf {
-    PathBuf::from("views.sqlite")
+fn default_agent_container() -> String {
+    "wasm32-wasi".into()
 }
-
-fn default_log_level() -> String {
-    "info".to_string()
+fn default_runtime_workdir() -> String {
+    "~/.runloop".into()
 }
-
+fn default_runtime_sockets_dir() -> String {
+    "~/.runloop/sock".into()
+}
+fn default_cpu_pct() -> u8 {
+    90
+}
+fn default_mem_pct() -> u8 {
+    90
+}
+fn default_io_wait_pct() -> u8 {
+    50
+}
+fn default_models_default() -> String {
+    "null:echo".into()
+}
+fn default_broker_default_tokens() -> u32 {
+    8_000
+}
+fn default_per_request_cap() -> u32 {
+    2_000
+}
+fn default_kb_root() -> String {
+    "~/.runloop/pog".into()
+}
+fn default_events_db() -> String {
+    "events.sqlite".into()
+}
+fn default_view_db() -> String {
+    "pog.sqlite".into()
+}
+fn default_true() -> bool {
+    true
+}
+fn default_redaction_level() -> String {
+    "strict".into()
+}
+fn default_url_param_denylist() -> Vec<String> {
+    vec![
+        "token".into(),
+        "key".into(),
+        "password".into(),
+        "signature".into(),
+        "auth".into(),
+    ]
+}
+fn default_secrets_provider() -> String {
+    "stub".into()
+}
+fn default_secrets_encryption() -> String {
+    "none".into()
+}
 fn default_router_opening() -> String {
-    "compose_email".to_string()
+    "compose_email".into()
+}
+fn default_router_denylist() -> Vec<String> {
+    vec!["rm -rf /".into()]
+}
+fn default_ui_theme() -> String {
+    "mono".into()
+}
+fn default_ui_confirm_prompts() -> String {
+    "inline".into()
+}
+fn default_logging_level() -> String {
+    "info".into()
+}
+fn default_logging_format() -> String {
+    "plain".into()
 }
 
-fn default_sampling_ratio() -> f32 {
-    0.1
-}
-
-fn default_config_path() -> PathBuf {
-    home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".runloop")
-        .join("config.yaml")
-}
-
-fn home_dir() -> Option<PathBuf> {
-    env::var_os("RUNLOOP_HOME")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(PathBuf::from))
-}
-
-fn ensure_object(value: &mut Value) {
-    if !value.is_object() {
-        *value = Value::Object(Map::new());
-    }
-}
-
-fn apply_aliases(root: &mut Value, warnings: &mut Vec<ConfigWarning>) {
-    if let Some(alias_value) = take_path(root, &["kb", "ledger"]) {
-        if let Some(path) = alias_value.as_str() {
-            warnings.push(ConfigWarning::AliasUsed {
-                alias: "kb.ledger".into(),
-                canonical: "kb.events_db".into(),
-            });
-            let canonical_path = PathBuf::from(path);
-            if let Some(parent) = canonical_path.parent() {
-                set_path(
-                    root,
-                    &["kb", "root_dir"],
-                    Value::String(parent.to_string_lossy().into()),
-                );
-            }
-            set_path(
-                root,
-                &["kb", "events_db"],
-                Value::String(
-                    canonical_path
-                        .file_name()
-                        .map(|f| f.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| canonical_path.to_string_lossy().into()),
-                ),
-            );
+fn config_candidate_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Ok(path) = env::var("RUNLOOP_CONFIG") {
+        paths.push(PathBuf::from(path));
+    } else {
+        if let Some(xdg) = config_dir() {
+            paths.push(xdg.join("runloop").join("config.yaml"));
+        }
+        if let Some(home) = home_dir() {
+            paths.push(home.join(".runloop").join("config.yaml"));
         }
     }
+    paths
+}
 
-    if let Some(alias_value) = take_path(root, &["kb", "materialized"]) {
-        if let Some(path) = alias_value.as_str() {
-            warnings.push(ConfigWarning::AliasUsed {
-                alias: "kb.materialized".into(),
-                canonical: "kb.view_db".into(),
-            });
-            let canonical_path = PathBuf::from(path);
-            if root_path_missing(root, &["kb", "root_dir"]) {
-                if let Some(parent) = canonical_path.parent() {
-                    set_path(
-                        root,
-                        &["kb", "root_dir"],
-                        Value::String(parent.to_string_lossy().into()),
-                    );
+fn load_yaml_value(path: &Path) -> Result<Option<Value>, Error> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read(path).map_err(|err| {
+        Error::Config(format!(
+            "failed reading config file {}: {err}",
+            path.display()
+        ))
+    })?;
+    let value: serde_yaml::Value = serde_yaml::from_slice(&content)
+        .map_err(|err| Error::Config(format!("invalid YAML in {}: {err}", path.display())))?;
+    let value = serde_json::to_value(value).map_err(|err| {
+        Error::Config(format!(
+            "config conversion error in {}: {err}",
+            path.display()
+        ))
+    })?;
+    Ok(Some(value))
+}
+
+fn merge_value(base: &mut Value, patch: Value) {
+    match (base, patch) {
+        (Value::Object(base_map), Value::Object(patch_map)) => {
+            for (key, value) in patch_map {
+                match base_map.get_mut(&key) {
+                    Some(existing) => merge_value(existing, value),
+                    None => {
+                        base_map.insert(key, value);
+                    }
                 }
             }
-            set_path(
-                root,
-                &["kb", "view_db"],
-                Value::String(
-                    canonical_path
-                        .file_name()
-                        .map(|f| f.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| canonical_path.to_string_lossy().into()),
-                ),
-            );
         }
-    }
-
-    if let Some(alias_value) = take_path(root, &["security", "secrets_backend"]) {
-        if let Some(provider) = alias_value.as_str() {
-            warnings.push(ConfigWarning::AliasUsed {
-                alias: "security.secrets_backend".into(),
-                canonical: "security.secrets.provider".into(),
-            });
-            set_path(
-                root,
-                &["security", "secrets", "provider"],
-                Value::String(provider.to_string()),
-            );
-        }
-    }
-
-    if let Some(alias_value) = take_path(root, &["observability", "logs_format"]) {
-        if let Some(format) = alias_value.as_str() {
-            warnings.push(ConfigWarning::AliasUsed {
-                alias: "observability.logs_format".into(),
-                canonical: "logging.format".into(),
-            });
-            set_path(
-                root,
-                &["logging", "format"],
-                Value::String(format.to_string()),
-            );
+        (base_slot, patch_value) => {
+            *base_slot = patch_value;
         }
     }
 }
 
 fn apply_env_overrides(
-    root: &mut Value,
-    prefix: &str,
-    warnings: &mut Vec<ConfigWarning>,
-) -> Result<(), ConfigError> {
-    for (key, value) in env::vars() {
-        if !key.starts_with(prefix) {
-            continue;
+    root: &mut serde_json::Map<String, Value>,
+    env_pairs: impl IntoIterator<Item = (String, String)>,
+) {
+    for (key, value) in env_pairs {
+        if let Some(stripped) = key.strip_prefix("RUNLOOP__") {
+            let path = stripped
+                .split("__")
+                .map(|segment| segment.to_ascii_lowercase())
+                .collect::<Vec<_>>();
+            set_path(root, &path, parse_env_value(&value));
+        } else if let Some((path, parsed)) = parse_alias(&key, &value) {
+            set_path(root, &path, parsed);
         }
-        let tail = &key[prefix.len()..];
-        if tail.is_empty() {
-            return Err(ConfigError::InvalidEnv(
-                key.clone(),
-                "missing key segments".into(),
-            ));
-        }
-        let segments: Vec<String> = tail
-            .split("__")
-            .map(|segment| segment.to_ascii_lowercase().replace('-', "_"))
-            .collect();
-        if segments.iter().any(|s| s.is_empty()) {
-            return Err(ConfigError::InvalidEnv(
-                key.clone(),
-                "empty key segment".into(),
-            ));
-        }
-        let yaml_value: serde_yaml::Value = match serde_yaml::from_str(&value) {
-            Ok(v) => v,
-            Err(_) => serde_yaml::Value::String(value.clone()),
-        };
-        let json_value = serde_json::to_value(yaml_value)
-            .map_err(|err| ConfigError::InvalidEnv(key.clone(), err.to_string()))?;
-        set_path_owned(root, &segments, json_value);
-        warnings.push(ConfigWarning::EnvOverride { key: key.clone() });
-    }
-    Ok(())
-}
-
-fn set_path(root: &mut Value, path: &[&str], value: Value) {
-    let mut current = root;
-    for segment in &path[..path.len().saturating_sub(1)] {
-        if !current.is_object() {
-            *current = Value::Object(Map::new());
-        }
-        let map = current.as_object_mut().unwrap();
-        current = map
-            .entry((*segment).to_string())
-            .or_insert_with(|| Value::Object(Map::new()));
-    }
-    if let Some(last) = path.last() {
-        if !current.is_object() {
-            *current = Value::Object(Map::new());
-        }
-        current
-            .as_object_mut()
-            .unwrap()
-            .insert((*last).to_string(), value);
     }
 }
 
-fn set_path_owned(root: &mut Value, path: &[String], value: Value) {
-    let mut current = root;
-    for segment in &path[..path.len().saturating_sub(1)] {
-        if !current.is_object() {
-            *current = Value::Object(Map::new());
-        }
-        let map = current.as_object_mut().unwrap();
-        current = map
-            .entry(segment.clone())
-            .or_insert_with(|| Value::Object(Map::new()));
-    }
-    if let Some(last) = path.last() {
-        if !current.is_object() {
-            *current = Value::Object(Map::new());
-        }
-        current.as_object_mut().unwrap().insert(last.clone(), value);
-    }
-}
-
-fn take_path(root: &mut Value, path: &[&str]) -> Option<Value> {
-    if path.is_empty() {
-        return None;
-    }
-    let mut current = root;
-    for segment in &path[..path.len() - 1] {
-        if let Value::Object(map) = current {
-            if let Some(child) = map.get_mut(*segment) {
-                current = child;
+fn parse_env_value(raw: &str) -> Value {
+    match raw {
+        "true" | "TRUE" | "1" => Value::Bool(true),
+        "false" | "FALSE" | "0" => Value::Bool(false),
+        other => {
+            if let Ok(int) = other.parse::<i64>() {
+                Value::Number(int.into())
+            } else if let Ok(float) = other.parse::<f64>() {
+                serde_json::Number::from_f64(float)
+                    .map(Value::Number)
+                    .unwrap_or_else(|| Value::String(other.to_string()))
+            } else if (other.starts_with('{') && other.ends_with('}'))
+                || (other.starts_with('[') && other.ends_with(']'))
+            {
+                serde_json::from_str(other).unwrap_or_else(|_| Value::String(other.to_string()))
             } else {
-                return None;
+                Value::String(other.to_string())
             }
-        } else {
-            return None;
         }
-    }
-    if let Value::Object(map) = current {
-        map.remove(*path.last().unwrap())
-    } else {
-        None
     }
 }
 
-fn root_path_missing(root: &Value, path: &[&str]) -> bool {
-    let mut current = root;
-    for segment in path {
-        match current {
-            Value::Object(map) => match map.get(*segment) {
-                Some(child) => current = child,
-                None => return true,
-            },
-            _ => return true,
+fn set_path(root: &mut serde_json::Map<String, Value>, path: &[String], value: Value) {
+    if path.is_empty() {
+        return;
+    }
+    let mut cursor = root;
+    for key in &path[..path.len() - 1] {
+        cursor = cursor
+            .entry(key.clone())
+            .or_insert_with(|| Value::Object(Default::default()))
+            .as_object_mut()
+            .expect("intermediate config node must be object");
+    }
+    if let Some(last) = path.last() {
+        cursor.insert(last.clone(), value);
+    }
+}
+
+fn parse_alias(key: &str, value: &str) -> Option<(Vec<String>, Value)> {
+    let aliases: [(&str, &[&str]); 6] = [
+        ("RUNLOOP_LOG_LEVEL", &["logging", "level"]),
+        (
+            "RUNLOOP_RUNTIME_AGENT_CONTAINER",
+            &["runtime", "agent_container"],
+        ),
+        (
+            "RUNLOOP_ROUTER_DEFAULT_OPENING",
+            &["router", "default_opening"],
+        ),
+        ("RUNLOOP_MODELS_DEFAULT", &["models", "default"]),
+        ("RUNLOOP_KB_ROOT_DIR", &["kb", "root_dir"]),
+        (
+            "RUNLOOP_SECURITY_CONFIRM_EXTERNAL_ACTIONS",
+            &["security", "confirm_external_actions"],
+        ),
+    ];
+    for (alias, path) in aliases {
+        if key == alias {
+            return Some((
+                path.iter().map(|s| s.to_string()).collect(),
+                parse_env_value(value),
+            ));
         }
     }
-    false
+    None
+}
+
+fn expand_path(path: &str) -> String {
+    if path.starts_with("~/") {
+        if let Some(home) = home_dir() {
+            return home.join(&path[2..]).display().to_string();
+        }
+    }
+    if let Some(stripped) = path.strip_prefix("env:") {
+        if let Ok(val) = env::var(stripped) {
+            return val;
+        }
+    }
+    shellexpand::full(path)
+        .map(|cow| cow.to_string())
+        .unwrap_or_else(|_| path.to_string())
+}
+
+fn warn_unknown_keys(document: &Value, path: &Path) {
+    if let Value::Object(map) = document {
+        let known = known_keys_for_path(path);
+        if !known.is_empty() {
+            for key in map.keys() {
+                if !known.contains(key.as_str()) {
+                    warn!(
+                        "unknown configuration key '{}' under '{}'",
+                        key,
+                        path_string(path)
+                    );
+                }
+            }
+        }
+        for key in map.keys() {
+            let mut new_path = path.to_path_buf();
+            new_path.push(key);
+            warn_unknown_keys(&map[key], &new_path);
+        }
+    }
+}
+
+fn known_keys_for_path(path: &Path) -> BTreeSet<&'static str> {
+    match path_string(path).as_str() {
+        "" => BTreeSet::from([
+            "version", "runtime", "models", "kb", "security", "router", "ui", "logging",
+            "openings", "agents",
+        ]),
+        "runtime" => BTreeSet::from([
+            "base",
+            "agent_container",
+            "workdir",
+            "sockets_dir",
+            "max_agents",
+            "pressure_threshold",
+        ]),
+        "runtime/pressure_threshold" => BTreeSet::from(["cpu_pct", "mem_pct", "io_wait_pct"]),
+        "models" => BTreeSet::from(["default", "broker"]),
+        "models/broker" => BTreeSet::from(["providers", "routing", "budgets"]),
+        "kb" => BTreeSet::from([
+            "root_dir",
+            "events_db",
+            "view_db",
+            "wal",
+            "fts",
+            "redaction",
+        ]),
+        "kb/redaction" => BTreeSet::from([
+            "mask_email",
+            "level",
+            "at_query_time",
+            "materialize_masked_columns",
+            "url_param_denylist",
+        ]),
+        "security" => BTreeSet::from([
+            "confirm_external_actions",
+            "allow_unsigned_agents",
+            "allowed_agent_signers",
+            "caps",
+            "secrets",
+            "testing",
+        ]),
+        "security/caps" => BTreeSet::from(["audit_on_allow", "audit_on_deny"]),
+        "security/secrets" => BTreeSet::from([
+            "provider",
+            "root",
+            "encryption",
+            "master_key",
+            "allow_export",
+            "allow_list",
+            "default_ttl",
+        ]),
+        "security/testing" => BTreeSet::from(["broker_mode", "broker_seed"]),
+        "router" => BTreeSet::from(["shell_fastpath", "default_opening", "denylist", "allowlist"]),
+        "ui" => BTreeSet::from(["theme", "confirm_prompts"]),
+        "logging" => BTreeSet::from(["level", "file", "format"]),
+        "openings" | "agents" => BTreeSet::from(["search_dirs"]),
+        _ => BTreeSet::new(),
+    }
+}
+
+fn path_string(path: &Path) -> String {
+    let parts: Vec<String> = path
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    parts.join("/")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::{env, fs::File, io::Write};
-    use tempfile::TempDir;
+    use super::Config;
+    use std::io::Write;
 
     #[test]
-    fn load_defaults_when_missing() {
-        let loader = ConfigLoader::default();
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("config.yaml");
-        let outcome = loader.load(Some(path.clone())).unwrap();
-        assert_eq!(outcome.config.version, 1);
-        assert!(
-            !outcome
-                .config
-                .kb
-                .events_db_path()
-                .to_string_lossy()
-                .is_empty()
-        );
-        assert!(outcome.warnings.is_empty());
+    fn defaults_validate() {
+        let config = Config::default();
+        config.validate().expect("default config should validate");
     }
 
     #[test]
-    fn honours_aliases_and_env() {
-        let loader = ConfigLoader::default();
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("config.yaml");
-        let mut file = File::create(&path).unwrap();
-        writeln!(
+    fn load_with_file_and_env_overrides() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config_path = temp.path().join("config.yaml");
+        let mut file = std::fs::File::create(&config_path).expect("create config file");
+        write!(
             file,
-            "version: 1\nkb:\n  ledger: {}\nsecurity:\n  secrets_backend: os-keyring\n",
-            temp.path().join("events.sqlite").display()
+            r#"
+version: 1
+runtime:
+  agent_container: "wasm32-wasi"
+kb:
+  root_dir: "~/.custom-pog"
+security:
+  confirm_external_actions: false
+"#
         )
-        .unwrap();
-
-        unsafe {
-            env::set_var("RUNLOOP__LOGGING__FORMAT", "\"json\"");
-        }
-        let outcome = loader.load(Some(path.clone())).unwrap();
-        unsafe {
-            env::remove_var("RUNLOOP__LOGGING__FORMAT");
-        }
-
-        assert_eq!(
-            outcome.config.security.secrets.provider,
-            SecretsProvider::OsKeyring
-        );
-        assert_eq!(outcome.config.logging.format, LoggingFormat::Json);
-        assert!(
-            outcome.warnings.iter().any(
-                |w| matches!(w, ConfigWarning::AliasUsed { alias, .. } if alias == "kb.ledger")
-            )
-        );
-        assert!(outcome.warnings.iter().any(
-            |w| matches!(w, ConfigWarning::EnvOverride { key } if key == "RUNLOOP__LOGGING__FORMAT")
-        ));
+        .expect("write config");
+        let env_pairs = vec![
+            ("RUNLOOP__MODELS__DEFAULT".into(), "local:test".into()),
+            (
+                "RUNLOOP__ROUTER__DEFAULT_OPENING".into(),
+                "compose_support_ticket".into(),
+            ),
+        ];
+        let config = Config::load_from_sources(vec![config_path], env_pairs).expect("config load");
+        assert_eq!(config.models.default, "local:test");
+        assert_eq!(config.router.default_opening, "compose_support_ticket");
+        assert_eq!(config.security.confirm_external_actions, false);
+        assert!(config.kb.root_dir.ends_with(".custom-pog"));
     }
 }

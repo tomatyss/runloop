@@ -2,12 +2,13 @@
 name = "runloop-runtime"
 version = "0.1.0"
 edition = "2024"
-description = "Runloop WASM runtime"
-license = "Apache-2.0"
-publish = false
+
+[lib]
+name = "runloop_runtime"
 
 [dependencies]
-anyhow = { workspace = true }
-serde = { workspace = true }
-thiserror = { workspace = true }
-tracing = { workspace = true }
+runloop-core = { path = "../core" }
+runloop-rmp = { path = "../rmp" }
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1.38", features = ["rt-multi-thread", "macros", "time", "process", "net", "sync"] }

@@ -2,20 +2,11 @@
 name = "rlp"
 version = "0.1.0"
 edition = "2024"
-description = "Runloop CLI"
-license = "Apache-2.0"
-publish = false
 
 [dependencies]
-anyhow = { workspace = true }
-clap = { workspace = true }
 runloop-core = { path = "../core" }
-runloop-bus = { path = "../bus" }
-runloop-rmp = { path = "../rmp" }
-runloop-kb = { path = "../kb" }
-runloop-model-broker = { path = "../model-broker" }
-serde = { workspace = true }
-serde_yaml = { workspace = true }
-thiserror = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+clap = { version = "4.5", features = ["derive"] }
+tokio = { version = "1.38", features = ["rt-multi-thread", "macros"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"

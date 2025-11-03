@@ -2,12 +2,12 @@
 name = "runloop-openings"
 version = "0.1.0"
 edition = "2024"
-description = "Runloop openings DSL"
-license = "Apache-2.0"
-publish = false
+
+[lib]
+name = "runloop_openings"
 
 [dependencies]
-serde = { workspace = true }
-serde_yaml = { workspace = true }
-thiserror = { workspace = true }
-indexmap = { workspace = true }
+runloop-core = { path = "../core" }
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+thiserror = "1.0"
