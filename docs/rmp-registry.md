@@ -1,10 +1,10 @@
 # RMP Schema Registry (Draft)
 
-> **Doc status:** Draft — updates require review. Last updated: 2025-11-02.
+> **Doc status:** Draft — updates require review. Last updated: 2025-11-03.
 
 Schema identifiers (`schema_id`) are 16-bit unsigned integers carried in every RMP header. The ranges below reserve space for core, extensions, and vendor-defined payloads.
 
-> Runtime constants live in `crates/rmp::registry`; update both locations together.
+> Runtime constants live in `crates/core::content` (re-exported by `crates/rmp::registry`); update both locations together.
 
 | Range | Ownership | Notes |
 | ----- | --------- | ----- |
@@ -26,13 +26,10 @@ Schema identifiers (`schema_id`) are 16-bit unsigned integers carried in every R
 | `0x0005` | `Artifact` | `v` (u16) | Durable content blob metadata + pointer. |
 | `0x0006` | `Critique` | `v` (u16) | Quality feedback / review of an artifact or intent. |
 | `0x0007` | `StateDelta` | `v` (u16) | Mutation against agent/opening state machine. |
-| `0x0008` | `Control.Heartbeat` | `v` (u16) | Health ping between runtime and agent. |
-| `0x0009` | `Control.Ack` | `v` (u16) | Reliability acknowledgement frame. |
-| `0x000A` | `Control.Error` | `v` (u16) | Negative acknowledgement with `code` + human-readable `message`. |
-| `0x000B` | `Plan.OpeningSpec` | `v` (u16) | Serialized opening DAG for replay or inspection. |
-| `0x000C` | `Plan.NodeStatus` | `v` (u16) | Streaming state transitions for plan nodes. |
-| `0x000D` | `Metrics.Span` | `v` (u16) | Telemetry span emitted by agents/runtime. |
-| `0x000E–0x000F` | Reserved | — | Future core payloads. |
+| `0x0008` | `Run.Event` | `v` (u16) | Lifecycle event within an opening run (start/finish/error). |
+| `0x0009` | `Control` | `v` (u16) | Routing/control plane directive between router and daemon. |
+| `0x000A` | `Error.Report` | `v` (u16) | Structured error diagnostics for operators/UI. |
+| `0x000B–0x000F` | Reserved | — | Future core payloads. |
 
 Each payload MUST include a version field named `v` (u16). Additive changes stay within the same `schema_id`; breaking changes require a new `schema_id` or a version bump accompanied by backward-compat logic.
 

@@ -20,7 +20,7 @@
 * [x] Path: `crates/core/` (add to workspace).
 * [x] Define error enum (thin, `thiserror`): `Error::{Io, Config, Bus, Rmp, Runtime, Kb, Broker, Router, Opening, CapDenied, Timeout, BudgetExceeded}`.
 * [x] Define core IDs: `AgentId`, `OpeningId`, `TraceId`, `EventId`.
-* [ ] Define **content types** registry constants (u16): `CT_OBSERVATION=1`, `CT_INTENT=2`, `CT_TOOLCALL=3`, `CT_TOOLRESULT=4`, `CT_ARTIFACT=5`, `CT_CRITIQUE=6`, `CT_STATEDELTA=7`.
+* [x] Define **content types** registry constants (u16): `CT_OBSERVATION=1`, `CT_INTENT=2`, `CT_TOOL_CALL=3`, `CT_TOOL_RESULT=4`, `CT_ARTIFACT=5`, `CT_CRITIQUE=6`, `CT_STATE_DELTA=7`.
 
 **DoD:** All types compile; docs comment each type’s purpose; used by other crates.
 
