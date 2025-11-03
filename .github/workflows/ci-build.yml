@@ -1,3 +1,57 @@
-# Placeholder workflow: CI Build
-# TODO: Configure on push/pull_request to main.
-# TODO: Steps: fmt, clippy, cargo test, artifact notes.
+name: CI Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-ci:
+    name: Rust Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Run Rust checks
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cargo fmt --all -- --check 2>&1 | tee artifacts/fmt.log
+          cargo clippy --workspace -- -D warnings 2>&1 | tee artifacts/clippy.log
+          cargo test --workspace 2>&1 | tee artifacts/test.log
+
+      - name: Upload check logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-checks-logs-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: error

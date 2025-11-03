@@ -1,2 +1,43 @@
-# Placeholder workflow: Docs Check
-# TODO: Run markdown lint, spellcheck, and link validation.
+name: Docs Check
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  documentation:
+    name: Documentation Quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Markdown lint
+        uses: DavidAnson/markdownlint-cli2-action@v15
+        with:
+          globs: '**/*.md'
+
+      - name: Spell check
+        uses: crate-ci/typos@v1
+        with:
+          args: --format brief
+
+      - name: Validate links
+        uses: lycheeverse/lychee-action@v1
+        with:
+          args: >
+            --no-progress
+            --include-fragments
+            --accept 200,206,301,302,308,429,503
+            --exclude-mail
+            .
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
