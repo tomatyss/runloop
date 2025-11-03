@@ -1439,7 +1439,11 @@ name = "runloop-bus"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "futures-core",
+ "futures-util",
  "lru",
+ "once_cell",
+ "parking_lot",
  "runloop-core",
  "runloop-rmp",
  "serde",
@@ -1454,6 +1458,7 @@ name = "runloop-core"
 version = "0.1.0"
 dependencies = [
  "dirs 5.0.1",
+ "once_cell",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1461,6 +1466,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
@@ -1507,6 +1513,7 @@ dependencies = [
  "runloop-core",
  "serde",
  "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]

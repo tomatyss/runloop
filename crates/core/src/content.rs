@@ -61,3 +61,5 @@ pub const CT_TRACE_LINE: u16 = 3003;
 pub const CT_AGENT_LOG_LINE: u16 = 3004;
 pub const CT_ACTION_REQUEST: u16 = 3005;
 pub const CT_ACTION_DECISION: u16 = 3006;
+/// Drop notification emitted on `rlp/sys/drops`.
+pub const CT_BUS_DROP_NOTICE: u16 = 3007;

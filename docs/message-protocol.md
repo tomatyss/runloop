@@ -25,7 +25,7 @@ RMP v0 frames are prefixed with a 32-bit length (big-endian, excluding the prefi
 | 44 | `opening_id` | `u64` | Logical opening/workflow identifier |
 | 52 | `msg_id` | `u64` | Monotonic per sender for idempotency |
 
-Receivers MUST validate `magic`, `header_version`, and `header_len` before processing a frame. Frames whose TTL has expired relative to the local clock MUST be dropped, with a drop notice published on `rlp/sys/drops`. Duplicate detection is performed on `(trace_id, msg_id)` pairs with an LRU cache per receiver; implementations SHOULD generate monotonically increasing identifiers (e.g., UUIDv7 or time-ordered 64-bit IDs) to keep caches efficient.
+Receivers MUST validate `magic`, `header_version`, and `header_len` before processing a frame. Frames whose TTL has expired relative to the local clock MUST be dropped, with a drop notice published on `rlp/sys/drops`. Duplicate detection is performed on `(trace_id, msg_id)` pairs with an LRU cache per receiver; implementations SHOULD generate monotonically increasing identifiers (e.g., UUIDv7 or time-ordered 64-bit IDs) to keep caches efficient. Publishers that time out on back-pressure MUST emit the same drop notice with reason `backpressure_timeout`.
 
 The flags field reserves space for additional delivery semantics. Signatures and compression live in future RMP revisions; receivers MUST reject frames with any unknown/non-zero flags until those capabilities are negotiated.
 

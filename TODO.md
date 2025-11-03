@@ -38,27 +38,27 @@
 
 **B1. RMP header & frame codec**
 
-* [ ] Path: `crates/rmp/`.
-* [ ] Define fixed 60-byte header with `magic`, `header_version`, `header_len`, `flags`, `schema_id`, `body_len`, `created_at_ms`, `ttl_ms`, `trace_id`, `msg_id`.
-* [ ] Implement `{type, payload}` MsgPack envelope helpers + encode/decode APIs.
-* [ ] Parse/validate TTL, expose helpers for `expires_at_ms`, duplicate keys.
+* [x] Path: `crates/rmp/`.
+* [x] Define fixed 60-byte header with `magic`, `header_version`, `header_len`, `flags`, `schema_id`, `body_len`, `created_at_ms`, `ttl_ms`, `trace_id`, `msg_id`.
+* [x] Implement `{type, payload}` MsgPack envelope helpers + encode/decode APIs.
+* [x] Parse/validate TTL, expose helpers for `expires_at_ms`, duplicate keys.
 
 **DoD:** Round‑trip test over a `tokio::io::duplex()` stream; fuzz decoder (corpus with corrupt lengths).
 
 **B2. Bus abstraction (UDS)**
 
-* [ ] Path: `crates/bus/`.
-* [ ] Public API: `Bus::bind(path)`, `Bus::connect(path)`, `Bus::publish(topic,msg)`, `Bus::subscribe(topic) -> Stream<Message>`, `Bus::send(dest,msg)`.
-* [ ] Implement back‑pressure: bounded channel; drop policy = block writer with timeout, emit metric.
-* [ ] **Idempotency**: include `(trace_id,msg_id)` in a dedupe cache (LRU) on receivers, ignore dups.
-* [ ] TTL enforcement: drop messages beyond `ttl_ms`.
-* [ ] Surface drop counters and broadcast notifications on `rlp/sys/drops`.
+* [x] Path: `crates/bus/`.
+* [x] Public API: `Bus::bind(path)`, `Bus::connect(path)`, `Bus::publish(topic,msg)`, `Bus::subscribe(topic) -> Stream<Message>`, `Bus::send(dest,msg)`.
+* [x] Implement back-pressure: bounded channel; drop policy = block writer with timeout, emit metric.
+* [x] **Idempotency**: include `(trace_id,msg_id)` in a dedupe cache (LRU) on receivers, ignore dups.
+* [x] TTL enforcement: drop messages beyond `ttl_ms`.
+* [x] Surface drop counters and broadcast notifications on `rlp/sys/drops`.
 
 **DoD:** Throughput test ≥ **600 msgs/s** loopback; TTL respected; duplicate injection ignored; drop counters observable via API/topic.
 
 **B3. Trace propagation**
 
-* [ ] Ensure `trace_id` persists end‑to‑end; add helper to spawn child spans with same id.
+* [x] Ensure `trace_id` persists end-to-end; add helper to spawn child spans with same id.
 
 **DoD:** `runloop trace` (later) shows consistent IDs through 3 hops in an integration test.
 

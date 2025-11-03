@@ -29,6 +29,7 @@ Schema identifiers (`schema_id`) are 16-bit unsigned integers carried in every R
 | `0x0008` | `Run.Event` | `v` (u16) | Lifecycle event within an opening run (start/finish/error). |
 | `0x0009` | `Control` | `v` (u16) | Routing/control plane directive between router and daemon. |
 | `0x000A` | `Error.Report` | `v` (u16) | Structured error diagnostics for operators/UI. |
+| `0x0BBF` | `Bus.DropNotice` | `v` (u16) | Delivery failure telemetry published on `rlp/sys/drops`. |
 | `0x000B–0x000F` | Reserved | — | Future core payloads. |
 
 Each payload MUST include a version field named `v` (u16). Additive changes stay within the same `schema_id`; breaking changes require a new `schema_id` or a version bump accompanied by backward-compat logic.
