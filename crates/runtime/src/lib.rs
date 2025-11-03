@@ -1,12 +1,20 @@
-//! Agent runtime integration (Wasmtime, capability enforcement, shims).
+//! Runloop agent runtime – Wasmtime embedding, capability enforcement, and lifecycle utilities.
 
-#![allow(dead_code)]
+#![deny(unsafe_code)]
 
-pub struct Runtime;
+mod audit;
+mod caps;
+mod error;
+mod module_cache;
+mod output;
+mod policy;
+mod runtime;
+mod spec;
+mod stats;
+mod wasi_dir;
 
-impl Runtime {
-    #[must_use]
-    pub fn new() -> Self {
-        Self
-    }
-}
+pub use caps::{CapabilitySet, Caps, FsCapability, NetLocation};
+pub use error::Error;
+pub use runtime::{AgentHandle, Runtime};
+pub use spec::{AgentIdentity, AgentSpec};
+pub use stats::AgentStats;

@@ -68,16 +68,16 @@
 
 **C1. Wasmtime integration**
 
-* [ ] Path: `crates/runtime/`.
-* [ ] Initialize `Engine`, `Store`, `Linker`.
-* [ ] Pre‑load allowed WASI functions; disable everything else by default.
+* [x] Path: `crates/runtime/`.
+* [x] Initialize `Engine`, `Store`, `Linker`.
+* [x] Pre‑load allowed WASI functions; disable everything else by default.
 
-**DoD:** Load a trivial WASM and call `_start` without panic; process exits cleanly.
+**DoD:** Load a trivial WASM and call `_start` without panic; process exits cleanly. *(Met via `tests/smoke.rs`.)*
 
 **C2. Capabilities model**
 
-* [ ] Define `Caps` struct (fs allowlist, net allowlist, time, kb_read/write, model, secrets, exec).
-* [ ] Manifest parser: read `policy.caps` (TOML) → `Caps`.
+* [x] Define `Caps` struct (fs allowlist, net allowlist, time, kb_read/write, model, secrets, exec).
+* [x] Manifest parser: read `policy.caps` (TOML) → `Caps` + overrides.
 * [ ] Implement **hostcalls** that check caps before performing:
 
   * FS: open/read/write within allowed roots; symlink traversal blocked outside root.
@@ -86,15 +86,17 @@
   * KB: map to `kb` client (see Epic E).
   * MODEL: map to broker (Epic F).
   * SECRETS: return opaque `secret_id` values only.
-* [ ] Record **audit events** for denied attempts.
+* [ ] Record **audit events** for denied attempts (currently buffered in-memory; hook KB once available).
 
 **DoD:** Attempting a forbidden operation yields `CapDenied` and writes an audit event to KB.
 
 **C3. Agent lifecycle**
 
-* [ ] API: `spawn(AgentSpec) -> AgentHandle`, `send(AgentId, Message)`, `stats(AgentId)`, `kill(AgentId)`.
-* [ ] Implement stdout/stderr ring buffer per agent (for TUI log).
-* [ ] Track RSS/CPU via `/proc` (best‑effort) and expose via `stats`.
+* [x] API: `spawn(AgentSpec) -> AgentHandle`, `send(AgentId, Message)`, `stats(AgentId)`, `kill(AgentId)`.
+* [x] Implement stdout/stderr ring buffer per agent (for TUI log).
+* [ ] Track RSS/CPU via `/proc` (best‑effort) and expose via `stats` (current implementation returns `None`; add Linux-only path + macOS guard).
+* [ ] Wire mailbox delivery to bus routing (current placeholder closes channel immediately).
+* [ ] Measure cold-start perf (50 idle agents, p50 < 40 ms) and document harness.
 
 **DoD:** Spawn 50 idle agents; p50 cold‑start < **40 ms**; stats show non‑zero RSS.
 
