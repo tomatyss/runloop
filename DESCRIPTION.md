@@ -53,14 +53,13 @@ review.ok    -> send.in
 - **IPC**: local message bus (Unix sockets) with zero‑copy blobs and signed, typed messages.
 
 ### 4) Message protocol (RMP)
-- **Framing**: fixed header + msgpack body.
+- **Framing**: big-endian length prefix, fixed 60-byte header, MsgPack body.
 - **Header (v0) — key fields**:
-- `trace_id`, `opening_id`, `msg_id`
+- `magic="RMP0"`, `header_version=1`, `header_len=60`, `flags`
+- `schema_id`, `body_len`
 - `created_at_ms` (sender clock) + `ttl_ms` (expiry)
-- `caps_bitmap` (capabilities claimed/consumed)
-- `cost_budget_tokens` (budget guard)
-- `schema_id`, `priority`
-- **Body**: `{ type, payload }` with a **JSON‑schema** (on‑disk canonical) and **msgpack** on the wire.
+- `trace_id`, `opening_id`, `msg_id`
+- **Body**: `{ type, payload, meta? }` with a **JSON‑schema** (on-disk canonical) and **MsgPack** on the wire.
 - **Primitives**: `Observation`, `Intent`, `ToolCall`, `Artifact`, `Critique`, `StateDelta`.
 - **Delivery**: pub/sub + RPC, idempotent handlers, backoff retries.
 - **Provenance**: every message carries `who/why/what/model@version`.

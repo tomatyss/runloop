@@ -4,34 +4,34 @@
 
 The Runloop Message Protocol (RMP) is a binary envelope for agent messages. It provides:
 
-1. A fixed wire frame for transport-level metadata.
-2. A MsgPack-encoded header map with routing, budget, and provenance fields.
-3. A schema-referenced body (MsgPack by default) with optional signatures and compression.
+1. A fixed-length wire header for transport-level routing fields.
+2. A MsgPack body that carries schema-typed payloads (including budgeting and policy metadata).
 
 ## 1. Wire framing (normative)
 
-RMP v0 uses a **fixed 60-byte header** followed by a MsgPack body. All integers are big-endian.
+RMP v0 frames are prefixed with a 32-bit length (big-endian, excluding the prefix), followed by a **fixed 60-byte header** and then a MsgPack body. All multi-byte integers in the prefix and header are encoded in **network byte order (big-endian)**.
 
 | Offset | Field | Type | Notes |
 | ------ | ----- | ---- | ----- |
 | 0 | Magic | `[u8;4]` | ASCII `RMP0` |
-| 4 | `header_version` | `u16` | Always `0` for v0 |
+| 4 | `header_version` | `u16` | Always `1` for v0 |
 | 6 | `header_len` | `u16` | Always `60` |
-| 8 | `flags` | `u16` | bit 0 = signed, bit 1 = zstd; others reserved |
+| 8 | `flags` | `u16` | bit 0 = ack requested; others reserved (MUST be 0) |
 | 10 | `schema_id` | `u16` | Payload schema ID |
 | 12 | `body_len` | `u32` | Length of the MsgPack body |
 | 16 | `created_at_ms` | `u64` | UTC milliseconds when the header was produced |
 | 24 | `ttl_ms` | `u32` | Relative TTL; `0` disables expiry |
 | 28 | `trace_id` | `[u8;16]` | UUIDv7 recommended |
-| 44 | `msg_id` | `[u8;16]` | UUIDv7 recommended |
+| 44 | `opening_id` | `u64` | Logical opening/workflow identifier |
+| 52 | `msg_id` | `u64` | Monotonic per sender for idempotency |
 
-Receivers MUST drop frames whose TTL has expired relative to the local clock and publish a drop event on `rlp/sys/drops`. Senders SHOULD generate monotonically increasing UUIDv7 IDs to keep dedupe caches efficient. Duplicate detection is performed on `(trace_id, msg_id)` pairs with an LRU cache per receiver.
+Receivers MUST validate `magic`, `header_version`, and `header_len` before processing a frame. Frames whose TTL has expired relative to the local clock MUST be dropped, with a drop notice published on `rlp/sys/drops`. Duplicate detection is performed on `(trace_id, msg_id)` pairs with an LRU cache per receiver; implementations SHOULD generate monotonically increasing identifiers (e.g., UUIDv7 or time-ordered 64-bit IDs) to keep caches efficient.
 
-The flags field reserves space for signatures and compression. Signatures and ACK/NAK handshakes ship as part of **RMP 0.2**; implementations MAY ignore unknown flag bits but MUST log them.
+The flags field reserves space for additional delivery semantics. Signatures and compression live in future RMP revisions; receivers MUST reject frames with any unknown/non-zero flags until those capabilities are negotiated.
 
 ## 2. Body envelope (normative)
 
-Body bytes are MsgPack maps of the form `{ "type": <schema_id>, "payload": <schema-specific> }`. The `type` field MUST equal the `schema_id` declared in the fixed header. Payload schemas are registered in [`docs/rmp-registry.md`](rmp-registry.md); additive changes within a schema are handled with in-payload versioning.
+Body bytes are MsgPack maps of the form `{ "type": <schema_id>, "payload": <schema-specific>, "meta"?: { ... } }`. The `type` field MUST equal the `schema_id` declared in the fixed header. Optional `meta` content carries budgeting, capability, priority, and other transport hints formerly contemplated for the fixed header. Payload schemas are registered in [`docs/rmp-registry.md`](rmp-registry.md); additive changes within a schema are handled with in-payload versioning.
 
 ## 3. Payload schemas & versions (normative)
 
@@ -77,9 +77,9 @@ See [`docs/rmp-registry.md`](rmp-registry.md) for reserved ranges and assignment
 
 ## 7. Backwards compatibility rules (normative)
 
-1. **Header struct:** the 60-byte header is fixed; adding or reordering fields requires a new `header_version` (e.g., v1) and likely a different `header_len`.
+1. **Header struct:** the 60-byte header is fixed; adding or reordering fields requires a new `header_version` (e.g., v1) and, if the size changes, a different `header_len`.
 2. **Bodies:** additive fields must be ignored by older agents; removing/renaming requires new `schema_id`.
-3. **Flags:** toggling new bits requires documentation and negotiation via config; unknown bits MUST be ignored but logged with warning.
+3. **Flags:** toggling new bits requires documentation and negotiation via config; unknown bits MUST be rejected in v0.
 
 ---
 

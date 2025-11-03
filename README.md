@@ -145,7 +145,7 @@ opening "compose_email" {
 
 ## Message Protocol (RMP)
 
-**MVP (RMP v0)** header includes: `trace_id`, `opening_id`, `msg_id`, **`created_at_ms`**, `ttl_ms`, `caps_bitmap`, `tokens_budget`, `schema_id`, `priority`.
+**MVP (RMP v0)** wire format uses a fixed 60-byte header (`magic`, `version`, `len`, `flags`, `schema_id`, `body_len`, `created_at_ms`, `ttl_ms`, `trace_id`, `opening_id`, `msg_id`) followed by a MsgPack body containing typed payload + optional metadata (budgets, priority, capability hints).
 Receivers enforce TTL using `created_at_ms + ttl_ms`. **RMP 0.2** (later in the roadmap) adds signatures/acks and richer metadata; wire compatibility is preserved. 
 
 Message bodies are schema‑tagged (JSON Schema on write; msgpack on the wire is allowed). Provenance is attached to each message for audit/replay. 
@@ -210,4 +210,3 @@ The README lists **`core`**, **`bus`**, and **`openings`** explicitly to match t
 ## License
 
 See [LICENSE](./LICENSE).
-
