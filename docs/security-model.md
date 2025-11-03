@@ -14,6 +14,7 @@
   - `model` (broker usage)
   - `exec` (disabled in v0.1)
 - The runtime enforces capability checks at hostcall boundaries and records denials in structured logs.
+- _Implementation status:_ the `runloop-runtime` crate now embeds Wasmtime and parses `policy.caps`, but hostcall enforcement and KB-backed audit sinks remain TODO (tracked under Epic C2/C3).
 
 ## Secret Handling _(normative)_
 - Secret material never lives in the POG; only opaque `secret_id` references are stored.
