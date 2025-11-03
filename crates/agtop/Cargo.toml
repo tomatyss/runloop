@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 runloop-core = { path = "../core" }
 crossterm = "0.29"
-ratatui = "0.26"
+ratatui = "0.28"
 tokio = { version = "1.38", features = ["rt-multi-thread", "macros", "time"] }
 anyhow = "1.0"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
