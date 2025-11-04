@@ -1,8 +1,9 @@
 use std::fs;
 use std::io::Write;
+use std::thread;
 use std::time::{Duration, Instant};
 
-use runloop_runtime::{AgentIdentity, AgentSpec, Runtime};
+use runloop_runtime::{AgentHandle, AgentIdentity, AgentSpec, Runtime};
 
 fn write_wasm(path: &std::path::Path) {
     let wasm = wat::parse_str(
@@ -31,6 +32,25 @@ fn write_policy(path: &std::path::Path) {
     .expect("write policy");
 }
 
+fn wait_for_stdout_contains(handle: &AgentHandle, needle: &[u8], timeout: Duration) -> Vec<u8> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let stdout = handle.stdout();
+        if stdout.windows(needle.len()).any(|window| window == needle) {
+            return stdout;
+        }
+
+        if Instant::now() >= deadline {
+            panic!(
+                "stdout missing {:?} after {:?}: {:?}",
+                needle, timeout, stdout
+            );
+        }
+
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
 #[test]
 fn cold_start_p50_under_40ms() {
     let runtime = Runtime::new().expect("runtime");
@@ -53,8 +73,7 @@ fn cold_start_p50_under_40ms() {
         let handle = runtime.spawn(spec).expect("spawn");
         durations.push(start.elapsed());
 
-        let stdout = handle.stdout();
-        assert!(stdout.contains(&b"ready"[..]));
+        let _stdout = wait_for_stdout_contains(&handle, b"ready", Duration::from_secs(1));
         let stats = handle.stats().expect("stats");
         assert!(stats.rss_bytes.unwrap_or(0) > 0);
 
