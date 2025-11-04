@@ -23,6 +23,9 @@ build-release:
 test:
 	@cargo test --workspace
 
+pre-commit:
+	@scripts/pre-commit.sh
+
 doc:
 	@cargo doc --workspace --no-deps
 

@@ -23,6 +23,7 @@
 - Tests: `cargo test --workspace`
 - Docs: markdownlint, link check
 - Commits: DCO Signed-off-by required
+- Pre-commit: `just pre-commit` runs the Rust format, clippy, and test gates locally; symlink it with `ln -s ../../scripts/pre-commit.sh .git/hooks/pre-commit` to enforce on every commit.
 
 ## DCO
 By contributing, you agree to the Developer Certificate of Origin (DCO 1.1). Add a trailer to each commit:
