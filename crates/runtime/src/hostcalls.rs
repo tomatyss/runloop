@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::audit::{AuditCategory, AuditSink};
 use crate::caps::{CapabilitySet, Caps, NetLocation};
@@ -34,6 +34,7 @@ pub(crate) struct HostState {
     agent_id: AgentId,
     trace_id: TraceId,
     identity: String,
+    deny_flag: Arc<AtomicBool>,
 }
 
 impl HostState {
@@ -58,6 +59,7 @@ impl HostState {
             agent_id,
             trace_id: TraceId::new(),
             identity,
+            deny_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -66,7 +68,32 @@ impl HostState {
     }
 
     fn deny(&self, cap: &str, op: &str, target: &str, args: &[u8], reason: &str) -> WasmtimeError {
+        self.record_cap_denial(cap, op, target, args, reason);
+        anyhow!("capability denied: {cap} ({reason})")
+    }
+
+    pub(crate) fn record_external_cap_denial(
+        &self,
+        cap: &str,
+        op: &str,
+        target: &str,
+        reason: &str,
+    ) {
+        self.record_cap_denial(cap, op, target, reason.as_bytes(), reason);
+        self.deny_flag.store(false, Ordering::Relaxed);
+    }
+
+    pub(crate) fn reset_denial_flag(&self) {
+        self.deny_flag.store(false, Ordering::Relaxed);
+    }
+
+    pub(crate) fn consume_denial_flag(&self) -> bool {
+        self.deny_flag.swap(false, Ordering::Relaxed)
+    }
+
+    fn record_cap_denial(&self, cap: &str, op: &str, target: &str, args: &[u8], reason: &str) {
         self.hostcall_stats.denied.fetch_add(1, Ordering::Relaxed);
+        self.deny_flag.store(true, Ordering::Relaxed);
         self.audit.record(
             AuditCategory::CapabilityDenied,
             format!(
@@ -86,7 +113,6 @@ impl HostState {
             AuditSeverity::Warn,
         );
         self.kb.record_cap_audit(record);
-        anyhow!("capability denied: {cap} ({reason})")
     }
 
     fn ensure_time(&self, op: &str) -> Result<(), WasmtimeError> {

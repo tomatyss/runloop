@@ -86,8 +86,10 @@
   * KB: map to `kb` client (see Epic E).
   * MODEL: map to broker (Epic F).
   * SECRETS: return opaque `secret_id` values only.
-* [ ] Record **audit events** for denied attempts (currently buffered in-memory; hook KB once available).
-* [ ] Add integration coverage that the WASI preopen list reflects `Caps::fs` (DirPerms/FilePerms mapping and missing roots).
+* [x] Record **audit events** for denied attempts (currently buffered in-memory; hook KB once available). *(See `tests/capabilities.rs::time_capability_denied_records_audit`.)*
+* [x] Add integration coverage that the WASI preopen list reflects `Caps::fs` (DirPerms/FilePerms mapping and missing roots).
+  * Host-side plan coverage: `tests/preopen_introspection.rs`.
+  * Behavioral harness: `tests/preopen_harness.rs` exercises read/write enforcement.
 
 **DoD:** Attempting a forbidden operation yields `CapDenied` and writes an audit event to KB.
 

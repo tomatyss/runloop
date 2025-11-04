@@ -34,6 +34,10 @@ and chooses `DirPerms`/`FilePerms` (read-only vs read/write) based on each
 entry's `write` flag. Guests therefore see just the permitted roots and cannot
 traverse outside them.
 
+For test and troubleshooting purposes `Caps::debug_preopens()` exposes the
+derived permission plan, while `tests/preopen_harness.rs` exercises the same
+builder in a standalone Wasmtime harness to confirm read/write enforcement.
+
 Stdout/stderr are surfaced to callers via an async `StdoutStream` adapter that
 mirrors guest writes into bounded `OutputRing` buffers while retaining a full
 copy for later inspection.

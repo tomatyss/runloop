@@ -370,7 +370,7 @@ impl Runtime {
 
                     let store_data = StoreData {
                         wasi: wasi_ctx,
-                        state: host_state_for_thread,
+                        state: host_state_for_thread.clone(),
                         mailbox: mailbox_for_thread,
                     };
                     let mut store = Store::new(&engine, store_data);
@@ -378,9 +378,21 @@ impl Runtime {
                         .instantiate(&mut store, &module_for_thread)
                         .map_err(|err| Error::spawn_failed(wasm_path.clone(), err.to_string()))?;
 
+                    host_state_for_thread.reset_denial_flag();
+
                     if let Ok(start) = instance.get_typed_func::<(), ()>(&mut store, "_start")
                         && let Err(err) = start.call(&mut store, ())
                     {
+                        if let Some(msg) = capability_denied_message(&err)
+                            .filter(|_| !host_state_for_thread.consume_denial_flag())
+                        {
+                            host_state_for_thread.record_external_cap_denial(
+                                "fs.access",
+                                "_start",
+                                "",
+                                &msg,
+                            );
+                        }
                         let mapped = map_wasmtime_error(err, &wasm_path);
                         return Err(mapped);
                     }
@@ -620,26 +632,32 @@ impl AsyncWrite for RingAsyncWrite {
 }
 
 fn map_wasmtime_error(err: WasmtimeError, wasm_path: &Path) -> Error {
+    if let Some(msg) = capability_denied_message(&err) {
+        return Error::CapDenied(msg);
+    }
+    Error::spawn_failed(wasm_path.to_path_buf(), err.to_string())
+}
+
+fn capability_denied_message(err: &WasmtimeError) -> Option<String> {
     let display = err.to_string();
     if display.contains("capability denied") {
-        return Error::CapDenied(display);
+        return Some(display);
     }
 
     let mut current = err.source();
     while let Some(source) = current {
         let source_msg = source.to_string();
         if source_msg.contains("capability denied") {
-            return Error::CapDenied(source_msg);
+            return Some(source_msg);
         }
         current = source.source();
     }
 
     let debug = format!("{err:?}");
     if debug.contains("capability denied") {
-        return Error::CapDenied(debug);
+        return Some(debug);
     }
-
-    Error::spawn_failed(wasm_path.to_path_buf(), display)
+    None
 }
 
 fn current_thread_id() -> u32 {
