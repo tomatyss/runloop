@@ -42,6 +42,17 @@ else
   log "Skipping clippy (RUNLOOP_PRECOMMIT_CLIPPY=${RUNLOOP_PRECOMMIT_CLIPPY:-1})"
 fi
 
+if maybe_skip "MARKDOWN" "RUNLOOP_PRECOMMIT_MARKDOWN" "0"; then
+  if command -v npx >/dev/null 2>&1; then
+    log "Linting markdown (npx markdownlint-cli2 \".github/**/*.md\")"
+    npx markdownlint-cli2 ".github/**/*.md"
+  else
+    log "Skipping markdownlint (npx not found; install Node.js/npm or export RUNLOOP_PRECOMMIT_MARKDOWN=1)"
+  fi
+else
+  log "Skipping markdownlint (RUNLOOP_PRECOMMIT_MARKDOWN=${RUNLOOP_PRECOMMIT_MARKDOWN:-1})"
+fi
+
 if maybe_skip "TESTS" "RUNLOOP_PRECOMMIT_TESTS" "0"; then
   log "Running cargo test --workspace"
   cargo test --workspace
