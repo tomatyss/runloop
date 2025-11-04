@@ -13,7 +13,6 @@ mod runtime;
 mod secrets;
 mod spec;
 mod stats;
-mod wasi_dir;
 
 pub use caps::{CapabilitySet, Caps, FsCapability, NetLocation};
 pub use error::Error;

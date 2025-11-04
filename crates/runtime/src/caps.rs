@@ -20,17 +20,12 @@ impl FsCapability {
 }
 
 /// KB/model capability sets – all, none, or limited domain lists.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum CapabilitySet {
+    #[default]
     None,
     All,
     Domains(BTreeSet<String>),
-}
-
-impl Default for CapabilitySet {
-    fn default() -> Self {
-        CapabilitySet::None
-    }
 }
 
 impl CapabilitySet {
@@ -88,10 +83,10 @@ impl NetLocation {
     }
 
     pub fn matches(&self, addr: &SocketAddr) -> bool {
-        if let Some(port) = self.port {
-            if port != addr.port() {
-                return false;
-            }
+        if let Some(port) = self.port
+            && port != addr.port()
+        {
+            return false;
         }
         if let Ok(ip) = self.host.parse::<IpAddr>() {
             return ip == addr.ip();
@@ -441,18 +436,16 @@ fn merge_hosts(base: &[NetLocation], overrides: &[NetLocation], present: bool) -
             }
             match entry.port {
                 Some(port) => {
-                    if ports.iter().any(|p| *p == Some(port)) {
+                    if ports.contains(&Some(port)) {
                         result.push(entry.clone());
                     }
                 }
                 None => {
-                    for p in ports {
-                        if let Some(port) = p {
-                            result.push(NetLocation {
-                                host: entry.host.clone(),
-                                port: Some(*port),
-                            });
-                        }
+                    for port in ports.iter().flatten() {
+                        result.push(NetLocation {
+                            host: entry.host.clone(),
+                            port: Some(*port),
+                        });
                     }
                 }
             }

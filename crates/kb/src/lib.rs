@@ -30,8 +30,8 @@ impl KnowledgeBase {
         self.events
             .lock()
             .iter()
-            .filter_map(|event| match event {
-                Event::CapAudit(record) => Some(record.clone()),
+            .map(|event| match event {
+                Event::CapAudit(record) => record.clone(),
             })
             .collect()
     }
@@ -112,5 +112,3 @@ fn timestamp_ms() -> u64 {
         .map(|d| d.as_millis() as u64)
         .unwrap_or_default()
 }
-
-pub use self::{AuditDecision, AuditSeverity, CapAuditRecord};

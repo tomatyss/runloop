@@ -395,7 +395,7 @@ impl Server {
             let mut topics = self.topics.write();
             topics
                 .entry(topic.to_string())
-                .or_insert_with(TopicState::default)
+                .or_default()
                 .subscribers
                 .push(subscriber);
         }

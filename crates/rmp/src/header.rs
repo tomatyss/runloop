@@ -152,14 +152,11 @@ pub fn encode_frame(header: &Header, body: &[u8]) -> BytesMut {
 }
 
 /// Decode a frame from bytes, enforcing a maximum body length.
-pub fn decode_frame<'a>(
-    bytes: &'a [u8],
-    max_len: u32,
-) -> Result<(Header, &'a [u8]), FrameDecodeError> {
+pub fn decode_frame(bytes: &[u8], max_len: u32) -> Result<(Header, &[u8]), FrameDecodeError> {
     if bytes.len() < 4 {
         return Err(FrameDecodeError::Incomplete);
     }
-    let mut cursor = &bytes[..];
+    let mut cursor = bytes;
     let frame_len = cursor.get_u32();
     if cursor.len() < frame_len as usize {
         return Err(FrameDecodeError::Incomplete);

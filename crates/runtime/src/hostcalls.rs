@@ -5,18 +5,19 @@ use crate::audit::{AuditCategory, AuditSink};
 use crate::caps::{CapabilitySet, Caps, NetLocation};
 use crate::error::Error;
 use crate::secrets::SecretProvider;
+use anyhow::anyhow;
 use parking_lot::Mutex;
 use runloop_core::ids::{AgentId, TraceId};
 use runloop_kb::{AuditDecision, AuditSeverity, CapAuditRecord, KnowledgeBase};
 use runloop_model_broker::{Broker, CompletionRequest};
 use tokio::sync::mpsc;
 use url::Url;
-use wasi_common::WasiCtx;
-use wasmtime::{Caller, Linker, Trap};
+use wasmtime::{AsContext, AsContextMut, Caller, Error as WasmtimeError, Linker, Memory};
+use wasmtime_wasi::p1::WasiP1Ctx;
 
 /// Store data embedded inside each Wasmtime store.
 pub(crate) struct StoreData {
-    pub wasi: WasiCtx,
+    pub wasi: WasiP1Ctx,
     pub state: Arc<HostState>,
     pub mailbox: Arc<AgentMailbox>,
 }
@@ -64,7 +65,7 @@ impl HostState {
         self.hostcall_stats.allowed.fetch_add(1, Ordering::Relaxed);
     }
 
-    fn deny(&self, cap: &str, op: &str, target: &str, args: &[u8], reason: &str) -> Trap {
+    fn deny(&self, cap: &str, op: &str, target: &str, args: &[u8], reason: &str) -> WasmtimeError {
         self.hostcall_stats.denied.fetch_add(1, Ordering::Relaxed);
         self.audit.record(
             AuditCategory::CapabilityDenied,
@@ -85,10 +86,10 @@ impl HostState {
             AuditSeverity::Warn,
         );
         self.kb.record_cap_audit(record);
-        Trap::new(format!("capability denied: {cap} ({reason})"))
+        anyhow!("capability denied: {cap} ({reason})")
     }
 
-    fn ensure_time(&self, op: &str) -> Result<(), Trap> {
+    fn ensure_time(&self, op: &str) -> Result<(), WasmtimeError> {
         if self.caps.time {
             self.allow();
             Ok(())
@@ -97,7 +98,7 @@ impl HostState {
         }
     }
 
-    fn ensure_net(&self, host: &str) -> Result<(), Trap> {
+    fn ensure_net(&self, host: &str) -> Result<(), WasmtimeError> {
         if self.caps.net_hosts.is_empty() {
             return Err(self.deny(
                 "net.http",
@@ -107,16 +108,17 @@ impl HostState {
                 "no_hosts",
             ));
         }
-        if let Ok(url) = Url::parse(host) {
-            if url.scheme() == "http" && !self.caps.net_allow_http {
-                return Err(self.deny(
-                    "net.http",
-                    "http_request",
-                    host,
-                    host.as_bytes(),
-                    "http_not_permitted",
-                ));
-            }
+        if let Ok(url) = Url::parse(host)
+            && url.scheme() == "http"
+            && !self.caps.net_allow_http
+        {
+            return Err(self.deny(
+                "net.http",
+                "http_request",
+                host,
+                host.as_bytes(),
+                "http_not_permitted",
+            ));
         }
         if !self
             .caps
@@ -136,7 +138,7 @@ impl HostState {
         Ok(())
     }
 
-    fn ensure_kb_read(&self, namespace: &str) -> Result<(), Trap> {
+    fn ensure_kb_read(&self, namespace: &str) -> Result<(), WasmtimeError> {
         if permits_namespace(&self.caps.kb_read, namespace) {
             self.allow();
             Ok(())
@@ -151,7 +153,7 @@ impl HostState {
         }
     }
 
-    fn ensure_kb_write(&self, namespace: &str) -> Result<(), Trap> {
+    fn ensure_kb_write(&self, namespace: &str) -> Result<(), WasmtimeError> {
         if permits_namespace(&self.caps.kb_write, namespace) {
             self.allow();
             Ok(())
@@ -166,7 +168,7 @@ impl HostState {
         }
     }
 
-    fn ensure_model(&self) -> Result<(), Trap> {
+    fn ensure_model(&self) -> Result<(), WasmtimeError> {
         if self.caps.model {
             self.allow();
             Ok(())
@@ -175,7 +177,7 @@ impl HostState {
         }
     }
 
-    fn ensure_secret(&self, secret_id: &str) -> Result<(), Trap> {
+    fn ensure_secret(&self, secret_id: &str) -> Result<(), WasmtimeError> {
         if self.caps.permits_secret(secret_id) {
             self.allow();
             Ok(())
@@ -190,7 +192,7 @@ impl HostState {
         }
     }
 
-    fn ensure_exec(&self) -> Result<(), Trap> {
+    fn ensure_exec(&self) -> Result<(), WasmtimeError> {
         if self.caps.exec {
             self.allow();
             Ok(())
@@ -215,10 +217,6 @@ impl AgentMailbox {
 
     pub fn try_recv(&self) -> Option<Vec<u8>> {
         self.inner.lock().try_recv().ok()
-    }
-
-    pub fn blocking_recv(&self) -> Option<Vec<u8>> {
-        self.inner.lock().blocking_recv()
     }
 }
 
@@ -256,10 +254,10 @@ fn host_allows(entry: &NetLocation, host: &str) -> bool {
 }
 
 fn host_matches(entry: &NetLocation, host: &str, port: Option<u16>) -> bool {
-    if let Some(expected_port) = entry.port {
-        if port.unwrap_or(expected_port) != expected_port {
-            return false;
-        }
+    if let Some(expected_port) = entry.port
+        && port.unwrap_or(expected_port) != expected_port
+    {
+        return false;
     }
     entry.host == host
 }
@@ -273,39 +271,67 @@ fn permits_namespace(set: &CapabilitySet, namespace: &str) -> bool {
 }
 
 pub(crate) fn add_to_linker(linker: &mut Linker<StoreData>) -> Result<(), Error> {
-    linker.func_wrap("runloop", "time_now", host_time_now)?;
-    linker.func_wrap("runloop", "http_request", host_http_request)?;
-    linker.func_wrap("runloop", "kb_read", host_kb_read)?;
-    linker.func_wrap("runloop", "kb_write", host_kb_write)?;
-    linker.func_wrap("runloop", "model_complete", host_model_complete)?;
-    linker.func_wrap("runloop", "resolve_secret", host_resolve_secret)?;
-    linker.func_wrap("runloop", "exec_spawn", host_exec_spawn)?;
-    linker.func_wrap("runloop", "mailbox_recv", host_mailbox_recv)?;
+    linker
+        .func_wrap("runloop", "time_now", host_time_now)
+        .map_err(|err| Error::SpawnFailed(err.to_string()))?;
+    linker
+        .func_wrap("runloop", "http_request", host_http_request)
+        .map_err(|err| Error::SpawnFailed(err.to_string()))?;
+    linker
+        .func_wrap("runloop", "kb_read", host_kb_read)
+        .map_err(|err| Error::SpawnFailed(err.to_string()))?;
+    linker
+        .func_wrap("runloop", "kb_write", host_kb_write)
+        .map_err(|err| Error::SpawnFailed(err.to_string()))?;
+    linker
+        .func_wrap("runloop", "model_complete", host_model_complete)
+        .map_err(|err| Error::SpawnFailed(err.to_string()))?;
+    linker
+        .func_wrap("runloop", "resolve_secret", host_resolve_secret)
+        .map_err(|err| Error::SpawnFailed(err.to_string()))?;
+    linker
+        .func_wrap("runloop", "exec_spawn", host_exec_spawn)
+        .map_err(|err| Error::SpawnFailed(err.to_string()))?;
+    linker
+        .func_wrap("runloop", "mailbox_recv", host_mailbox_recv)
+        .map_err(|err| Error::SpawnFailed(err.to_string()))?;
     Ok(())
 }
 
-fn host_time_now(mut caller: Caller<'_, StoreData>) -> Result<i64, Trap> {
+fn host_time_now(caller: Caller<'_, StoreData>) -> Result<i64, WasmtimeError> {
     caller.data().state.ensure_time("clock_time_get")?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|_| Trap::new("system clock before unix epoch"))?;
+        .map_err(|_| host_error("system clock before unix epoch"))?;
     Ok(now.as_micros() as i64)
 }
 
-fn host_http_request(mut caller: Caller<'_, StoreData>, ptr: i32, len: i32) -> Result<i32, Trap> {
+fn host_http_request(
+    mut caller: Caller<'_, StoreData>,
+    ptr: i32,
+    len: i32,
+) -> Result<i32, WasmtimeError> {
     let url = read_utf8(&mut caller, ptr, len)?;
     caller.data().state.ensure_net(&url)?;
     // MVP: no actual network call; agents will see synthetic 200.
     Ok(200)
 }
 
-fn host_kb_read(mut caller: Caller<'_, StoreData>, ptr: i32, len: i32) -> Result<i32, Trap> {
+fn host_kb_read(
+    mut caller: Caller<'_, StoreData>,
+    ptr: i32,
+    len: i32,
+) -> Result<i32, WasmtimeError> {
     let namespace = read_utf8(&mut caller, ptr, len)?;
     caller.data().state.ensure_kb_read(&namespace)?;
     Ok(0)
 }
 
-fn host_kb_write(mut caller: Caller<'_, StoreData>, ptr: i32, len: i32) -> Result<i32, Trap> {
+fn host_kb_write(
+    mut caller: Caller<'_, StoreData>,
+    ptr: i32,
+    len: i32,
+) -> Result<i32, WasmtimeError> {
     let namespace = read_utf8(&mut caller, ptr, len)?;
     caller.data().state.ensure_kb_write(&namespace)?;
     Ok(0)
@@ -317,10 +343,10 @@ fn host_model_complete(
     prompt_len: i32,
     model_ptr: i32,
     model_len: i32,
-) -> Result<i32, Trap> {
+) -> Result<i32, WasmtimeError> {
     caller.data().state.ensure_model()?;
     if prompt_len < 0 || model_len < 0 {
-        return Err(Trap::new("invalid buffer length"));
+        return Err(host_error("invalid buffer length"));
     }
     let prompt = read_utf8(&mut caller, prompt_ptr, prompt_len)?;
     let model = if model_len > 0 {
@@ -335,7 +361,7 @@ fn host_model_complete(
         .complete(&CompletionRequest { prompt, model });
     let rendered = response.output.as_bytes();
     if rendered.len() > i32::MAX as usize {
-        return Err(Trap::new("model response too large"));
+        return Err(host_error("model response too large"));
     }
     let available = prompt_len as usize;
     if rendered.len() > available {
@@ -345,7 +371,11 @@ fn host_model_complete(
     Ok(rendered.len() as i32)
 }
 
-fn host_resolve_secret(mut caller: Caller<'_, StoreData>, ptr: i32, len: i32) -> Result<i32, Trap> {
+fn host_resolve_secret(
+    mut caller: Caller<'_, StoreData>,
+    ptr: i32,
+    len: i32,
+) -> Result<i32, WasmtimeError> {
     let secret_id = read_utf8(&mut caller, ptr, len)?;
     caller.data().state.ensure_secret(&secret_id)?;
     if let Some(value) = caller.data().state.secrets.resolve(&secret_id) {
@@ -362,7 +392,11 @@ fn host_resolve_secret(mut caller: Caller<'_, StoreData>, ptr: i32, len: i32) ->
     }
 }
 
-fn host_exec_spawn(mut caller: Caller<'_, StoreData>, ptr: i32, len: i32) -> Result<i32, Trap> {
+fn host_exec_spawn(
+    mut caller: Caller<'_, StoreData>,
+    ptr: i32,
+    len: i32,
+) -> Result<i32, WasmtimeError> {
     caller.data().state.ensure_exec()?;
     let command = read_utf8(&mut caller, ptr, len)?;
     // MVP: exec not implemented; simply acknowledge capability check.
@@ -370,23 +404,35 @@ fn host_exec_spawn(mut caller: Caller<'_, StoreData>, ptr: i32, len: i32) -> Res
     Ok(0)
 }
 
-fn host_mailbox_recv(mut caller: Caller<'_, StoreData>, ptr: i32, len: i32) -> Result<i32, Trap> {
+fn host_mailbox_recv(
+    mut caller: Caller<'_, StoreData>,
+    ptr: i32,
+    len: i32,
+) -> Result<i32, WasmtimeError> {
     let Some(message) = caller.data().mailbox.try_recv() else {
         return Ok(0);
     };
     if message.len() > len as usize {
-        return Err(Trap::new("mailbox buffer too small"));
+        return Err(host_error("mailbox buffer too small"));
     }
     write_bytes(&mut caller, ptr, &message)?;
     Ok(message.len() as i32)
 }
 
-fn read_utf8(caller: &mut Caller<'_, StoreData>, ptr: i32, len: i32) -> Result<String, Trap> {
+fn read_utf8(
+    caller: &mut Caller<'_, StoreData>,
+    ptr: i32,
+    len: i32,
+) -> Result<String, WasmtimeError> {
     let bytes = read_bytes(caller, ptr, len)?;
-    String::from_utf8(bytes).map_err(|_| Trap::new("invalid utf8 argument"))
+    String::from_utf8(bytes).map_err(|_| host_error("invalid utf8 argument"))
 }
 
-fn read_bytes(caller: &mut Caller<'_, StoreData>, ptr: i32, len: i32) -> Result<Vec<u8>, Trap> {
+fn read_bytes(
+    caller: &mut Caller<'_, StoreData>,
+    ptr: i32,
+    len: i32,
+) -> Result<Vec<u8>, WasmtimeError> {
     if len <= 0 {
         return Ok(Vec::new());
     }
@@ -394,27 +440,39 @@ fn read_bytes(caller: &mut Caller<'_, StoreData>, ptr: i32, len: i32) -> Result<
     let mut buf = vec![0u8; len as usize];
     memory
         .read(caller.as_context(), ptr as usize, &mut buf)
-        .map_err(|e| Trap::new(format!("memory read failed: {e}")))?;
+        .map_err(|e| host_error(format!("memory read failed: {e}")))?;
     Ok(buf)
 }
 
-fn write_utf8(caller: &mut Caller<'_, StoreData>, ptr: i32, value: &str) -> Result<(), Trap> {
+fn write_utf8(
+    caller: &mut Caller<'_, StoreData>,
+    ptr: i32,
+    value: &str,
+) -> Result<(), WasmtimeError> {
     write_bytes(caller, ptr, value.as_bytes())
 }
 
-fn write_bytes(caller: &mut Caller<'_, StoreData>, ptr: i32, data: &[u8]) -> Result<(), Trap> {
+fn write_bytes(
+    caller: &mut Caller<'_, StoreData>,
+    ptr: i32,
+    data: &[u8],
+) -> Result<(), WasmtimeError> {
     if data.is_empty() {
         return Ok(());
     }
     let memory = memory(caller)?;
     memory
         .write(caller.as_context_mut(), ptr as usize, data)
-        .map_err(|e| Trap::new(format!("memory write failed: {e}")))
+        .map_err(|e| host_error(format!("memory write failed: {e}")))
 }
 
-fn memory(caller: &mut Caller<'_, StoreData>) -> Result<wasmtime::Memory, Trap> {
+fn memory(caller: &mut Caller<'_, StoreData>) -> Result<Memory, WasmtimeError> {
     caller
         .get_export("memory")
         .and_then(|ext| ext.into_memory())
-        .ok_or_else(|| Trap::new("guest module missing exported memory"))
+        .ok_or_else(|| host_error("guest module missing exported memory"))
+}
+
+fn host_error(msg: impl Into<String>) -> WasmtimeError {
+    anyhow!(msg.into())
 }

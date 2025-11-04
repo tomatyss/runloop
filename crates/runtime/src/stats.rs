@@ -13,10 +13,10 @@ impl AgentStats {
     }
 }
 
-pub fn read_stats(tid: Option<u32>) -> Result<AgentStats, Error> {
+pub fn read_stats(_tid: Option<u32>) -> Result<AgentStats, Error> {
     #[cfg(all(feature = "procfs", target_os = "linux"))]
     {
-        if let Some(t) = tid {
+        if let Some(t) = _tid {
             if let Ok(stats) = read_thread_stats_procfs(t) {
                 return Ok(stats);
             }
@@ -49,19 +49,16 @@ fn read_thread_stats_procfs(tid: u32) -> Result<AgentStats, Error> {
 }
 
 fn read_process_stats() -> Result<AgentStats, Error> {
-    use sysinfo::{PidExt, ProcessExt, ProcessRefreshKind, RefreshKind, System, SystemExt};
+    use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
 
-    let pid = std::process::id();
+    let pid = Pid::from_u32(std::process::id());
     let mut system = System::new_with_specifics(
         RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
     );
-    system.refresh_processes();
-    let process = system
-        .processes()
-        .iter()
-        .find(|(proc_pid, _)| proc_pid.as_u32() == pid)
-        .map(|(_, process)| process)
-        .ok_or(Error::StatsUnavailable)?;
+    if !system.refresh_process(pid) {
+        return Err(Error::StatsUnavailable);
+    }
+    let process = system.process(pid).ok_or(Error::StatsUnavailable)?;
     let rss_bytes = Some(process.memory() * 1024);
     let cpu_total_ms = None;
     Ok(AgentStats {

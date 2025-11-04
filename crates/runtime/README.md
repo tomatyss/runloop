@@ -28,9 +28,15 @@ decision is denied.
 | `exec_spawn`       | Stubbed until exec caps are enabled; guard rail in place.         |
 | `mailbox_recv`     | Pulls pending bus messages for the agent.                         |
 
-Filesystem operations continue to use WASI preview1 interfaces but are wrapped
-in `CapabilityDir` to prevent writes when the capability is read-only and to
-reject `..` traversal that would escape the preopened root.
+Filesystem access is mediated by `WasiCtxBuilder::preopened_dir`. The runtime
+only preopens directories that appear in the agent's filesystem capabilities
+and chooses `DirPerms`/`FilePerms` (read-only vs read/write) based on each
+entry's `write` flag. Guests therefore see just the permitted roots and cannot
+traverse outside them.
+
+Stdout/stderr are surfaced to callers via an async `StdoutStream` adapter that
+mirrors guest writes into bounded `OutputRing` buffers while retaining a full
+copy for later inspection.
 
 ## Audit Trail
 
