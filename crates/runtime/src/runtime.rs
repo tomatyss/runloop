@@ -635,20 +635,26 @@ impl AsyncWrite for RingAsyncWrite {
 }
 
 fn map_wasmtime_error(err: WasmtimeError, wasm_path: &Path) -> Error {
-    let message = err.to_string();
-    if message.contains("capability denied") {
-        Error::CapDenied(message)
-    } else {
-        let mut current = err.source();
-        while let Some(source) = current {
-            let source_msg = source.to_string();
-            if source_msg.contains("capability denied") {
-                return Error::CapDenied(source_msg);
-            }
-            current = source.source();
-        }
-        Error::spawn_failed(wasm_path.to_path_buf(), message)
+    let display = err.to_string();
+    if display.contains("capability denied") {
+        return Error::CapDenied(display);
     }
+
+    let mut current = err.source();
+    while let Some(source) = current {
+        let source_msg = source.to_string();
+        if source_msg.contains("capability denied") {
+            return Error::CapDenied(source_msg);
+        }
+        current = source.source();
+    }
+
+    let debug = format!("{err:?}");
+    if debug.contains("capability denied") {
+        return Error::CapDenied(debug);
+    }
+
+    Error::spawn_failed(wasm_path.to_path_buf(), display)
 }
 
 fn current_thread_id() -> u32 {
