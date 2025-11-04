@@ -5,16 +5,20 @@
 mod audit;
 mod caps;
 mod error;
+mod hostcalls;
 mod module_cache;
 mod output;
 mod policy;
 mod runtime;
+mod secrets;
 mod spec;
 mod stats;
 mod wasi_dir;
 
 pub use caps::{CapabilitySet, Caps, FsCapability, NetLocation};
 pub use error::Error;
-pub use runtime::{AgentHandle, Runtime};
+pub use hostcalls::HostcallStats;
+pub use runtime::{AgentHandle, Runtime, RuntimeBuilder};
+pub use secrets::{SecretProvider, SecretStore};
 pub use spec::{AgentIdentity, AgentSpec};
 pub use stats::AgentStats;
