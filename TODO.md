@@ -78,7 +78,7 @@
 
 * [x] Define `Caps` struct (fs allowlist, net allowlist, time, kb_read/write, model, secrets, exec).
 * [x] Manifest parser: read `policy.caps` (TOML) → `Caps` + overrides.
-* [ ] Implement **hostcalls** that check caps before performing:
+* [x] Implement **hostcalls** that check caps before performing:
 
   * FS: open/read/write within allowed roots; symlink traversal blocked outside root.
   * NET: only HTTP(S) to allowed domains (DNS resolution gate).
@@ -302,7 +302,7 @@
 
 **K1. Capability enforcement completeness**
 
-* [ ] Ensure **every** hostcall mapping checks caps (fs, net, time, kb, model, secrets, exec).
+* [x] Ensure **every** hostcall mapping checks caps (fs, net, time, kb, model, secrets, exec).
 * [ ] Deny by default; empty caps = inert agent.
 
 **DoD:** Static audit (grep/inspection) & tests verify enforcement paths.

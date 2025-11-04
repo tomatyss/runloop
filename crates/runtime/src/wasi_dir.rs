@@ -48,6 +48,12 @@ impl WasiDir for CapabilityDir {
         if !self.allow_write && (write || oflags.contains(OFlags::CREATE | OFlags::TRUNCATE)) {
             return Err(self.deny());
         }
+        if std::path::Path::new(path)
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            return Err(self.deny());
+        }
         self.inner
             .open_file(follow_symlinks, path, oflags, read, write, fdflags)
             .await

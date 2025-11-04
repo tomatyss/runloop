@@ -9,6 +9,9 @@ name = "runloop_runtime"
 [dependencies]
 runloop-core = { path = "../core" }
 runloop-rmp = { path = "../rmp" }
+runloop-kb = { path = "../kb" }
+runloop-model-broker = { path = "../model-broker" }
+runloop-bus = { path = "../bus" }
 thiserror = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.38", features = ["rt-multi-thread", "macros", "time", "process", "net", "sync"] }
@@ -31,12 +34,16 @@ cap-std = "3.4.5"
 libc = "0.2"
 procfs = { version = "0.16", optional = true }
 rustix = { version = "0.38", default-features = false, features = ["thread"] }
+futures-util = "0.3"
+url = "2.5"
+sysinfo = { version = "0.30", default-features = false, features = ["system"] }
 
 [features]
 default = []
 procfs = ["dep:procfs"]
 
 [dev-dependencies]
+criterion = { version = "0.5", default-features = false }
 tokio = { version = "1.38", features = ["rt-multi-thread", "macros"] }
 wat = "1.240.0"
 tempfile = "3.10"
