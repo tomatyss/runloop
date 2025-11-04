@@ -94,7 +94,6 @@ struct AgentProcess {
     tid: AtomicU32,
     join: Mutex<Option<thread::JoinHandle<Result<(), Error>>>>,
     inbox: mpsc::Sender<Vec<u8>>,
-    mailbox: Arc<AgentMailbox>,
     bus_task: Mutex<Option<TokioJoinHandle<()>>>,
     _host_state: Arc<HostState>,
 }
@@ -214,6 +213,12 @@ impl RuntimeBuilder {
     }
 }
 
+impl Default for RuntimeBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Runtime {
     /// Construct a new runtime instance with a configured Wasmtime engine.
     pub fn new() -> Result<Self, Error> {
@@ -269,7 +274,6 @@ impl Runtime {
             tid: AtomicU32::new(0),
             join: Mutex::new(None),
             inbox: inbox_tx.clone(),
-            mailbox: mailbox.clone(),
             bus_task: Mutex::new(None),
             _host_state: host_state.clone(),
         });
@@ -316,28 +320,27 @@ impl Runtime {
                     wasi_builder.stderr(stderr_stream.clone());
                     wasi_builder.stdin(MemoryInputPipe::new(Bytes::new()));
 
-                    if let Some(cwd) = &spec.cwd {
-                        if let Some(cap) = policy_caps
+                    if let Some(cwd) = &spec.cwd
+                        && let Some(cap) = policy_caps
                             .fs
                             .iter()
                             .find(|cap| Path::new(cap.root.as_str()) == cwd)
-                        {
-                            let dir_perms = if cap.write {
-                                DirPerms::all()
-                            } else {
-                                DirPerms::READ
-                            };
-                            let file_perms = if cap.write {
-                                FilePerms::all()
-                            } else {
-                                FilePerms::READ
-                            };
-                            let guest_path =
-                                spec.working_dir.as_ref().map(|p| p.as_str()).unwrap_or(".");
-                            wasi_builder
-                                .preopened_dir(cwd, guest_path, dir_perms, file_perms)
-                                .map_err(|err| Error::spawn_failed(cwd.clone(), err.to_string()))?;
-                        }
+                    {
+                        let dir_perms = if cap.write {
+                            DirPerms::all()
+                        } else {
+                            DirPerms::READ
+                        };
+                        let file_perms = if cap.write {
+                            FilePerms::all()
+                        } else {
+                            FilePerms::READ
+                        };
+                        let guest_path =
+                            spec.working_dir.as_ref().map(|p| p.as_str()).unwrap_or(".");
+                        wasi_builder
+                            .preopened_dir(cwd, guest_path, dir_perms, file_perms)
+                            .map_err(|err| Error::spawn_failed(cwd.clone(), err.to_string()))?;
                     }
 
                     for entry in &policy_caps.fs {
@@ -359,7 +362,7 @@ impl Runtime {
                             })?;
                     }
 
-                    let mut wasi_ctx = wasi_builder.build_p1();
+                    let wasi_ctx = wasi_builder.build_p1();
                     let mut linker: Linker<StoreData> = Linker::new(&engine);
                     p1::add_to_linker_sync(&mut linker, |data: &mut StoreData| &mut data.wasi)
                         .map_err(|err| Error::SpawnFailed(err.to_string()))?;
@@ -377,17 +380,17 @@ impl Runtime {
 
                     let _ = startup_tx.send(StartupSignal::Ready);
 
-                    if let Ok(start) = instance.get_typed_func::<(), ()>(&mut store, "_start") {
-                        if let Err(err) = start.call(&mut store, ()) {
-                            let mapped = map_wasmtime_error(err, &wasm_path);
-                            let cap_denied = matches!(mapped, Error::CapDenied(_));
-                            let message = mapped.to_string();
-                            let _ = startup_tx.send(StartupSignal::Failed {
-                                cap_denied,
-                                message,
-                            });
-                            return Err(mapped);
-                        }
+                    if let Ok(start) = instance.get_typed_func::<(), ()>(&mut store, "_start")
+                        && let Err(err) = start.call(&mut store, ())
+                    {
+                        let mapped = map_wasmtime_error(err, &wasm_path);
+                        let cap_denied = matches!(mapped, Error::CapDenied(_));
+                        let message = mapped.to_string();
+                        let _ = startup_tx.send(StartupSignal::Failed {
+                            cap_denied,
+                            message,
+                        });
+                        return Err(mapped);
                     }
 
                     Ok(())

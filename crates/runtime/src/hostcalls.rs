@@ -86,7 +86,7 @@ impl HostState {
             AuditSeverity::Warn,
         );
         self.kb.record_cap_audit(record);
-        anyhow!("capability denied: {cap} ({reason})").into()
+        anyhow!("capability denied: {cap} ({reason})")
     }
 
     fn ensure_time(&self, op: &str) -> Result<(), WasmtimeError> {
@@ -108,16 +108,17 @@ impl HostState {
                 "no_hosts",
             ));
         }
-        if let Ok(url) = Url::parse(host) {
-            if url.scheme() == "http" && !self.caps.net_allow_http {
-                return Err(self.deny(
-                    "net.http",
-                    "http_request",
-                    host,
-                    host.as_bytes(),
-                    "http_not_permitted",
-                ));
-            }
+        if let Ok(url) = Url::parse(host)
+            && url.scheme() == "http"
+            && !self.caps.net_allow_http
+        {
+            return Err(self.deny(
+                "net.http",
+                "http_request",
+                host,
+                host.as_bytes(),
+                "http_not_permitted",
+            ));
         }
         if !self
             .caps
@@ -217,10 +218,6 @@ impl AgentMailbox {
     pub fn try_recv(&self) -> Option<Vec<u8>> {
         self.inner.lock().try_recv().ok()
     }
-
-    pub fn blocking_recv(&self) -> Option<Vec<u8>> {
-        self.inner.lock().blocking_recv()
-    }
 }
 
 /// Hostcall statistics (allowed vs denied decisions).
@@ -257,10 +254,10 @@ fn host_allows(entry: &NetLocation, host: &str) -> bool {
 }
 
 fn host_matches(entry: &NetLocation, host: &str, port: Option<u16>) -> bool {
-    if let Some(expected_port) = entry.port {
-        if port.unwrap_or(expected_port) != expected_port {
-            return false;
-        }
+    if let Some(expected_port) = entry.port
+        && port.unwrap_or(expected_port) != expected_port
+    {
+        return false;
     }
     entry.host == host
 }
@@ -477,5 +474,5 @@ fn memory(caller: &mut Caller<'_, StoreData>) -> Result<Memory, WasmtimeError> {
 }
 
 fn host_error(msg: impl Into<String>) -> WasmtimeError {
-    anyhow!(msg.into()).into()
+    anyhow!(msg.into())
 }
