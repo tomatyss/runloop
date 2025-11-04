@@ -23,11 +23,11 @@ directories = "5.0"
 camino = "1.1"
 cfg-if = "1.0"
 serde_json = "1.0"
-wasmtime = { version = "17.0.3", features = ["cache", "cranelift"] }
-wasmtime-wasi = "17.0.3"
+wasmtime = { version = "24.0.2", features = ["cache", "cranelift"] }
+wasmtime-wasi = "38.0.3"
 wasi-cap-std-sync = "17.0.3"
 wasi-common = "17.0.3"
-cap-std = "2.0.2"
+cap-std = "3.4.5"
 libc = "0.2"
 procfs = { version = "0.16", optional = true }
 rustix = { version = "0.38", default-features = false, features = ["thread"] }
