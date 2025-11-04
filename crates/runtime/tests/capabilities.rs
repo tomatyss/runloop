@@ -45,9 +45,23 @@ fn time_capability_denied_records_audit() {
         .policy_path(&policy_path)
         .build()
         .expect("spec");
+    assert!(
+        !spec.caps.time,
+        "policy expected to disable time capability"
+    );
 
     let result = runtime.spawn(spec);
-    assert!(matches!(result, Err(Error::CapDenied(_))));
+    match result {
+        Err(Error::CapDenied(_)) => {}
+        Err(other) => panic!("unexpected spawn error: {other:?}"),
+        Ok(handle) => {
+            let kill_result = runtime.kill(handle.id());
+            assert!(
+                matches!(kill_result, Err(Error::CapDenied(_))),
+                "expected kill to surface capability denial, got {kill_result:?}"
+            );
+        }
+    }
 
     let audits: Vec<CapAuditRecord> = kb.cap_audits();
     assert_eq!(audits.len(), 1, "expected single audit record");

@@ -624,17 +624,31 @@ fn map_wasmtime_error(err: WasmtimeError, wasm_path: &Path) -> Error {
     if display.contains("capability denied") {
         return Error::CapDenied(display);
     }
+
+    let mut current = err.source();
+    while let Some(source) = current {
+        let source_msg = source.to_string();
+        if source_msg.contains("capability denied") {
+            return Error::CapDenied(source_msg);
+        }
+        current = source.source();
+    }
+
     let debug = format!("{err:?}");
     if debug.contains("capability denied") {
         return Error::CapDenied(debug);
     }
+
     Error::spawn_failed(wasm_path.to_path_buf(), display)
 }
 
 fn current_thread_id() -> u32 {
     cfg_if! {
         if #[cfg(target_os = "linux")] {
-            rustix::thread::gettid().as_raw_nonzero().map(|nz| nz.get()).unwrap_or(0)
+            rustix::thread::gettid()
+                .as_raw_pid()
+                .try_into()
+                .unwrap_or(0)
         } else {
             0
         }

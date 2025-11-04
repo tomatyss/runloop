@@ -73,7 +73,7 @@ fn cold_start_p50_under_40ms() {
         let handle = runtime.spawn(spec).expect("spawn");
         durations.push(start.elapsed());
 
-        let _stdout = wait_for_stdout_contains(&handle, b"ready", Duration::from_secs(1));
+        let _stdout = wait_for_stdout_contains(&handle, b"ready", Duration::from_millis(20));
         let stats = handle.stats().expect("stats");
         assert!(stats.rss_bytes.unwrap_or(0) > 0);
 
