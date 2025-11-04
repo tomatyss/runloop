@@ -53,8 +53,27 @@ fn cold_start_p50_under_40ms() {
         let handle = runtime.spawn(spec).expect("spawn");
         durations.push(start.elapsed());
 
-        let stdout = handle.stdout();
-        assert!(stdout.contains(&b"ready"[..]));
+        let stdout = {
+            let deadline = Instant::now() + Duration::from_millis(20);
+            loop {
+                let buf = handle.stdout();
+                if std::str::from_utf8(&buf)
+                    .map(|s| s.contains("ready"))
+                    .unwrap_or(false)
+                {
+                    break buf;
+                }
+                if Instant::now() >= deadline {
+                    break buf;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        let stdout_str = std::str::from_utf8(&stdout).expect("stdout is valid utf-8");
+        assert!(
+            stdout_str.contains("ready"),
+            "stdout missing \"ready\": {stdout_str:?}"
+        );
         let stats = handle.stats().expect("stats");
         assert!(stats.rss_bytes.unwrap_or(0) > 0);
 
