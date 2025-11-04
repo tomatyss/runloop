@@ -21,8 +21,8 @@ unused_imports = "deny"
 missing_docs = "allow"
 
 [workspace.lints.clippy]
-pedantic = "allow"
-nursery = "allow"
+pedantic = { level = "allow", priority = -1 }
+nursery = { level = "allow", priority = -1 }
 unwrap_used = "warn"
 expect_used = "warn"
 todo = "warn"

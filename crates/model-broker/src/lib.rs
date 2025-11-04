@@ -23,6 +23,12 @@ impl Broker {
     }
 }
 
+impl Default for Broker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompletionRequest {
     pub prompt: String,

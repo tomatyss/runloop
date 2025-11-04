@@ -10,3 +10,9 @@ impl Opening {
         Self
     }
 }
+
+impl Default for Opening {
+    fn default() -> Self {
+        Self::new()
+    }
+}

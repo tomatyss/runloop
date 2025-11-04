@@ -1,21 +1,26 @@
-use std::io::{self, Cursor, Write};
+use std::io;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, mpsc as std_mpsc};
+use std::task::{Context, Poll};
 use std::thread;
 
-use cap_std::ambient_authority;
-use cap_std::fs::Dir;
+use bytes::Bytes;
 use cfg_if::cfg_if;
 use dashmap::DashMap;
 use futures_util::StreamExt;
 use parking_lot::RwLock;
+use tokio::io::AsyncWrite;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle as TokioJoinHandle;
-use wasi_cap_std_sync::WasiCtxBuilder;
-use wasi_common::pipe::WritePipe;
-use wasmtime::{Engine, Linker, Store, Trap};
+use wasmtime::Error as WasmtimeError;
+use wasmtime::{Engine, Linker, Store};
+use wasmtime_wasi::cli::{IsTerminal, StdoutStream};
+use wasmtime_wasi::p1;
+use wasmtime_wasi::p2::pipe::MemoryInputPipe;
+use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
 
 use crate::audit::AuditSink;
 use crate::caps::Caps;
@@ -26,7 +31,6 @@ use crate::output::OutputRing;
 use crate::secrets::{SecretProvider, SecretStore};
 use crate::spec::{AgentIdentity, AgentSpec};
 use crate::stats::{AgentStats, read_stats};
-use crate::wasi_dir::CapabilityDir;
 
 use runloop_bus::{Bus, Message};
 use runloop_core::ids::AgentId;
@@ -217,7 +221,6 @@ impl Runtime {
     }
 
     /// Spawn a new agent instance. The guest runs on a dedicated OS thread.
-
     pub fn spawn(&self, mut spec: AgentSpec) -> Result<AgentHandle, Error> {
         spec.sanitize();
         let id = AgentId::new();
@@ -226,6 +229,7 @@ impl Runtime {
         }
 
         let wasm_path = spec.wasm_path.clone();
+        let wasm_path_thread = wasm_path.clone();
         let module = self
             .inner
             .modules
@@ -272,9 +276,8 @@ impl Runtime {
 
         let engine = self.inner.engine.clone();
         let policy_caps = spec.caps.clone();
-        let wasm_path = spec.wasm_path.clone();
-        let stdout_writer = RingWriter::new(stdout_ring.clone(), stdout_buffer.clone());
-        let stderr_writer = RingWriter::new(stderr_ring.clone(), stderr_buffer.clone());
+        let stdout_stream = RingStdout::new(stdout_ring.clone(), stdout_buffer.clone());
+        let stderr_stream = RingStdout::new(stderr_ring.clone(), stderr_buffer.clone());
         let process_for_thread = Arc::clone(&process);
         let host_state_for_thread = host_state.clone();
         let mailbox_for_thread = mailbox.clone();
@@ -284,6 +287,7 @@ impl Runtime {
         let join_handle = thread::Builder::new()
             .name(format!("agent-{}", spec.identity.name()))
             .spawn(move || {
+                let wasm_path = wasm_path_thread.clone();
                 let result = (|| -> Result<(), Error> {
                     let _tid_guard = TidGuard::new(&process_for_thread.tid);
                     let tid = current_thread_id();
@@ -291,41 +295,26 @@ impl Runtime {
                         process_for_thread.tid.store(tid, Ordering::SeqCst);
                     }
 
-                    let stdout_pipe = WritePipe::new(stdout_writer);
-                    let stderr_pipe = WritePipe::new(stderr_writer);
-
                     let mut wasi_builder = WasiCtxBuilder::new();
                     if spec.argv.is_empty() {
-                        wasi_builder
-                            .arg(spec.identity.name())
-                            .map_err(|err| Error::Config(format!("invalid argv: {err}")))?;
+                        wasi_builder.arg(spec.identity.name());
                     } else {
                         for arg in &spec.argv {
-                            wasi_builder
-                                .arg(arg)
-                                .map_err(|err| Error::Config(format!("invalid argv: {err}")))?;
+                            wasi_builder.arg(arg);
                         }
                     }
                     if spec.cwd.is_some() && !spec.env.contains_key("PWD") {
                         let pwd = spec.working_dir.as_ref().map(|p| p.as_str()).unwrap_or(".");
-                        wasi_builder
-                            .env("PWD", pwd)
-                            .map_err(|err| Error::Config(format!("invalid env: {err}")))?;
+                        wasi_builder.env("PWD", pwd);
                     }
 
                     for (key, value) in &spec.env {
-                        wasi_builder
-                            .env(key, value)
-                            .map_err(|err| Error::Config(format!("invalid env: {err}")))?;
+                        wasi_builder.env(key, value);
                     }
 
-                    wasi_builder.stdout(Box::new(stdout_pipe.clone()));
-                    wasi_builder.stderr(Box::new(stderr_pipe.clone()));
-                    wasi_builder.stdin(Box::new(wasi_common::pipe::ReadPipe::new(Cursor::new(
-                        Vec::new(),
-                    ))));
-
-                    let mut wasi_ctx = wasi_builder.build();
+                    wasi_builder.stdout(stdout_stream.clone());
+                    wasi_builder.stderr(stderr_stream.clone());
+                    wasi_builder.stdin(MemoryInputPipe::new(Bytes::new()));
 
                     if let Some(cwd) = &spec.cwd {
                         if let Some(cap) = policy_caps
@@ -333,42 +322,46 @@ impl Runtime {
                             .iter()
                             .find(|cap| Path::new(cap.root.as_str()) == cwd)
                         {
-                            if let Ok(dir) = Dir::open_ambient_dir(cwd, ambient_authority()) {
-                                let base_dir: Box<dyn wasi_common::WasiDir> =
-                                    Box::new(wasi_cap_std_sync::dir::Dir::from_cap_std(dir));
-                                let wrapped: Box<dyn wasi_common::WasiDir> = if cap.write {
-                                    Box::new(CapabilityDir::read_write(base_dir))
-                                } else {
-                                    Box::new(CapabilityDir::read_only(base_dir))
-                                };
-                                let guest_path =
-                                    spec.working_dir.as_ref().map(|p| p.as_str()).unwrap_or(".");
-                                let _ = wasi_ctx.push_preopened_dir(wrapped, Path::new(guest_path));
-                            }
+                            let dir_perms = if cap.write {
+                                DirPerms::all()
+                            } else {
+                                DirPerms::READ
+                            };
+                            let file_perms = if cap.write {
+                                FilePerms::all()
+                            } else {
+                                FilePerms::READ
+                            };
+                            let guest_path =
+                                spec.working_dir.as_ref().map(|p| p.as_str()).unwrap_or(".");
+                            wasi_builder
+                                .preopened_dir(cwd, guest_path, dir_perms, file_perms)
+                                .map_err(|err| Error::spawn_failed(cwd.clone(), err.to_string()))?;
                         }
                     }
 
                     for entry in &policy_caps.fs {
                         let host_path = PathBuf::from(entry.root.as_str());
-                        let dir = Dir::open_ambient_dir(&host_path, ambient_authority()).map_err(
-                            |err| Error::spawn_failed(host_path.clone(), err.to_string()),
-                        )?;
-                        let base_dir: Box<dyn wasi_common::WasiDir> =
-                            Box::new(wasi_cap_std_sync::dir::Dir::from_cap_std(dir));
-                        let wrapped: Box<dyn wasi_common::WasiDir> = if entry.write {
-                            Box::new(CapabilityDir::read_write(base_dir))
+                        let dir_perms = if entry.write {
+                            DirPerms::all()
                         } else {
-                            Box::new(CapabilityDir::read_only(base_dir))
+                            DirPerms::READ
                         };
-                        wasi_ctx
-                            .push_preopened_dir(wrapped, Path::new(entry.root.as_str()))
+                        let file_perms = if entry.write {
+                            FilePerms::all()
+                        } else {
+                            FilePerms::READ
+                        };
+                        wasi_builder
+                            .preopened_dir(&host_path, entry.root.as_str(), dir_perms, file_perms)
                             .map_err(|err| {
                                 Error::spawn_failed(host_path.clone(), err.to_string())
                             })?;
                     }
 
+                    let mut wasi_ctx = wasi_builder.build_p1();
                     let mut linker: Linker<StoreData> = Linker::new(&engine);
-                    wasmtime_wasi::add_to_linker(&mut linker, |data| &mut data.wasi)
+                    p1::add_to_linker_sync(&mut linker, |data: &mut StoreData| &mut data.wasi)
                         .map_err(|err| Error::SpawnFailed(err.to_string()))?;
                     hostcalls::add_to_linker(&mut linker)?;
 
@@ -386,7 +379,7 @@ impl Runtime {
 
                     if let Ok(start) = instance.get_typed_func::<(), ()>(&mut store, "_start") {
                         if let Err(err) = start.call(&mut store, ()) {
-                            let mapped = map_trap_error(err, &wasm_path);
+                            let mapped = map_wasmtime_error(err, &wasm_path);
                             let cap_denied = matches!(mapped, Error::CapDenied(_));
                             let message = mapped.to_string();
                             let _ = startup_tx.send(StartupSignal::Failed {
@@ -410,9 +403,9 @@ impl Runtime {
             })
             .map_err(|err| Error::spawn_failed(wasm_path.clone(), err.to_string()))?;
 
-        let startup_status = startup_rx
-            .recv()
-            .map_err(|_| Error::spawn_failed(wasm_path.clone(), "startup channel closed".into()))?;
+        let startup_status = startup_rx.recv().map_err(|_| {
+            Error::spawn_failed(wasm_path.clone(), String::from("startup channel closed"))
+        })?;
         let mut failure = match startup_status {
             StartupSignal::Ready => match startup_rx.try_recv() {
                 Ok(StartupSignal::Failed {
@@ -585,32 +578,60 @@ impl AgentHandle {
     }
 }
 
-/// Writer used to feed stdout/stderr rings while retaining the full buffer.
+/// Output stream adapter that mirrors guest writes into the ring buffer and backing store.
 #[derive(Clone)]
-struct RingWriter {
+struct RingStdout {
     ring: OutputRing,
     buffer: Arc<RwLock<Vec<u8>>>,
 }
 
-impl RingWriter {
+impl RingStdout {
     fn new(ring: OutputRing, buffer: Arc<RwLock<Vec<u8>>>) -> Self {
         Self { ring, buffer }
     }
 }
 
-impl Write for RingWriter {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.ring.push(buf);
-        self.buffer.write().extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
+impl IsTerminal for RingStdout {
+    fn is_terminal(&self) -> bool {
+        false
     }
 }
 
-fn map_trap_error(err: Trap, wasm_path: &Path) -> Error {
+impl StdoutStream for RingStdout {
+    fn async_stream(&self) -> Box<dyn AsyncWrite + Send + Sync> {
+        Box::new(RingAsyncWrite {
+            ring: self.ring.clone(),
+            buffer: self.buffer.clone(),
+        })
+    }
+}
+
+struct RingAsyncWrite {
+    ring: OutputRing,
+    buffer: Arc<RwLock<Vec<u8>>>,
+}
+
+impl AsyncWrite for RingAsyncWrite {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        self.ring.push(buf);
+        self.buffer.write().extend_from_slice(buf);
+        Poll::Ready(Ok(buf.len()))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+fn map_wasmtime_error(err: WasmtimeError, wasm_path: &Path) -> Error {
     let message = err.to_string();
     if message.contains("capability denied") {
         Error::CapDenied(message)

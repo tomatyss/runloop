@@ -690,15 +690,11 @@ fn parse_alias(key: &str, value: &str) -> Option<(Vec<String>, Value)> {
 }
 
 fn expand_path(path: &str) -> String {
-    if path.starts_with("~/") {
-        if let Some(home) = home_dir() {
-            return home.join(&path[2..]).display().to_string();
-        }
+    if let Some((home, stripped)) = home_dir().zip(path.strip_prefix("~/")) {
+        return home.join(stripped).display().to_string();
     }
-    if let Some(stripped) = path.strip_prefix("env:") {
-        if let Ok(val) = env::var(stripped) {
-            return val;
-        }
+    if let Some(value) = path.strip_prefix("env:").and_then(|key| env::var(key).ok()) {
+        return value;
     }
     shellexpand::full(path)
         .map(|cow| cow.to_string())
