@@ -378,20 +378,13 @@ impl Runtime {
                         .instantiate(&mut store, &module_for_thread)
                         .map_err(|err| Error::spawn_failed(wasm_path.clone(), err.to_string()))?;
 
-                    let _ = startup_tx.send(StartupSignal::Ready);
-
                     if let Ok(start) = instance.get_typed_func::<(), ()>(&mut store, "_start")
                         && let Err(err) = start.call(&mut store, ())
                     {
                         let mapped = map_wasmtime_error(err, &wasm_path);
-                        let cap_denied = matches!(mapped, Error::CapDenied(_));
-                        let message = mapped.to_string();
-                        let _ = startup_tx.send(StartupSignal::Failed {
-                            cap_denied,
-                            message,
-                        });
                         return Err(mapped);
                     }
+                    let _ = startup_tx.send(StartupSignal::Ready);
 
                     Ok(())
                 })();
@@ -406,32 +399,24 @@ impl Runtime {
             })
             .map_err(|err| Error::spawn_failed(wasm_path.clone(), err.to_string()))?;
 
-        let startup_status = startup_rx.recv().map_err(|_| {
+        match startup_rx.recv().map_err(|_| {
             Error::spawn_failed(wasm_path.clone(), String::from("startup channel closed"))
-        })?;
-        let mut failure = match startup_status {
-            StartupSignal::Ready => match startup_rx.try_recv() {
-                Ok(StartupSignal::Failed {
-                    cap_denied,
-                    message,
-                }) => Some((cap_denied, message)),
-                _ => None,
-            },
+        })? {
+            StartupSignal::Ready => {}
             StartupSignal::Failed {
                 cap_denied,
                 message,
-            } => Some((cap_denied, message)),
-        };
-        if let Some((cap_denied, message)) = failure.take() {
-            let err = if cap_denied {
-                Error::CapDenied(message)
-            } else {
-                Error::spawn_failed(wasm_path.clone(), message)
-            };
-            match join_handle.join() {
-                Ok(Ok(())) => return Err(err),
-                Ok(Err(thread_err)) => return Err(thread_err),
-                Err(_) => return Err(Error::AgentJoinFailed("thread panicked".into())),
+            } => {
+                let err = if cap_denied {
+                    Error::CapDenied(message)
+                } else {
+                    Error::spawn_failed(wasm_path.clone(), message)
+                };
+                match join_handle.join() {
+                    Ok(Ok(())) => return Err(err),
+                    Ok(Err(thread_err)) => return Err(thread_err),
+                    Err(_) => return Err(Error::AgentJoinFailed("thread panicked".into())),
+                }
             }
         }
 
@@ -635,12 +620,15 @@ impl AsyncWrite for RingAsyncWrite {
 }
 
 fn map_wasmtime_error(err: WasmtimeError, wasm_path: &Path) -> Error {
-    let message = err.to_string();
-    if message.contains("capability denied") {
-        Error::CapDenied(message)
-    } else {
-        Error::spawn_failed(wasm_path.to_path_buf(), message)
+    let display = err.to_string();
+    if display.contains("capability denied") {
+        return Error::CapDenied(display);
     }
+    let debug = format!("{err:?}");
+    if debug.contains("capability denied") {
+        return Error::CapDenied(debug);
+    }
+    Error::spawn_failed(wasm_path.to_path_buf(), display)
 }
 
 fn current_thread_id() -> u32 {
