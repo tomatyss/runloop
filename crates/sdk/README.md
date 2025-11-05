@@ -1,6 +1,7 @@
 # Agent SDK (Rust)
 
 ## Lifecycle
+
 - `init(&mut self, ctx: Ctx)` -> setup, capability inspection.
 - `handle(&mut self, msg: Message, ctx: Ctx)` -> Option<Message>.
 - `shutdown(&mut self)` -> optional cleanup.
