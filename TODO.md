@@ -109,17 +109,17 @@
 
 **D1. Shell fast‑path**
 
-* [ ] Path: `crates/rlp/` (CLI) + `crates/router/` (logic).
-* [ ] Implement simple classifier: if input parses as POSIX pipeline/redirection (`|`, `>`, `<`, `;`, `&&`, `||`) or `^[a-zA-Z0-9_\-./]+(\s+.+)?$` **and** known shell builtins/commands present → `Shell`.
-* [ ] Else route to configured opening (`compose_email` by default).
+* [x] Path: `crates/rlp/` (CLI) + `crates/router/` (logic).
+* [x] Implement simple classifier: if input parses as POSIX pipeline/redirection (`|`, `>`, `<`, `;`, `&&`, `||`) or `^[a-zA-Z0-9_\-./]+(\s+.+)?$` **and** known shell builtins/commands present → `Shell`.
+* [x] Else route to configured opening (`compose_email` by default).
 
-**DoD:** Corpus of 100 prompts (50 shell, 50 agentable) → ≥ **98%** correct.
+**DoD:** Corpus of 100 prompts (50 shell, 50 agentable) → ≥ **98%** correct. (See `crates/router/tests/corpus/router_prompts.csv` + `classifier_corpus` test.)
 
 **D2. Explainability**
 
-* [ ] `rlp why "<prompt>"` prints features used and matched rule.
+* [x] `rlp why "<prompt>"` prints features used and matched rule.
 
-**DoD:** Unit test shows stable string with rule id.
+**DoD:** Unit test shows stable string with rule id. (`crates/router/src/classifier.rs` tests + CLI integration.)
 
 ---
 

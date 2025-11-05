@@ -1,13 +1,15 @@
 [package]
-name = "rlp"
+name = "runloop-router"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "runloop_router"
+
 [dependencies]
+once_cell = "1.19"
+regex = "1.10"
 runloop-core = { path = "../core" }
-runloop-router = { path = "../router" }
-clap = { version = "4.5", features = ["derive"] }
-tokio = { version = "1.38", features = ["rt-multi-thread", "macros"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"
