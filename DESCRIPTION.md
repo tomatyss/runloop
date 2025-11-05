@@ -139,8 +139,9 @@ security:
     encryption: none
 
 router:
-  allow_shell_fastpath: true
+  fastpath_shell: true
   default_opening: general
+  known_commands: []
 
 ui:
   theme: mono

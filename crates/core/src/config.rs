@@ -67,7 +67,8 @@ impl Config {
 
         for path in paths {
             match load_yaml_value(&path) {
-                Ok(Some(value)) => {
+                Ok(Some(mut value)) => {
+                    normalize_router_aliases(&mut value);
                     warn_unknown_keys(&value, Path::new(""));
                     merge_value(&mut base, value);
                 }
@@ -79,6 +80,8 @@ impl Config {
         if let Some(obj) = base.as_object_mut() {
             apply_env_overrides(obj, env_pairs);
         }
+
+        normalize_router_aliases(&mut base);
 
         let mut config: Config = serde_json::from_value(base)
             .map_err(|err| Error::Config(format!("config deserialization failed: {err}")))?;
@@ -407,22 +410,25 @@ pub struct TestingConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RouterConfig {
     #[serde(default = "default_true")]
-    pub shell_fastpath: bool,
+    pub fastpath_shell: bool,
     #[serde(default = "default_router_opening")]
     pub default_opening: String,
+    #[serde(default)]
+    pub allowlist: Vec<String>,
     #[serde(default = "default_router_denylist")]
     pub denylist: Vec<String>,
     #[serde(default)]
-    pub allowlist: Vec<String>,
+    pub known_commands: Vec<String>,
 }
 
 impl Default for RouterConfig {
     fn default() -> Self {
         Self {
-            shell_fastpath: true,
+            fastpath_shell: true,
             default_opening: default_router_opening(),
-            denylist: default_router_denylist(),
             allowlist: Vec::new(),
+            denylist: default_router_denylist(),
+            known_commands: Vec::new(),
         }
     }
 }
@@ -604,16 +610,74 @@ fn merge_value(base: &mut Value, patch: Value) {
     }
 }
 
+fn normalize_router_aliases(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::Object(router_map)) = map.get_mut("router") {
+                if router_map.contains_key("allow_shell_fastpath") {
+                    warn!(
+                        "configuration key 'router.allow_shell_fastpath' is deprecated; use 'router.fastpath_shell'"
+                    );
+                    if !router_map.contains_key("fastpath_shell") {
+                        if let Some(alias_value) = router_map.remove("allow_shell_fastpath") {
+                            router_map.insert("fastpath_shell".into(), alias_value);
+                        }
+                    } else {
+                        router_map.remove("allow_shell_fastpath");
+                    }
+                }
+                if router_map.contains_key("shell_fastpath") {
+                    warn!(
+                        "configuration key 'router.shell_fastpath' is deprecated; use 'router.fastpath_shell'"
+                    );
+                    if !router_map.contains_key("fastpath_shell") {
+                        if let Some(alias_value) = router_map.remove("shell_fastpath") {
+                            router_map.insert("fastpath_shell".into(), alias_value);
+                        }
+                    } else {
+                        router_map.remove("shell_fastpath");
+                    }
+                }
+            }
+            for value in map.values_mut() {
+                normalize_router_aliases(value);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                normalize_router_aliases(item);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn apply_env_overrides(
     root: &mut serde_json::Map<String, Value>,
     env_pairs: impl IntoIterator<Item = (String, String)>,
 ) {
     for (key, value) in env_pairs {
         if let Some(stripped) = key.strip_prefix("RUNLOOP__") {
-            let path = stripped
+            let mut path = stripped
                 .split("__")
                 .map(|segment| segment.to_ascii_lowercase())
                 .collect::<Vec<_>>();
+            if path.as_slice() == ["router", "shell_fastpath"] {
+                warn!(
+                    "environment key 'RUNLOOP__ROUTER__SHELL_FASTPATH' is deprecated; use 'RUNLOOP__ROUTER__FASTPATH_SHELL'"
+                );
+                if let Some(key) = path.get_mut(1) {
+                    *key = "fastpath_shell".into();
+                }
+            }
+            if path.as_slice() == ["router", "allow_shell_fastpath"] {
+                warn!(
+                    "environment key 'RUNLOOP__ROUTER__ALLOW_SHELL_FASTPATH' is deprecated; use 'RUNLOOP__ROUTER__FASTPATH_SHELL'"
+                );
+                if let Some(key) = path.get_mut(1) {
+                    *key = "fastpath_shell".into();
+                }
+            }
             set_path(root, &path, parse_env_value(&value));
         } else if let Some((path, parsed)) = parse_alias(&key, &value) {
             set_path(root, &path, parsed);
@@ -661,7 +725,7 @@ fn set_path(root: &mut serde_json::Map<String, Value>, path: &[String], value: V
 }
 
 fn parse_alias(key: &str, value: &str) -> Option<(Vec<String>, Value)> {
-    let aliases: [(&str, &[&str]); 6] = [
+    let aliases: [(&str, &[&str]); 8] = [
         ("RUNLOOP_LOG_LEVEL", &["logging", "level"]),
         (
             "RUNLOOP_RUNTIME_AGENT_CONTAINER",
@@ -670,6 +734,14 @@ fn parse_alias(key: &str, value: &str) -> Option<(Vec<String>, Value)> {
         (
             "RUNLOOP_ROUTER_DEFAULT_OPENING",
             &["router", "default_opening"],
+        ),
+        (
+            "RUNLOOP_ROUTER_SHELL_FASTPATH",
+            &["router", "fastpath_shell"],
+        ),
+        (
+            "RUNLOOP_ROUTER_ALLOW_SHELL_FASTPATH",
+            &["router", "fastpath_shell"],
         ),
         ("RUNLOOP_MODELS_DEFAULT", &["models", "default"]),
         ("RUNLOOP_KB_ROOT_DIR", &["kb", "root_dir"]),
@@ -774,7 +846,13 @@ fn known_keys_for_path(path: &Path) -> BTreeSet<&'static str> {
             "default_ttl",
         ]),
         "security/testing" => BTreeSet::from(["broker_mode", "broker_seed"]),
-        "router" => BTreeSet::from(["shell_fastpath", "default_opening", "denylist", "allowlist"]),
+        "router" => BTreeSet::from([
+            "fastpath_shell",
+            "default_opening",
+            "allowlist",
+            "denylist",
+            "known_commands",
+        ]),
         "ui" => BTreeSet::from(["theme", "confirm_prompts"]),
         "logging" => BTreeSet::from(["level", "file", "format"]),
         "openings" | "agents" => BTreeSet::from(["search_dirs"]),

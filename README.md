@@ -95,6 +95,9 @@ security:
 router:
   fastpath_shell: true
   default_opening: "compose_email"
+  allowlist: []
+  denylist: []
+  known_commands: []
 
 ui:
   theme: "mono"
@@ -165,6 +168,7 @@ Local‑first storage with:
 ## CLI & TUI
 
 * **`rlp`** – prompt entry (routes to shell fast‑path or to an Opening), budget flags, dry‑run.
+  * Explain routing decisions with `cargo run -p rlp -- why "ls -la"` (plain text) or append `--json` for machine-readable output.
 * **`agtop`** – per‑agent CPU/RSS/token metrics, error rate.
 * **Tracing** – `runloop trace <id>` prints a ladder diagram of crossings. 
 
