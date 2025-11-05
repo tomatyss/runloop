@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 runloop-core = { path = "../core" }
+runloop-kb = { path = "../kb" }
 tokio = { version = "1.38", features = ["rt-multi-thread", "macros", "signal", "time", "net"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }

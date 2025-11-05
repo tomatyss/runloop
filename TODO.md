@@ -127,38 +127,38 @@
 
 **E1. Event log schema**
 
-* [ ] Path: `crates/kb/`.
-* [ ] SQLite file `events.sqlite` (+ WAL): table `events(id, ts_ms, actor, kind, payload_json, provenance_json, scope, hash_blake3 BLOB(32))`.
-* [ ] Payloads stored as **JCS canonical JSON TEXT**; compute `hash_blake3` over `{kind,actor,scope,payload,provenance}` and enforce uniqueness.
-* [ ] Migration scaffold: version table, `migrate_up()`.
+* [x] Path: `crates/kb/`.
+* [x] SQLite file `events.sqlite` (+ WAL): table `events(id, ts_ms, actor, kind, payload_json, provenance_json, scope, hash_blake3 BLOB(32))`.
+* [x] Payloads stored as **JCS canonical JSON TEXT**; compute `hash_blake3` over `{kind,actor,scope,payload,provenance}` and enforce uniqueness.
+* [x] Migration scaffold: version table, `migrate_up()`.
 
-**DoD:** Insert/read event; duplicate hash rejected; migrations apply idempotently.
+**DoD:** Insert/read event; duplicate hash rejected; migrations apply idempotently. ✅
 
 **E2. Materialized views**
 
-* [ ] Separate `pog.sqlite`: tables `contacts`, `accounts`, `artifacts`, `runs`.
-* [ ] Materializer service reads new events and updates views (+ indexes).
-* [ ] `kb.why(<entity_id>)` returns ordered source events.
+* [x] Separate `pog.sqlite`: tables `contacts`, `accounts`, `artifacts`, `runs`.
+* [x] Materializer service reads new events and updates views (+ indexes).
+* [x] `kb.why(<entity_id>)` returns ordered source events.
 
-**DoD:** `contact.upserted` creates/updates a row; `why` returns the upserting event id.
+**DoD:** `contact.upserted` creates/updates a row; `why` returns the upserting event id. ✅
 
 **E3. API layer**
 
-* [ ] `propose(StateDelta) -> EventId` (validator checks schema & caps).
-* [ ] `query(sql) -> rows` (read‑only).
-* [ ] `search(keyword) -> rows` (FTS optional; if absent, LIKE fallback).
-* [ ] Validation rules: referential integrity (evidence events exist), scope rules, provenance fill.
+* [x] `propose(StateDelta) -> EventId` (validator checks schema & caps).
+* [x] `query(sql) -> rows` (read‑only).
+* [x] `search(keyword) -> rows` (FTS optional; if absent, LIKE fallback).
+* [x] Validation rules: referential integrity (evidence events exist), scope rules, provenance fill.
 
-**DoD:** Invalid deltas rejected with reason; tests for each rule.
+**DoD:** Invalid deltas rejected with reason; tests for each rule. ✅
 
 **E4. Seed schemas**
 
-* [ ] `contact.upserted {name,email,org,trust,evidence[]}`
-* [ ] `artifact.created {kind,path,sha256,summary}`
-* [ ] `email.sent {to[],cc[],subject,artifact_id}`
-* [ ] `run.started/finished {opening_id,status}`
+* [x] `contact.upserted {name,email,org,trust,evidence[]}`
+* [x] `artifact.created {kind,path,sha256,summary}`
+* [x] `email.sent {to[],cc[],subject,artifact_id}`
+* [x] `run.started/finished {opening_id,status}`
 
-**DoD:** JSON schemas exist in `docs/kb-schemas.md` and are enforced.
+**DoD:** JSON schemas exist in `docs/kb-schemas.md` and are enforced. ✅
 
 ---
 
