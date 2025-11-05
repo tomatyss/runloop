@@ -1,14 +1,14 @@
 # Openings DSL
 
-> **Status:** v0 (draft). Defines the declarative language for composing agents into runnable DAGs (“Openings”) with replay and budgets. Normative behaviors (execution, bus, TTL, audit) align with the Protocol, Runtime, and Roadmap docs.     
+> **Status:** v0 (draft). Defines the declarative language for composing agents into runnable DAGs (“Openings”) with replay and budgets. Normative behaviors (execution, bus, TTL, audit) align with the Protocol, Runtime, and Roadmap docs.
 
 ---
 
 ## 1) What is an Opening?
 
-An **Opening** is a typed, declarative **DAG** of agents (“nodes”) and their connections (“edges”). It is the plan the runtime executes: fan‑out/fan‑in, retries, timeouts, budgets, and deterministic **replay** are first‑class. The bus carries schema‑tagged messages (RMP), and every crossing is traced and auditable.   
+An **Opening** is a typed, declarative **DAG** of agents (“nodes”) and their connections (“edges”). It is the plan the runtime executes: fan‑out/fan‑in, retries, timeouts, budgets, and deterministic **replay** are first‑class. The bus carries schema‑tagged messages (RMP), and every crossing is traced and auditable.
 
-**MVP reference opening (compose_email):** `contact_resolver → context_gatherer → writer → critic → mailer (human‑confirm)`; used throughout examples. 
+**MVP reference opening (compose_email):** `contact_resolver → context_gatherer → writer → critic → mailer (human‑confirm)`; used throughout examples.
 
 ---
 
@@ -18,19 +18,19 @@ An **Opening** is a typed, declarative **DAG** of agents (“nodes”) and their
 
 * Human‑readable spec for orchestrating agents.
 * Deterministic **IR** (intermediate representation) suitable for validation, execution, and replay.
-* Minimal templating; no Turing‑complete logic. 
+* Minimal templating; no Turing‑complete logic.
 
 **Non‑goals (v0)**
 
 * Distributed execution (single machine only).
-* Rich conditionals/loops; stick to edge predicates and retries. 
+* Rich conditionals/loops; stick to edge predicates and retries.
 
 ---
 
 ## 3) Two surfaces: YAML (canonical) and a “text sugar”
 
-* **Canonical:** **YAML → IR** parser in `crates/openings/`. All validation and runtime semantics reference the YAML form. 
-* **Sugar:** an optional brace‑style snippet mirrors README examples and compiles to the same IR; it is syntactic sugar only (non‑normative). 
+* **Canonical:** **YAML → IR** parser in `crates/openings/`. All validation and runtime semantics reference the YAML form.
+* **Sugar:** an optional brace‑style snippet mirrors README examples and compiles to the same IR; it is syntactic sugar only (non‑normative).
 
 > **Consistency note.** README shows a brace DSL, while the implementation plan standardizes on **YAML → IR**. This spec makes YAML normative and documents the brace form as optional sugar to keep examples approachable.  
 
@@ -96,7 +96,7 @@ artifacts:
     - draft.out
 ```
 
-* **Templating:** only `{{params.*}}` substitution; no loops/expressions in templates. Use simple edge predicates for control. 
+* **Templating:** only `{{params.*}}` substitution; no loops/expressions in templates. Use simple edge predicates for control.
 
 ### 4.2 Equivalent “text sugar” (non‑normative)
 
@@ -117,7 +117,7 @@ opening "compose_email" {
 }
 ```
 
-This compiles to the same IR as the YAML. 
+This compiles to the same IR as the YAML.
 
 ---
 
@@ -152,7 +152,7 @@ This compiles to the same IR as the YAML.
 ```
 
 * `use` selects either an agent bundle (WASM under runtime) or a nested opening (composition).  
-* `with` is passed as the **payload** of the node’s initial **Intent** message; the node decides how to interpret it. 
+* `with` is passed as the **payload** of the node’s initial **Intent** message; the node decides how to interpret it.
 
 ### 5.3 Ports & edges
 
@@ -161,8 +161,8 @@ This compiles to the same IR as the YAML.
   to:   "<node>.<port>"
 ```
 
-* Every node exposes named **output ports** and **input ports**. The SDK recommends defaults (`in`, `out`, `ok`, `err`) but agents may define richer port schemas. Fan‑out is N edges from one output; fan‑in blocks until all upstreams are satisfied. 
-* Predicates are simple comparisons on boolean or enum outputs (e.g., `review.ok==true`). Complex control belongs in the agent, not the DSL. 
+* Every node exposes named **output ports** and **input ports**. The SDK recommends defaults (`in`, `out`, `ok`, `err`) but agents may define richer port schemas. Fan‑out is N edges from one output; fan‑in blocks until all upstreams are satisfied.
+* Predicates are simple comparisons on boolean or enum outputs (e.g., `review.ok==true`). Complex control belongs in the agent, not the DSL.
 
 ### 5.4 Success expressions
 
@@ -177,19 +177,19 @@ On timeout/failure with no satisfied success condition, the opening fails.
 
 ### 5.5 Parameters & templating
 
-* Only string replacement of `{{params.*}}` in `with` maps. No arithmetic, no conditionals. This avoids making the DSL a programming language. 
+* Only string replacement of `{{params.*}}` in `with` maps. No arithmetic, no conditionals. This avoids making the DSL a programming language.
 
 ---
 
 ## 6) Execution semantics
 
-1. **Parse & validate** YAML → **IR**, producing helpful errors with line/column. 
-2. **Topological scheduling.** Nodes run when all inbound dependencies are ready. Fan‑in edges cause waits; fan‑out clones messages/artifacts. 
-3. **Runtime & bus.** Node work is enacted by sending/receiving **RMP** messages over the local UDS bus. Header carries `trace_id`, `opening_id`, `ttl_ms`, `msg_id`, `schema_id`; body is a MsgPack envelope `{ type, payload }`. 
-4. **TTL & duplicates.** Receivers enforce TTL using `created_at_ms + ttl_ms`; duplicates are ignored using an LRU dedupe cache keyed by `(trace_id,msg_id)`. Drops increment counters and may be broadcast on `rlp/sys/drops`. 
+1. **Parse & validate** YAML → **IR**, producing helpful errors with line/column.
+2. **Topological scheduling.** Nodes run when all inbound dependencies are ready. Fan‑in edges cause waits; fan‑out clones messages/artifacts.
+3. **Runtime & bus.** Node work is enacted by sending/receiving **RMP** messages over the local UDS bus. Header carries `trace_id`, `opening_id`, `ttl_ms`, `msg_id`, `schema_id`; body is a MsgPack envelope `{ type, payload }`.
+4. **TTL & duplicates.** Receivers enforce TTL using `created_at_ms + ttl_ms`; duplicates are ignored using an LRU dedupe cache keyed by `(trace_id,msg_id)`. Drops increment counters and may be broadcast on `rlp/sys/drops`.
 5. **Retries & timeouts.** Per‑node `retry` and `timeout_ms` govern backoff and cancellation. Opening‑level `policy.timeout_ms` cancels remaining nodes.  
-6. **Replay.** The engine records input/output message IDs per node; `rlp replay <trace_id>` re‑feeds inputs to reproduce identical outputs (given deterministic providers). Diff tooling highlights mismatches. 
-7. **Audit & KB events.** Open/close of a run emits `run.started`/`run.finished`; agent actions may emit `cap.audit` on denied ops per policy. 
+6. **Replay.** The engine records input/output message IDs per node; `rlp replay <trace_id>` re‑feeds inputs to reproduce identical outputs (given deterministic providers). Diff tooling highlights mismatches.
+7. **Audit & KB events.** Open/close of a run emits `run.started`/`run.finished`; agent actions may emit `cap.audit` on denied ops per policy.
 
 ---
 
@@ -197,23 +197,23 @@ On timeout/failure with no satisfied success condition, the opening fails.
 
 RMP **schema_id** is a `u16` referencing a small registry of content types (e.g., `CT_OBSERVATION=1`, `CT_INTENT=2`, `CT_ARTIFACT=5`, `CT_STATE_DELTA=7`). Message bodies are MsgPack with JSON‑Schema definitions for validation and evolution.  
 
-> **Envelope.** The `{ type, payload }` MsgPack map is the default body shape; higher‑level helpers exist in `crates/rmp/` to encode/decode and stamp TTL. 
+> **Envelope.** The `{ type, payload }` MsgPack map is the default body shape; higher‑level helpers exist in `crates/rmp/` to encode/decode and stamp TTL.
 
 ---
 
 ## 8) Safety, capabilities, and confirmation
 
-* Agents run as **WASM/WASI** sandboxes under the Runtime with least‑privilege **capabilities**. File system, network, time, KB, model, secrets, and exec are checked by hostcalls; **deny‑by‑default**.   
-* **External actions** (send/delete/spend) must be **human‑confirmed** unless policy explicitly allows. The mailer example keeps “dry‑run + confirm” for MVP. 
+* Agents run as **WASM/WASI** sandboxes under the Runtime with least‑privilege **capabilities**. File system, network, time, KB, model, secrets, and exec are checked by hostcalls; **deny‑by‑default**.
+* **External actions** (send/delete/spend) must be **human‑confirmed** unless policy explicitly allows. The mailer example keeps “dry‑run + confirm” for MVP.
 * **TTL defaults.** To avoid “immortal” frames, DSL v0 **requires** explicit `ttl_ms` in RMP headers at encode time; the engine rejects zero TTL during publication. (Runtime’s bus enforces TTL regardless.)  
 
 ---
 
 ## 9) Observability & metrics
 
-* **Tracing.** Each crossing creates a span with `trace_id` propagation; `runloop trace <id>` renders a ladder diagram. 
-* **Metrics.** Counters for sent/received/dropped, cap_denied, broker_calls, cache_hits; gauges for agents_running, rss_total, bus_queue_depth; surfaced in `agtop`. 
-* **Drops.** Receivers may publish structured drop notifications to `rlp/sys/drops`; failure totals are also readable via metrics. 
+* **Tracing.** Each crossing creates a span with `trace_id` propagation; `runloop trace <id>` renders a ladder diagram.
+* **Metrics.** Counters for sent/received/dropped, cap_denied, broker_calls, cache_hits; gauges for agents_running, rss_total, bus_queue_depth; surfaced in `agtop`.
+* **Drops.** Receivers may publish structured drop notifications to `rlp/sys/drops`; failure totals are also readable via metrics.
 
 ---
 
@@ -223,18 +223,18 @@ RMP **schema_id** is a `u16` referencing a small registry of content types (e.g.
 * Explain routing: `rlp why "<prompt>"`
 * Replay: `rlp replay <trace_id>`
 * KB: `rlp kb query ...`, `rlp kb why <id>`
-  All commands produce structured output with sensible exit codes. 
+  All commands produce structured output with sensible exit codes.
 
 ---
 
 ## 11) Validation rules (normative)
 
 1. **Graph soundness:** nodes are unique; edges reference existing ports; no cycles.
-2. **Port compatibility:** serialized payload types must match the consumer input schema_id (static lint + runtime check). 
-3. **Budgets:** non‑negative; per‑node budget must not exceed opening budget (lint). 
-4. **Timeouts:** if absent at node level, the runner inherits opening timeout; long‑running agents must explicitly opt into higher timeouts. 
-5. **Templating:** only `{{params.*}}` is allowed; unresolved placeholders are errors. 
-6. **Security:** if `confirm_external=true`, any node with `with.require_human_confirm=false` is rejected (cannot downgrade global policy). 
+2. **Port compatibility:** serialized payload types must match the consumer input schema_id (static lint + runtime check).
+3. **Budgets:** non‑negative; per‑node budget must not exceed opening budget (lint).
+4. **Timeouts:** if absent at node level, the runner inherits opening timeout; long‑running agents must explicitly opt into higher timeouts.
+5. **Templating:** only `{{params.*}}` is allowed; unresolved placeholders are errors.
+6. **Security:** if `confirm_external=true`, any node with `with.require_human_confirm=false` is rejected (cannot downgrade global policy).
 
 ---
 
@@ -242,7 +242,7 @@ RMP **schema_id** is a `u16` referencing a small registry of content types (e.g.
 
 ### 12.1 Compose email (canonical)
 
-`examples/openings/compose_email.yaml` (identical to §4.1) is the reference artifact used by MVP acceptance. 
+`examples/openings/compose_email.yaml` (identical to §4.1) is the reference artifact used by MVP acceptance.
 
 ### 12.2 Summarize logs (fan‑out/fan‑in)
 
@@ -269,14 +269,14 @@ success:
 
 ## 13) File locations & packaging
 
-* **Openings** live under `examples/openings/` in‑repo; installed bundles may ship curated openings with their agents. 
+* **Openings** live under `examples/openings/` in‑repo; installed bundles may ship curated openings with their agents.
 * OS packages place state under `/var/lib/runloop` (system mode) and UDS under `/run/runloop/runloopd.sock`; user mode uses `~/.runloop`.  
 
 ---
 
 ## 14) Alignment with Protocol, Runtime, KB
 
-* **Protocol (RMP).** Fixed‑size header (incl. `created_at_ms`, `ttl_ms`, IDs) + MsgPack envelope; TTL and duplicate rules apply to all frames emitted by openings. 
+* **Protocol (RMP).** Fixed‑size header (incl. `created_at_ms`, `ttl_ms`, IDs) + MsgPack envelope; TTL and duplicate rules apply to all frames emitted by openings.
 * **Runtime.** Agents are wasm32‑wasi; capability gates around FS/NET/TIME/KB/MODEL/SECRETS/EXEC; audit events for denied ops.  
 * **KB (POG).** Runs emit `run.started/finished`; artifacts saved via `artifacts.save` are materialized and traceable via `kb.why`.  
 
@@ -316,17 +316,17 @@ Ident          := /[a-z][a-z0-9_]{0,63}/
 ## 16) Known mismatches & decisions
 
 * **YAML vs brace DSL:** YAML is **normative**; brace DSL is sugar compiled to IR. (README examples remain valid as sugar.)  
-* **RMP header fields:** This doc assumes the header includes `created_at_ms`, `ttl_ms`, fixed header version/length, and IDs per Protocol/TODO. If the codec stub diverges, **Protocol drives**; update the runner accordingly. 
-* **TTL `0` semantics:** The DSL validator **rejects** 0 to avoid immortal frames. Bus/runtime still enforce TTL per Protocol. If a “no‑expire” policy is required later, we will add an explicit `ttl_ms: never` sentinel with clear safeguards. 
-* **Drop notifications:** Receivers may auto‑publish to `rlp/sys/drops`, but counters are always available; the daemon controls emission volume. 
+* **RMP header fields:** This doc assumes the header includes `created_at_ms`, `ttl_ms`, fixed header version/length, and IDs per Protocol/TODO. If the codec stub diverges, **Protocol drives**; update the runner accordingly.
+* **TTL `0` semantics:** The DSL validator **rejects** 0 to avoid immortal frames. Bus/runtime still enforce TTL per Protocol. If a “no‑expire” policy is required later, we will add an explicit `ttl_ms: never` sentinel with clear safeguards.
+* **Drop notifications:** Receivers may auto‑publish to `rlp/sys/drops`, but counters are always available; the daemon controls emission volume.
 
 ---
 
 ## 17) Tooling
 
-* **CLI:** `rlp run`, `rlp why`, `rlp replay`, `rlp kb`.* 
-* **TUI:** `agtop` shows Plan, Log, agtop metrics, Trace ladder. 
-* **Repo hygiene:** place openings in `examples/openings/`, keep examples compiling in tests, and document agent caps alongside updated openings. 
+* **CLI:** `rlp run`, `rlp why`, `rlp replay`, `rlp kb`.*
+* **TUI:** `agtop` shows Plan, Log, agtop metrics, Trace ladder.
+* **Repo hygiene:** place openings in `examples/openings/`, keep examples compiling in tests, and document agent caps alongside updated openings.
 
 ---
 
@@ -344,9 +344,8 @@ Core IDs (`TraceId`, `OpeningId`, `MsgId`) and the **content type** registry (`C
 
 **References**
 
-* README (concepts, sample opening), Roadmap (acceptance criteria), TODO (epics for RMP/Bus/Openings), Protocol/Runtime design notes (RMP headers, capability enforcement), KB design (events, artifacts, `kb.why`).         
+* README (concepts, sample opening), Roadmap (acceptance criteria), TODO (epics for RMP/Bus/Openings), Protocol/Runtime design notes (RMP headers, capability enforcement), KB design (events, artifacts, `kb.why`).
 
 ---
 
-*See also: `docs/message-protocol.md` and `docs/kb-schemas.md` for schema IDs and KB event kinds referenced here. *
-
+*See also: `docs/message-protocol.md` and `docs/kb-schemas.md` for schema IDs and KB event kinds referenced here.*

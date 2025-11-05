@@ -1,6 +1,7 @@
 # Model Broker (crates/model-broker)
 
 ## Goals
+
 - Provide a single API for completions, embeddings, and tokenization.
 - Enforce budgets & policy (tokens, cost, wall-time).
 - Cache results and meter usage.
