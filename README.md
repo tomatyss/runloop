@@ -10,6 +10,7 @@ See [ROADMAP.md](./ROADMAP.md) for the phased plan and [docs/perf.md](./docs/per
 ## What this repo is / is not
 
 **Is:** a terminal‑first layer that:
+
 - routes your prompt to the shell _or_ to agents,
 - runs many small agents (WASM/WASI sandboxes) with least‑privilege capabilities,
 - composes agents into **Openings** (typed DAGs) you can run, pause, replay,
@@ -22,6 +23,7 @@ See [ROADMAP.md](./ROADMAP.md) for the phased plan and [docs/perf.md](./docs/per
 ## Quick start
 
 ### From source (dev / user mode)
+
 Requirements: Rust (edition 2024), `cargo`, and a recent WASI runtime (e.g., Wasmtime).
 
 ```bash
@@ -45,7 +47,7 @@ cargo run -p agtop
 
 ### Packages & images (daemon / system mode)
 
-When installed from a .deb or image, the service runs as **`runloop:runloop`** and writes state under **`/var/lib/runloop`**; its UDS socket lives under `/run/runloop`. User mode continues to use `~/.runloop` for config/artifacts. 
+When installed from a .deb or image, the service runs as **`runloop:runloop`** and writes state under **`/var/lib/runloop`**; its UDS socket lives under `/run/runloop`. User mode continues to use `~/.runloop` for config/artifacts.
 
 ---
 
@@ -103,27 +105,27 @@ ui:
   theme: "mono"
 ```
 
-**Aliases (accepted for one release):** `kb.ledger` → `<root_dir>/<events_db>`, `kb.materialized` → `<root_dir>/<view_db>`. The config loader maps old keys and warns. 
-**Environment overrides:** any key via `RUNLOOP__SECTION__SUBKEY=value` (e.g., `RUNLOOP__LOGGING__LEVEL=debug`). 
+**Aliases (accepted for one release):** `kb.ledger` → `<root_dir>/<events_db>`, `kb.materialized` → `<root_dir>/<view_db>`. The config loader maps old keys and warns.
+**Environment overrides:** any key via `RUNLOOP__SECTION__SUBKEY=value` (e.g., `RUNLOOP__LOGGING__LEVEL=debug`).
 
 ---
 
 ## Architecture at a glance
 
-* **Daemon (`runloopd`)** – hosts the local bus, schedules agents, enforces capabilities. 
-* **Runtime** – spawns agents as **WASM/WASI** tasks (fast start, low RSS, sandboxed). 
-* **RMP (Runloop Message Protocol)** – typed, traceable messages over UDS: headers carry trace/budget/TTL; bodies are schema‑tagged. 
-* **Openings** – declarative DAGs that define a crew of agents and their crossings; supports retries, timeouts, budgets, and deterministic replay. 
-* **POG (knowledge base)** – local‑first event log + materialized views, with embeddings for semantic recall and full provenance. 
-* **Model broker** – centralizes model/provider selection, budgets, caching. 
+- **Daemon (`runloopd`)** – hosts the local bus, schedules agents, enforces capabilities.
+- **Runtime** – spawns agents as **WASM/WASI** tasks (fast start, low RSS, sandboxed).
+- **RMP (Runloop Message Protocol)** – typed, traceable messages over UDS: headers carry trace/budget/TTL; bodies are schema‑tagged.
+- **Openings** – declarative DAGs that define a crew of agents and their crossings; supports retries, timeouts, budgets, and deterministic replay.
+- **POG (knowledge base)** – local‑first event log + materialized views, with embeddings for semantic recall and full provenance.
+- **Model broker** – centralizes model/provider selection, budgets, caching.
 
 ---
 
 ## Key concepts
 
-* **Trajectories** – individual agents with goal + budget.
-* **Crossings** – typed interactions between agents (messages, artifacts).
-* **Openings** – a plan (DAG) of agents + crossings you can run/pause/replay.
+- **Trajectories** – individual agents with goal + budget.
+- **Crossings** – typed interactions between agents (messages, artifacts).
+- **Openings** – a plan (DAG) of agents + crossings you can run/pause/replay.
 
 Example Opening:
 
@@ -149,9 +151,9 @@ opening "compose_email" {
 ## Message Protocol (RMP)
 
 **MVP (RMP v0)** wire format uses a fixed 60-byte header (`magic`, `version`, `len`, `flags`, `schema_id`, `body_len`, `created_at_ms`, `ttl_ms`, `trace_id`, `opening_id`, `msg_id`) followed by a MsgPack body containing typed payload + optional metadata (budgets, priority, capability hints).
-Receivers enforce TTL using `created_at_ms + ttl_ms`. **RMP 0.2** (later in the roadmap) adds signatures/acks and richer metadata; wire compatibility is preserved. 
+Receivers enforce TTL using `created_at_ms + ttl_ms`. **RMP 0.2** (later in the roadmap) adds signatures/acks and richer metadata; wire compatibility is preserved.
 
-Message bodies are schema‑tagged (JSON Schema on write; msgpack on the wire is allowed). Provenance is attached to each message for audit/replay. 
+Message bodies are schema‑tagged (JSON Schema on write; msgpack on the wire is allowed). Provenance is attached to each message for audit/replay.
 
 ---
 
@@ -159,18 +161,18 @@ Message bodies are schema‑tagged (JSON Schema on write; msgpack on the wire is
 
 Local‑first storage with:
 
-* **Events** (append‑only, SQLite) and **Views** (materialized tables), plus a vector index for semantic recall.
-* All state changes are proposed as `StateDelta` with provenance; a validator stamps & applies them.
-* Hashing uses **BLAKE3** (binary `BLOB(32)`); hex is a UI/log rendering. 
+- **Events** (append‑only, SQLite) and **Views** (materialized tables), plus a vector index for semantic recall.
+- All state changes are proposed as `StateDelta` with provenance; a validator stamps & applies them.
+- Hashing uses **BLAKE3** (binary `BLOB(32)`); hex is a UI/log rendering.
 
 ---
 
 ## CLI & TUI
 
-* **`rlp`** – prompt entry (routes to shell fast‑path or to an Opening), budget flags, dry‑run.
-  * Explain routing decisions with `cargo run -p rlp -- why "ls -la"` (plain text) or append `--json` for machine-readable output.
-* **`agtop`** – per‑agent CPU/RSS/token metrics, error rate.
-* **Tracing** – `runloop trace <id>` prints a ladder diagram of crossings. 
+- **`rlp`** – prompt entry (routes to shell fast‑path or to an Opening), budget flags, dry‑run.
+  - Explain routing decisions with `cargo run -p rlp -- why "ls -la"` (plain text) or append `--json` for machine-readable output.
+- **`agtop`** – per‑agent CPU/RSS/token metrics, error rate.
+- **Tracing** – `runloop trace <id>` prints a ladder diagram of crossings.
 
 ---
 
@@ -191,23 +193,23 @@ crates/
   sdk/           # agent SDK
 ```
 
-The README lists **`core`**, **`bus`**, and **`openings`** explicitly to match the workspace plan. 
+The README lists **`core`**, **`bus`**, and **`openings`** explicitly to match the workspace plan.
 
 ---
 
 ## Security & privacy
 
-* Strict capability grants per agent/opening (FS/net/time/kb/secrets).
-* **Confirm external actions** (sending, deleting, spending) unless explicitly allowed.
-* Secrets are referenced by **opaque IDs** and stored in OS keyring or an encrypted vault. 
+- Strict capability grants per agent/opening (FS/net/time/kb/secrets).
+- **Confirm external actions** (sending, deleting, spending) unless explicitly allowed.
+- Secrets are referenced by **opaque IDs** and stored in OS keyring or an encrypted vault.
 
 ---
 
 ## Roadmap, contributing, and community
 
-* See [ROADMAP.md](./ROADMAP.md) for phases (Seed → Openings/SDK → KB → Reliability/Security → Beta → 1.0). 
-* CONTRIBUTING, CODE OF CONDUCT, and SECURITY guidelines live in the repo root.
-* Please open design questions as “discussions” with links to ADRs.
+- See [ROADMAP.md](./ROADMAP.md) for phases (Seed → Openings/SDK → KB → Reliability/Security → Beta → 1.0).
+- CONTRIBUTING, CODE OF CONDUCT, and SECURITY guidelines live in the repo root.
+- Please open design questions as “discussions” with links to ADRs.
 
 ---
 

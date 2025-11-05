@@ -1,11 +1,13 @@
 # mailer
 
 **Input (Artifact + Intent):**
+
 ```json
 { "type":"send_email", "draft_path":"blob:sha256:...", "to":"john@acme.com", "confirm":true }
 ```
 
 **Output (StateDelta):**
+
 ```json
 { "event":"email.sent", "payload":{ "to":["john@acme.com"], "subject":"...", "artifact_id":"..." } }
 ```
