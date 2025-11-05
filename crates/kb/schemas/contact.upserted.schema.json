@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://runloop.local/schemas/contact.upserted.schema.json#v1",
+  "title": "contact.upserted v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "email"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "email": {
+      "type": "string",
+      "format": "email",
+      "minLength": 3
+    },
+    "org": {
+      "type": "string"
+    },
+    "trust": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "uniqueItems": true
+    }
+  }
+}

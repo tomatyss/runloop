@@ -169,10 +169,11 @@ Local‑first storage with:
 
 ## CLI & TUI
 
-- **`rlp`** – prompt entry (routes to shell fast‑path or to an Opening), budget flags, dry‑run.
-  - Explain routing decisions with `cargo run -p rlp -- why "ls -la"` (plain text) or append `--json` for machine-readable output.
-- **`agtop`** – per‑agent CPU/RSS/token metrics, error rate.
-- **Tracing** – `runloop trace <id>` prints a ladder diagram of crossings.
+* **`rlp`** – prompt entry (routes to shell fast‑path or to an Opening), budget flags, dry‑run.
+  * Explain routing decisions with `cargo run -p rlp -- why "ls -la"` (plain text) or append `--json` for machine-readable output.
+  * Knowledge base helpers: `rlp kb migrate`, `rlp kb query "<SQL>"`, `rlp kb search <keyword>`, and `rlp kb why <entity>` all operate on the local POG databases.
+* **`agtop`** – per‑agent CPU/RSS/token metrics, error rate.
+* **Tracing** – `runloop trace <id>` prints a ladder diagram of crossings. 
 
 ---
 

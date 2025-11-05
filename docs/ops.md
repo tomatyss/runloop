@@ -43,6 +43,7 @@ The POG consists of two SQLite files and a derived vector index.
 - `~/.runloop/pog/events.sqlite` — append-only ledger (WAL, synchronous=FULL)
 - `~/.runloop/pog/pog.sqlite` — materialized views (WAL, synchronous=NORMAL)
 - `~/.runloop/pog/vectors/` — HNSW index files (derived; safe to rebuild)
+- `runloopd` runs a background materializer that tails the ledger and updates the views. Progress is tracked in `pog.sqlite.materializer_state(id INTEGER PRIMARY KEY CHECK (id = 1), watermark INTEGER NOT NULL)`.
 
 ### 2.1 Migration workflow
 
@@ -54,12 +55,14 @@ The POG consists of two SQLite files and a derived vector index.
 4. Rebuild `pog.sqlite` by replaying events (`events.sqlite` → views). Use `--inplace` only for emergency SQL patches.
 5. Rebuild vector index using the `VectorStore::rebuild` path.
 6. Set `meta.dirty = 0`, record new `schema_version`, and create a `snapshots` entry.
+7. Update `materializer_state.watermark` with the highest applied ledger id.
 
 Supporting commands:
 
 - `rlp kb verify` — referential integrity, hashes, BLAKE3 checks
 - `rlp kb backup` — consistent hot backup (uses SQLite backup APIs)
 - `rlp kb vacuum` — optional compaction (requires exclusive lock)
+- `rlp kb why <entity>` — print ordered source events for a materialized entity key.
 
 ### 2.2 Metadata tables
 
