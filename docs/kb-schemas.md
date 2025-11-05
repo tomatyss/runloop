@@ -38,6 +38,20 @@ CREATE INDEX IF NOT EXISTS idx_events_actor_ts
 - Insertions must occur within transactions; never update/delete existing rows.
 - `hash_blake3` validation occurs during `rlp kb verify`; the digest is stored as raw BLOB(32) and rendered in hex only for logs/UIs.
 
+### 1.3 Seed JSON schemas
+
+Normative JSON Schemas for the initial event kinds live under [`crates/kb/schemas/`](../crates/kb/schemas/):
+
+| Kind | Schema |
+| ---- | ------ |
+| `contact.upserted` | [`contact.upserted.schema.json`](../crates/kb/schemas/contact.upserted.schema.json) |
+| `artifact.created` | [`artifact.created.schema.json`](../crates/kb/schemas/artifact.created.schema.json) |
+| `email.sent` | [`email.sent.schema.json`](../crates/kb/schemas/email.sent.schema.json) |
+| `run.started` | [`run.started.schema.json`](../crates/kb/schemas/run.started.schema.json) |
+| `run.finished` | [`run.finished.schema.json`](../crates/kb/schemas/run.finished.schema.json) |
+
+Validators MUST embed these schemas and enforce them at `StateDelta` ingestion time. `$id` versions bump on breaking changes; implementations SHOULD accept the latest compatible revision.
+
 ## 2. Materialized views (`pog.sqlite`)
 
 - Journal mode: `WAL`
