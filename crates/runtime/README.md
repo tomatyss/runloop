@@ -26,6 +26,7 @@ decision is denied.
 | `model_complete`   | Invokes the model broker. If the guest-supplied buffer is too small, the hostcall returns **`-(required_len)`** so the caller can grow its allocation. No bytes are written on that path. |
 | `resolve_secret`   | Returns opaque secret identifiers when permitted.                 |
 | `exec_spawn`       | Stubbed until exec caps are enabled; guard rail in place.         |
+| `mailbox_peek_meta`| Returns the next message header as JSON (`trace_id`, `msg_id`, `created_at_ms`, `ttl_ms`, `schema_id`) without consuming the mailbox. |
 | `mailbox_recv`     | Pulls pending bus messages for the agent.                         |
 
 Filesystem access is mediated by `WasiCtxBuilder::preopened_dir`. The runtime
@@ -57,6 +58,7 @@ server, TTL rejection) propagate back to the caller.
 
 ## Statistics
 
-`AgentStats` reports RSS and accumulated CPU time. Linux builds with the
-`procfs` feature read per-thread stats from `/proc`. Other platforms fall back
-to `sysinfo` and omit CPU totals when fine-grained data is unavailable.
+`AgentStats` reports RSS and accumulated CPU time. Linux builds enable the
+`procfs` feature by default (opt-out via `--no-default-features --features no-procfs`) and
+sample `/proc` for per-thread CPU. Other platforms fall back to `sysinfo` and
+omit CPU totals when fine-grained data is unavailable.

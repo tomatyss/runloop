@@ -97,9 +97,9 @@
 
 * [x] API: `spawn(AgentSpec) -> AgentHandle`, `send(AgentId, Message)`, `stats(AgentId)`, `kill(AgentId)`.
 * [x] Implement stdout/stderr ring buffer per agent (for TUI log).
-* [ ] Track RSS/CPU via `/proc` (best‑effort) and expose via `stats` (current implementation returns `None`; add Linux-only path + macOS guard).
-* [ ] Wire mailbox delivery to bus routing (current placeholder closes channel immediately).
-* [ ] Measure cold-start perf (50 idle agents, p50 < 40 ms) and document harness.
+* [x] Track RSS/CPU via `/proc` (best‑effort) and expose via `stats` (Linux default `procfs`, opt-out via `no-procfs`).
+* [x] Wire mailbox delivery to bus routing (add `mailbox_peek_meta` for header introspection).
+* [x] Measure cold-start perf (50 idle agents, p50 < 40 ms) and document harness in `docs/perf.md`.
 
 **DoD:** Spawn 50 idle agents; p50 cold‑start < **40 ms**; stats show non‑zero RSS.
 

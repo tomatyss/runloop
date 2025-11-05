@@ -185,6 +185,7 @@ Governance & repo hygiene run in parallel (see Phase G below).
 - Docs: Quickstart, SDK, Opening cookbook, Security whitepaper.
 - Telemetry **opt‑in** (anonymous) for stability metrics.
 - Reliability/performance dashboard tracking acceptance metrics.  
+- Performance harness methodology captured in [docs/perf.md](docs/perf.md).  
 **Exit criteria (beta gate)**
 - 24‑hour soak with **zero critical crashes**; 3 reference openings reproduce cleanly; upgrade/downgrade works.
 
@@ -287,4 +288,3 @@ README.md
 - **Deliverables** are artifacts we will ship.  
 - **Exit criteria** are binary gates that must turn green before the milestone closes.  
 - **Acceptance metrics** are enforced in CI perf jobs and in Beta soak gates.
-

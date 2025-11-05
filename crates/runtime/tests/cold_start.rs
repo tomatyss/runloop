@@ -76,6 +76,13 @@ fn cold_start_p50_under_40ms() {
         let _stdout = wait_for_stdout_contains(&handle, b"ready", Duration::from_millis(20));
         let stats = handle.stats().expect("stats");
         assert!(stats.rss_bytes.unwrap_or(0) > 0);
+        #[cfg(all(target_os = "linux", feature = "procfs", not(feature = "no-procfs")))]
+        {
+            assert!(
+                stats.cpu_total_ms.is_some(),
+                "expected cpu_total_ms on linux"
+            );
+        }
 
         runtime.kill(handle.id()).expect("kill");
     }

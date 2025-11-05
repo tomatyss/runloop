@@ -25,7 +25,7 @@ use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
 use crate::audit::AuditSink;
 use crate::caps::Caps;
 use crate::error::Error;
-use crate::hostcalls::{self, AgentMailbox, HostState, HostcallStats, StoreData};
+use crate::hostcalls::{self, AgentEnvelope, AgentMailbox, HostState, HostcallStats, StoreData};
 use crate::module_cache::ModuleCache;
 use crate::output::OutputRing;
 use crate::secrets::{SecretProvider, SecretStore};
@@ -93,7 +93,7 @@ struct AgentProcess {
     _caps: Caps,
     tid: AtomicU32,
     join: Mutex<Option<thread::JoinHandle<Result<(), Error>>>>,
-    inbox: mpsc::Sender<Vec<u8>>,
+    inbox: mpsc::Sender<AgentEnvelope>,
     bus_task: Mutex<Option<TokioJoinHandle<()>>>,
     _host_state: Arc<HostState>,
 }
@@ -245,7 +245,7 @@ impl Runtime {
         let stderr_ring = OutputRing::new(spec.stderr_capacity);
         let stdout_buffer = Arc::new(RwLock::new(Vec::new()));
         let stderr_buffer = Arc::new(RwLock::new(Vec::new()));
-        let (inbox_tx, inbox_rx) = mpsc::channel::<Vec<u8>>(32);
+        let (inbox_tx, inbox_rx) = mpsc::channel::<AgentEnvelope>(32);
         let mailbox = Arc::new(AgentMailbox::new(inbox_rx));
         let identity_label = match spec.identity.variant() {
             Some(var) => format!("{}:{var}", spec.identity.name()),
@@ -444,7 +444,9 @@ impl Runtime {
                 match subscribe_bus.subscribe(&topic).await {
                     Ok(mut subscription) => {
                         while let Some(message) = subscription.next().await {
-                            if sender.send(message.body.to_vec()).await.is_err() {
+                            let Message { header, body } = message;
+                            let envelope = AgentEnvelope::new(header, body.to_vec());
+                            if sender.send(envelope).await.is_err() {
                                 break;
                             }
                         }
@@ -502,9 +504,16 @@ impl Runtime {
             .agents
             .get(&agent_id)
             .ok_or(Error::UnknownAgent)?;
+        let Message { header, body } = message;
+        tracing::trace!(
+            ?header,
+            body_len = body.len(),
+            ?agent_id,
+            "runtime sending direct envelope"
+        );
         entry
             .inbox
-            .try_send(message.body.to_vec())
+            .try_send(AgentEnvelope::new(header, body.to_vec()))
             .map_err(|err| Error::SpawnFailed(format!("mailbox full: {err}")))
     }
 

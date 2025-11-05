@@ -10,6 +10,7 @@ use parking_lot::Mutex;
 use runloop_core::ids::{AgentId, TraceId};
 use runloop_kb::{AuditDecision, AuditSeverity, CapAuditRecord, KnowledgeBase};
 use runloop_model_broker::{Broker, CompletionRequest};
+use runloop_rmp::Header;
 use tokio::sync::mpsc;
 use url::Url;
 use wasmtime::{AsContext, AsContextMut, Caller, Error as WasmtimeError, Linker, Memory};
@@ -228,21 +229,58 @@ impl HostState {
     }
 }
 
+/// Mailbox message envelope (header + body bytes).
+#[derive(Debug)]
+pub(crate) struct AgentEnvelope {
+    pub header: Header,
+    pub body: Vec<u8>,
+}
+
+impl AgentEnvelope {
+    pub fn new(header: Header, body: Vec<u8>) -> Self {
+        Self { header, body }
+    }
+}
+
+struct MailboxInner {
+    rx: mpsc::Receiver<AgentEnvelope>,
+    peeked: Option<AgentEnvelope>,
+}
+
 /// Lightweight mailbox guard shared with the store.
 #[derive(Clone)]
 pub(crate) struct AgentMailbox {
-    inner: Arc<Mutex<mpsc::Receiver<Vec<u8>>>>,
+    inner: Arc<Mutex<MailboxInner>>,
 }
 
 impl AgentMailbox {
-    pub fn new(rx: mpsc::Receiver<Vec<u8>>) -> Self {
+    pub fn new(rx: mpsc::Receiver<AgentEnvelope>) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(rx)),
+            inner: Arc::new(Mutex::new(MailboxInner { rx, peeked: None })),
         }
     }
 
-    pub fn try_recv(&self) -> Option<Vec<u8>> {
-        self.inner.lock().try_recv().ok()
+    pub fn try_recv(&self) -> Option<AgentEnvelope> {
+        let mut inner = self.inner.lock();
+        if let Some(envelope) = inner.peeked.take() {
+            tracing::trace!("mailbox.try_recv returning envelope from peeked");
+            return Some(envelope);
+        }
+        inner.rx.try_recv().ok()
+    }
+
+    pub fn peek_meta(&self) -> Option<Header> {
+        let mut inner = self.inner.lock();
+        if inner.peeked.is_none() {
+            inner.peeked = inner.rx.try_recv().ok();
+            if inner.peeked.is_some() {
+                tracing::trace!("mailbox.peek_meta captured new envelope");
+            }
+        }
+        inner.peeked.as_ref().map(|env| {
+            tracing::trace!("mailbox.peek_meta returning header");
+            env.header.clone()
+        })
     }
 }
 
@@ -317,6 +355,9 @@ pub(crate) fn add_to_linker(linker: &mut Linker<StoreData>) -> Result<(), Error>
         .map_err(|err| Error::SpawnFailed(err.to_string()))?;
     linker
         .func_wrap("runloop", "exec_spawn", host_exec_spawn)
+        .map_err(|err| Error::SpawnFailed(err.to_string()))?;
+    linker
+        .func_wrap("runloop", "mailbox_peek_meta", host_mailbox_peek_meta)
         .map_err(|err| Error::SpawnFailed(err.to_string()))?;
     linker
         .func_wrap("runloop", "mailbox_recv", host_mailbox_recv)
@@ -438,11 +479,35 @@ fn host_mailbox_recv(
     let Some(message) = caller.data().mailbox.try_recv() else {
         return Ok(0);
     };
-    if message.len() > len as usize {
+    if message.body.len() > len as usize {
         return Err(host_error("mailbox buffer too small"));
     }
-    write_bytes(&mut caller, ptr, &message)?;
-    Ok(message.len() as i32)
+    write_bytes(&mut caller, ptr, &message.body)?;
+    Ok(message.body.len() as i32)
+}
+
+fn host_mailbox_peek_meta(
+    mut caller: Caller<'_, StoreData>,
+    ptr: i32,
+    len: i32,
+) -> Result<i32, WasmtimeError> {
+    if len <= 0 {
+        return Ok(0);
+    }
+    let Some(header) = caller.data().mailbox.peek_meta() else {
+        return Ok(0);
+    };
+    let trace_hex = format!("{:032x}", header.trace_id);
+    let meta = format!(
+        "{{\"trace_id\":\"{}\",\"msg_id\":{},\"created_at_ms\":{},\"ttl_ms\":{},\"schema_id\":{}}}",
+        trace_hex, header.msg_id, header.created_at_ms, header.ttl_ms, header.schema_id,
+    );
+    let bytes = meta.into_bytes();
+    if bytes.len() > len as usize {
+        return Err(host_error("mailbox meta buffer too small"));
+    }
+    write_bytes(&mut caller, ptr, &bytes)?;
+    Ok(bytes.len() as i32)
 }
 
 fn read_utf8(
@@ -501,4 +566,135 @@ fn memory(caller: &mut Caller<'_, StoreData>) -> Result<Memory, WasmtimeError> {
 
 fn host_error(msg: impl Into<String>) -> WasmtimeError {
     anyhow!(msg.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audit::AuditSink;
+    use crate::caps::Caps;
+    use crate::secrets::SecretStore;
+    use bytes::Bytes;
+    use runloop_core::ids::AgentId;
+    use runloop_kb::KnowledgeBase;
+    use runloop_model_broker::Broker;
+    use runloop_rmp::Header;
+    use serde::Deserialize;
+    use tokio::sync::mpsc;
+    use wasmtime::{Engine, Instance, Linker, Module, Store};
+    use wasmtime_wasi::p1;
+
+    #[derive(Debug, Deserialize, PartialEq, Eq)]
+    struct Meta<'a> {
+        trace_id: &'a str,
+        msg_id: u64,
+        created_at_ms: u64,
+        ttl_ms: u32,
+        schema_id: u16,
+    }
+
+    fn compile_module(engine: &Engine) -> Module {
+        let wat = r#"(module
+            (import "runloop" "mailbox_peek_meta" (func $mailbox_peek_meta (param i32 i32) (result i32)))
+            (import "runloop" "mailbox_recv" (func $mailbox_recv (param i32 i32) (result i32)))
+            (memory (export "memory") 2)
+            (func (export "probe") (result i32)
+                (local $meta_len i32)
+                (local $body_len i32)
+                (local.set $meta_len (call $mailbox_peek_meta (i32.const 0) (i32.const 256)))
+                (if (i32.eqz (local.get $meta_len)) (then (return (i32.const -1))))
+                (local.set $body_len (call $mailbox_recv (i32.const 512) (i32.const 128)))
+                (if (i32.eqz (local.get $body_len)) (then (return (i32.const -2))))
+                (i32.store8 (i32.add (i32.const 0) (local.get $meta_len)) (i32.const 0))
+                (i32.store8 (i32.add (i32.const 512) (local.get $body_len)) (i32.const 0))
+                (return (i32.const 0))
+            ))"#;
+        Module::new(engine, wat).expect("compile module")
+    }
+
+    fn snapshot_region(instance: &Instance, store: &mut Store<StoreData>, start: usize) -> Vec<u8> {
+        let memory = instance
+            .get_export(&mut *store, "memory")
+            .and_then(|ext| ext.into_memory())
+            .expect("memory export");
+        let mut buffer = vec![0u8; 512];
+        memory
+            .read(store.as_context(), start, &mut buffer)
+            .expect("read memory");
+        buffer
+    }
+
+    #[test]
+    fn mailbox_peek_meta_surfaces_header() {
+        let engine = Engine::default();
+        let module = compile_module(&engine);
+
+        let mut linker: Linker<StoreData> = Linker::new(&engine);
+        p1::add_to_linker_sync(&mut linker, |data: &mut StoreData| &mut data.wasi)
+            .expect("link wasi");
+        add_to_linker(&mut linker).expect("link hostcalls");
+
+        let (tx, rx) = mpsc::channel(1);
+        let mut header = Header::default();
+        header.trace_id = 0xfeedface_u128;
+        header.msg_id = 42;
+        header.created_at_ms = 1_234;
+        header.ttl_ms = 9_000;
+        header.schema_id = 77;
+        tx.blocking_send(AgentEnvelope::new(
+            header.clone(),
+            Bytes::from_static(b"ping").to_vec(),
+        ))
+        .expect("send envelope");
+
+        let wasi = wasmtime_wasi::WasiCtxBuilder::new().arg("probe").build_p1();
+
+        let mailbox = AgentMailbox::new(rx);
+        let kb = KnowledgeBase::new();
+        let kb = std::sync::Arc::new(kb);
+        let broker = std::sync::Arc::new(Broker::new());
+        let secrets = std::sync::Arc::new(SecretStore::new());
+        let audit = AuditSink::new(16);
+        let host_state = std::sync::Arc::new(HostState::new(
+            Caps::deny_all(),
+            audit,
+            kb,
+            broker,
+            secrets,
+            std::sync::Arc::new(HostcallStats::new()),
+            AgentId::new(),
+            "probe".to_string(),
+        ));
+
+        let store_data = StoreData {
+            wasi,
+            state: host_state,
+            mailbox: std::sync::Arc::new(mailbox),
+        };
+
+        let mut store = Store::new(&engine, store_data);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate");
+
+        let probe = instance
+            .get_typed_func::<(), i32>(&mut store, "probe")
+            .expect("export probe");
+
+        let result = probe.call(&mut store, ()).expect("probe call");
+        assert_eq!(result, 0, "probe should succeed");
+
+        let meta_region = snapshot_region(&instance, &mut store, 0);
+        let meta_cstr = meta_region.split(|b| *b == 0).next().unwrap();
+        let meta: Meta<'_> = serde_json::from_slice(meta_cstr).expect("meta json");
+        assert_eq!(meta.trace_id, "000000000000000000000000feedface");
+        assert_eq!(meta.msg_id, header.msg_id);
+        assert_eq!(meta.created_at_ms, header.created_at_ms);
+        assert_eq!(meta.ttl_ms, header.ttl_ms);
+        assert_eq!(meta.schema_id, header.schema_id);
+
+        let body_region = snapshot_region(&instance, &mut store, 512);
+        let body_cstr = body_region.split(|b| *b == 0).next().unwrap();
+        assert_eq!(body_cstr, b"ping");
+    }
 }
