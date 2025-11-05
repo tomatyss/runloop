@@ -1,6 +1,6 @@
 # Security Policy
 
-- Disclosure email: security@runloop.media (GPG optional; publish key in this repo when ready).
+- Disclosure email: <security@runloop.media> (GPG optional; publish key in this repo when ready).
 - Acknowledgement target: 3 business days.
 - Triage: risk assessment and CVSS estimate within 7 business days.
 

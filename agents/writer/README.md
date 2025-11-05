@@ -1,6 +1,7 @@
 # writer
 
 **Input (Intent):**
+
 ```json
 { "type":"draft_email",
   "recipient":{"name":"John Smith","email":"john@acme.com"},
@@ -12,6 +13,7 @@
 ```
 
 **Output (Artifact):**
+
 ```json
 { "type":"draft_email.md", "body_md":"...", "rationale":"...", "citations":[<event_ids>] }
 ```

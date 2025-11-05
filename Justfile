@@ -27,7 +27,7 @@ pre-commit:
 	@scripts/pre-commit.sh
 
 markdownlint:
-	@npx markdownlint-cli2 ".github/**/*.md"
+	@npx markdownlint-cli2 "**/*.md"
 
 doc:
 	@cargo doc --workspace --no-deps

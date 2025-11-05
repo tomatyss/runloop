@@ -3,6 +3,7 @@
 Runloop is an **agent‑native, terminal‑first operating system**. Every prompt you type is routed either to the **shell** (fast path) or to a **crew of AI agents** (“openings”) that plan, act, and produce artifacts in the background. Agents are ultra‑light, capability‑scoped tasks (WASI/Wasm) orchestrated over a typed message bus, with complete provenance and deterministic replay.
 
 ## Why Runloop
+
 - **Terminal‑first**: no windows; everything is inspectable as text.
 - **Local‑first, cloud‑optional**: runs offline; can sync/enrich when online.
 - **Composable agents**: declare a plan (“opening”), run/replay it, and audit the trace.
@@ -10,19 +11,23 @@ Runloop is an **agent‑native, terminal‑first operating system**. Every promp
 - **Least‑privilege by default**: capabilities gate every file, net, time, KB, secrets, and model access.
 
 ## Core mental model
+
 - **Trajectories** — individual agents (LLM + tools) with a goal and budget.
 - **Crossings** — typed interactions (messages, artifacts) among agents.
 - **Openings** — a declarative DAG (the crew and their crossings) that you can run, pause, step, or replay.
 
 ## System overview
+
 **Router → Opening Engine → Runtime → Message Bus → Model Broker → Knowledge Base (KB) → Observability/TUI**
 
 ### 1) Router
+
 - Fast‑path executes exact shell commands (`ls | grep foo`).
 - Otherwise, classifies intent and launches a matching **opening** (crew plan).
 - Always shows *why* it routed and the proposed plan; you press `Enter` to run.
 
 ### 2) Openings (composition)
+
 - Openings are declarative DAGs with retries, timeouts, budgets, and success criteria.
 - Deterministic replay against the event log enables debugging and self‑improvement.
 - Example (sketch):
@@ -47,12 +52,14 @@ review.ok    -> send.in
 ````
 
 ### 3) Runtime & agent container
+
 - **Process model**: wasm32‑WASI (Wasmtime). Cold‑start and RSS are near‑process; sandboxing is strong.
 - **Agent bundle**: `{ manifest.toml, wasm, tools.json, policy.caps }`.
 - **Capabilities**: filesystem (scoped), network (allow‑list), exec (off by default), time, KB read/write, secret‑ids, model access via broker.
 - **IPC**: local message bus (Unix sockets) with zero‑copy blobs and signed, typed messages.
 
 ### 4) Message protocol (RMP)
+
 - **Framing**: big-endian length prefix, fixed 60-byte header, MsgPack body.
 - **Header (v0) — key fields**:
 - `magic="RMP0"`, `header_version=1`, `header_len=60`, `flags`
@@ -65,6 +72,7 @@ review.ok    -> send.in
 - **Provenance**: every message carries `who/why/what/model@version`.
 
 ### 5) Knowledge Base (KB) — “Personal Ops Graph”
+
 - **Event‑sourced**: append‑only `events` log (SQLite).
 - **Materialized views**: `facts`, `artifacts`, `contacts`, `accounts`, `edges`.
 - **Vector index**: HNSW for semantic recall with provenance filters.
@@ -77,21 +85,25 @@ review.ok    -> send.in
 - **Secrets**: only opaque `secret_id` references in KB; actual secrets live in the OS keystore or an encrypted vault.
 
 ### 6) Model broker
+
 - Single service mediates all model calls (local or remote), sets budgets, caches, and meters cost.
 - **MVP guardrail**: **no streaming** responses in v0 (can be feature‑flagged later).
 
 ### 7) Security & privacy
+
 - **Capability security** end‑to‑end.
 - **Human confirmation** required for outbound side‑effects (sending, deleting, spending).
 - **Signed bundles/SBOM**; only trusted, signed agents may run (policy‑controlled).
 - **Redaction**: agents can request redacted/embedded‑only views to avoid handling raw PII.
 
 ### 8) Observability & debugging
+
 - **agtop** shows per‑agent CPU/RSS/tokens/errors.
 - **runloop trace** prints a ladder diagram of a full opening (spans across retries).
 - Crash quarantine + minimal repro capture.
 
 ## Packaging & run modes
+
 Runloop supports **user** and **system** modes with explicit, non‑overlapping paths.
 
 - **User mode (single user / dev)**  
@@ -153,10 +165,10 @@ Single status bar (mode, opening, token burn, health) and toggleable panes: **pl
 
 ## Non‑goals for v1
 
-* Graphical desktop/windowing.
-* Distributed multi‑host orchestration (beyond local device).
-* Model‑streaming UX (guardrailed off in MVP).
-* Unscoped network/filesystem access for agents.
+- Graphical desktop/windowing.
+- Distributed multi‑host orchestration (beyond local device).
+- Model‑streaming UX (guardrailed off in MVP).
+- Unscoped network/filesystem access for agents.
 
 ## Performance intent
 
@@ -164,5 +176,5 @@ Cold start near process‑launch; low RSS per agent; ≥1k msgs/s bus on a devel
 
 ## Documentation & decisions
 
-* Docs follow **Diátaxis**, diagrams use **C4 + Mermaid**, and architectural decisions are captured as **MADR ADRs**.
-* Two baseline ADRs: **0001 Debian + WASM/WASI + SQLite**, **0002 RMP v0 (header, framing, compatibility)**.
+- Docs follow **Diátaxis**, diagrams use **C4 + Mermaid**, and architectural decisions are captured as **MADR ADRs**.
+- Two baseline ADRs: **0001 Debian + WASM/WASI + SQLite**, **0002 RMP v0 (header, framing, compatibility)**.

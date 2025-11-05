@@ -46,6 +46,7 @@ Governance & repo hygiene run in parallel (see Phase G below).
 
 **M0.1 — Charter & constraints**  
 **Deliverables**
+
 - Product brief v1, non‑goals, supported platforms (Debian 12; x86_64 + arm64).
 - License decision (e.g., Apache‑2.0) and third‑party notice template.  
 **Exit criteria**
@@ -53,6 +54,7 @@ Governance & repo hygiene run in parallel (see Phase G below).
 
 **M0.2 — Architecture & interfaces 0.1**  
 **Deliverables**
+
 - **RMP 0.1**: header/body schemas (include `created_at_ms`, header version/size).  
 - **Agent packaging 0.1**: `manifest.toml`, `policy.caps`, `tools.json`, signing model.  
 - **Openings DSL 0.1**: grammar (EBNF) + replay semantics + examples.  
@@ -62,6 +64,7 @@ Governance & repo hygiene run in parallel (see Phase G below).
 
 **M1.0 — Repo, build, CI**  
 **Deliverables**
+
 - Monorepo layout (`/runloopd`, `/cli`, `/tui`, `/sdk/agent-rust`, `/pog`, `/broker`, `/examples`).  
 - CI: fmt, clippy, unit tests, cross‑compile, nightly artifacts.  
 **Exit criteria**
@@ -73,6 +76,7 @@ Governance & repo hygiene run in parallel (see Phase G below).
 
 **M2.0 — Runtime & sandbox MVP**  
 **Deliverables**
+
 - `runloopd` skeleton: process manager, config loader (schema v1), capability registry.
 - Wasmtime (WASI) integration; launch `hello-agent.wasm`.
 - Capability gates: FS (scoped), Net (off by default), Time, POG read.  
@@ -81,6 +85,7 @@ Governance & repo hygiene run in parallel (see Phase G below).
 
 **M2.1 — CLI & TUI skeleton**  
 **Deliverables**
+
 - `rlp` commands: `run`, `plan`, `trace <id>`, `cap grant`.
 - TUI status bar + panes (Plan, Log); non‑blocking rendering.  
 **Exit criteria**
@@ -88,6 +93,7 @@ Governance & repo hygiene run in parallel (see Phase G below).
 
 **M2.2 — POG storage 0.1**  
 **Deliverables**
+
 - Append‑only event log (SQLite) + materialized view service.
 - APIs: `kb.query`, `kb.why`, `kb.write_event`.  
 **Exit criteria**
@@ -99,6 +105,7 @@ Governance & repo hygiene run in parallel (see Phase G below).
 
 **M3.0 — Router v0 (shell‑first)**  
 **Deliverables**
+
 - Shell fast‑path; policy file with allow/deny rules.
 - `rlp why "<prompt>"` explains routing.  
 **Exit criteria**
@@ -106,12 +113,14 @@ Governance & repo hygiene run in parallel (see Phase G below).
 
 **M3.1 — Model broker v0**  
 **Deliverables**
+
 - Local+remote providers; per‑request budgets; deterministic mode toggle for replay.  
 **Exit criteria**
 - Budget/latency visible per request; deterministic replay mode usable in tests.
 
 **M3.2 — Canonical agents & opening**  
 **Deliverables**
+
 - `contact_resolver`, `context_gatherer`, `writer`, `critic`, `mailer` (send requires human confirm).
 - `compose_email` opening (DAG + budgets + success criteria).  
 **Exit criteria**
@@ -123,6 +132,7 @@ Governance & repo hygiene run in parallel (see Phase G below).
 
 **M4.0 — Opening engine v1**  
 **Deliverables**
+
 - Declarative DAG (YAML/DSL): retries, timeouts, budgets, success predicates.
 - Deterministic replay over captured traces.  
 **Exit criteria**
@@ -130,6 +140,7 @@ Governance & repo hygiene run in parallel (see Phase G below).
 
 **M4.1 — Agent SDK (Rust, wasm32‑wasi)**  
 **Deliverables**
+
 - `handle(Message) -> Result<Message)` traits, cap helpers, test harness.  
 **Exit criteria**
 - Third‑party example agent compiles to Wasm and runs under `runloopd`.
@@ -140,6 +151,7 @@ Governance & repo hygiene run in parallel (see Phase G below).
 
 **M5.0 — Observability v1**  
 **Deliverables**
+
 - `agtop` pane: per‑agent CPU/RSS, tokens in/out, error rate, cache hits.
 - Tracing ladder diagrams in `rlp trace`.
 - Per‑opening/agent/provider **cost accounting**.  
@@ -148,6 +160,7 @@ Governance & repo hygiene run in parallel (see Phase G below).
 
 **M6.0 — Performance harness & budgets**  
 **Deliverables**
+
 - Lab capturing cold/warm startup, message latency, RSS, throughput; dashboards against budgets.  
 **Exit criteria**
 - Measured: cold start p50 ≤ **25 ms**, agent RSS p50 ≤ **8 MB**, bus throughput ≥ **1000 msgs/s** (hardware profile documented).
@@ -158,12 +171,14 @@ Governance & repo hygiene run in parallel (see Phase G below).
 
 **M8.0 — Scheduler & pressure controls**  
 **Deliverables**
+
 - Fair‑share per opening; cgroups for CPU/mem/io; soft throttles; quarantine on sandbox crash; circuit breakers for flapping agents.  
 **Exit criteria**
 - Stress test maintains interactivity while isolating “bad” agents.
 
 **M8.1 — Safety 0.1**  
 **Deliverables**
+
 - Capability tokens with expirations; human confirmation for external side effects (send/delete/spend).
 - Tripwires for outbound spikes and exfil heuristics.  
 **Exit criteria**
@@ -171,6 +186,7 @@ Governance & repo hygiene run in parallel (see Phase G below).
 
 **M9.0 — Self‑improvement harness 0.1**  
 **Deliverables**
+
 - Trace capture → clustering → patch proposals (prompts/policies) → sandbox A/B → adoption rules; golden task suite + regressions dashboard.  
 **Exit criteria**
 - System proposes & validates ≥1 improvement without manual prompt engineering.
@@ -181,6 +197,7 @@ Governance & repo hygiene run in parallel (see Phase G below).
 
 **M10.0 — Public Beta (0.9)**  
 **Deliverables**
+
 - Installers for Debian/Ubuntu (`.deb`), code‑signed artifacts.
 - Docs: Quickstart, SDK, Opening cookbook, Security whitepaper.
 - Telemetry **opt‑in** (anonymous) for stability metrics.
@@ -195,6 +212,7 @@ Governance & repo hygiene run in parallel (see Phase G below).
 
 **M11.0 — RC (0.99)**  
 **Deliverables**
+
 - Backward‑compatible **RMP**/**DSL** finalized; migration scripts.
 - API freeze; fault‑injection integration tests.  
 **Exit criteria**
@@ -202,6 +220,7 @@ Governance & repo hygiene run in parallel (see Phase G below).
 
 **M12.0 — v1.0 GA**  
 **Deliverables**
+
 - Stable 1.0 release notes, long‑term support & deprecation policy.  
 **Exit criteria**
 - All acceptance metrics green; docs complete; supply‑chain attestation published.
@@ -211,7 +230,9 @@ Governance & repo hygiene run in parallel (see Phase G below).
 ## 4) Ecosystem, packaging & portability (runs alongside Phases 4–7)
 
 **Plugin packaging (bundles)**  
+
 - Layout:  
+
 ```
 
 /agent/
@@ -223,18 +244,21 @@ LICENSE
 README.md
 
 ```
+
 - `rlp agent install <path|uri>` validates signature/caps and registers the bundle; upgrade path handles versioning.  
 - Signed bundles (Ed25519), deterministic Wasm builds; trust roots in config.  
 **Exit criteria**
 - Tampered bundle rejected; repro builds verified on two machines; install/upgrade rollback tested.
 
 **OS packaging / images**  
+
 - System user `runloop`; state in `/var/lib/runloop`; per‑user config in `~/.runloop`.  
 - Packages for Debian; demo ISO for fast trial; container image for dev only.  
 **Exit criteria**
 - `apt install runloop` brings up `runloopd.service` hardened; ISO boots to working TUI with sample openings.
 
 **Portability**  
+
 - Abstract platform shims; Redox PoC (3 canonical agents) to inform future port.
 
 ---
@@ -270,6 +294,7 @@ README.md
 - **Repo hygiene:** CONTRIBUTING, CODE_OF_CONDUCT, SECURITY, CODEOWNERS; branch protections; labels; issue templates.
 
 **Exit criteria**  
+
 - ADRs exist & linked; docs lint clean; contributors can build an agent in < 1 hour using the docs.
 
 ---
