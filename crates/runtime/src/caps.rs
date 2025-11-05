@@ -242,6 +242,48 @@ pub struct CapsParse {
     pub presence: CapsPresence,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DebugPreopen {
+    pub root: Utf8PathBuf,
+    pub dir_read: bool,
+    pub dir_write: bool,
+    pub dir_create: bool,
+    pub file_read: bool,
+    pub file_write: bool,
+    pub file_create: bool,
+}
+
+impl Caps {
+    pub fn debug_preopens(&self) -> Vec<DebugPreopen> {
+        self.fs
+            .iter()
+            .map(|entry| {
+                if entry.write {
+                    DebugPreopen {
+                        root: entry.root.clone(),
+                        dir_read: true,
+                        dir_write: true,
+                        dir_create: true,
+                        file_read: true,
+                        file_write: true,
+                        file_create: true,
+                    }
+                } else {
+                    DebugPreopen {
+                        root: entry.root.clone(),
+                        dir_read: true,
+                        dir_write: false,
+                        dir_create: false,
+                        file_read: true,
+                        file_write: false,
+                        file_create: false,
+                    }
+                }
+            })
+            .collect()
+    }
+}
+
 fn parse_fs(table: &toml::map::Map<String, Value>) -> Result<FsParseResult, Error> {
     let mut fs_entries = Vec::new();
     let mut present = false;
