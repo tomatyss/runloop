@@ -673,7 +673,8 @@ fn current_thread_id() -> u32 {
     cfg_if! {
         if #[cfg(target_os = "linux")] {
             rustix::thread::gettid()
-                .as_raw_pid()
+                .as_raw_nonzero()
+                .get()
                 .try_into()
                 .unwrap_or(0)
         } else {
