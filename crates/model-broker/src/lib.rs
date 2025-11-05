@@ -13,6 +13,17 @@ impl Broker {
 
     /// Execute a completion request. MVP echoes the prompt for determinism.
     pub fn complete(&self, request: &CompletionRequest) -> CompletionResponse {
+        // MVP: streaming disabled — surface a stable error string if requested
+        if matches!(request.stream, Some(true)) {
+            return CompletionResponse {
+                model_used: request
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| "local:echo".to_string()),
+                output: "ERROR stream_unsupported: Streaming is disabled in this MVP build."
+                    .to_string(),
+            };
+        }
         CompletionResponse {
             model_used: request
                 .model
@@ -33,6 +44,8 @@ impl Default for Broker {
 pub struct CompletionRequest {
     pub prompt: String,
     pub model: Option<String>,
+    #[serde(default)]
+    pub stream: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

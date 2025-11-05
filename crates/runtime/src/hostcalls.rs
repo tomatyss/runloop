@@ -421,11 +421,11 @@ fn host_model_complete(
     } else {
         None
     };
-    let response = caller
-        .data()
-        .state
-        .broker
-        .complete(&CompletionRequest { prompt, model });
+    let response = caller.data().state.broker.complete(&CompletionRequest {
+        prompt,
+        model,
+        stream: None,
+    });
     let rendered = response.output.as_bytes();
     if rendered.len() > i32::MAX as usize {
         return Err(host_error("model response too large"));

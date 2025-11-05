@@ -27,8 +27,10 @@
 **A2. Config loader**
 
 * [x] Path: `crates/core/src/config.rs`.
-* [x] Structure mirrors `~/.runloop/config.yaml` (runtime, models, kb, security, ui).
+* [x] Structure mirrors `~/.runloop/config.yaml` (runtime, models, kb, security, ui, bus).
 * [x] Implement: `Config::load()` (env var override path), `Config::validate()` (required fields, sane ranges).
+* [x] Add `runtime.socket_path` (wins over `sockets_dir`); user-mode defaults to `$XDG_RUNTIME_DIR/runloop/runloopd.sock` (fallback `~/.runloop/run/runloopd.sock`); deprecate `~/.runloop/sock` with warning.
+* [x] Long-lived KB aliases: `kb.ledger` → `kb.events_db`, `kb.materialized` → `kb.view_db` (warn on use).
 
 **DoD:** A unit test loads a sample `tests/fixtures/config.yaml` and validates defaults.
 
@@ -53,6 +55,8 @@
 * [x] **Idempotency**: include `(trace_id,msg_id)` in a dedupe cache (LRU) on receivers, ignore dups.
 * [x] TTL enforcement: drop messages beyond `ttl_ms`.
 * [x] Surface drop counters and broadcast notifications on `rlp/sys/drops`.
+* [x] ACL: only UI/TUI may publish `action.decision`; bus rejects other publishers (Forbidden) and tests cover both reject/allow paths.
+* [ ] Wire ACL to config (`bus.auth.publishers.action_decision.allowed_kinds`) in daemon initialization.
 
 **DoD:** Throughput test ≥ **600 msgs/s** loopback; TTL respected; duplicate injection ignored; drop counters observable via API/topic.
 
@@ -166,11 +170,11 @@
 
 **F1. Broker interface**
 
-* [ ] Path: `crates/model-broker/`.
+* [x] Path: `crates/model-broker/`.
 * [ ] `complete(ModelRequest) -> ModelOutput` with `budget_tokens`, `timeout`, `cache_key`.
 * [ ] Providers: `NullProvider` (echo), `HttpProvider` (configurable base URL + `secret_id`).
 
-**DoD:** Budget/timeout enforced; `NullProvider` available for offline tests; `stream=true` returns a deterministic `StreamingUnsupported` error until the Phase‑3 feature flag lands.
+**DoD:** Budget/timeout enforced; `NullProvider` available for offline tests; [x] `stream=true` returns a deterministic unsupported error. [ ] Upgrade to typed ERROR_REPORT end-to-end.
 
 **F2. Simple cache**
 

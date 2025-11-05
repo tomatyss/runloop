@@ -47,7 +47,7 @@ cargo run -p agtop
 
 ### Packages & images (daemon / system mode)
 
-When installed from a .deb or image, the service runs as **`runloop:runloop`** and writes state under **`/var/lib/runloop`**; its UDS socket lives under `/run/runloop`. User mode continues to use `~/.runloop` for config/artifacts.
+When installed from a .deb or image, the service runs as **`runloop:runloop`** and writes state under **`/var/lib/runloop`**; its UDS socket lives at `/run/runloop/runloopd.sock`. User mode continues to use `~/.runloop` for config/artifacts (runtime socket defaults to `$XDG_RUNTIME_DIR/runloop/runloopd.sock`, falling back to `~/.runloop/run/runloopd.sock`).
 
 ---
 
@@ -105,7 +105,9 @@ ui:
   theme: "mono"
 ```
 
-**Aliases (accepted for one release):** `kb.ledger` → `<root_dir>/<events_db>`, `kb.materialized` → `<root_dir>/<view_db>`. The config loader maps old keys and warns.
+Runtime socket settings: prefer `runtime.socket_path` (explicit file). If unset, `runtime.sockets_dir` is used with implied filename `runloopd.sock`. Defaults: user mode → `$XDG_RUNTIME_DIR/runloop/runloopd.sock` (fallback `~/.runloop/run/runloopd.sock`); system mode → `/run/runloop/runloopd.sock`.
+
+**Aliases (compatibility):** `kb.ledger` → `<root_dir>/<events_db>`, `kb.materialized` → `<root_dir>/<view_db>`. The config loader maps old keys and warns; aliases are kept for compatibility.
 **Environment overrides:** any key via `RUNLOOP__SECTION__SUBKEY=value` (e.g., `RUNLOOP__LOGGING__LEVEL=debug`).
 
 ---
@@ -169,11 +171,11 @@ Local‑first storage with:
 
 ## CLI & TUI
 
-* **`rlp`** – prompt entry (routes to shell fast‑path or to an Opening), budget flags, dry‑run.
-  * Explain routing decisions with `cargo run -p rlp -- why "ls -la"` (plain text) or append `--json` for machine-readable output.
-  * Knowledge base helpers: `rlp kb migrate`, `rlp kb query "<SQL>"`, `rlp kb search <keyword>`, and `rlp kb why <entity>` all operate on the local POG databases.
-* **`agtop`** – per‑agent CPU/RSS/token metrics, error rate.
-* **Tracing** – `runloop trace <id>` prints a ladder diagram of crossings. 
+- **`rlp`** – prompt entry (routes to shell fast‑path or to an Opening), budget flags, dry‑run.
+  - Explain routing decisions with `cargo run -p rlp -- why "ls -la"` (plain text) or append `--json` for machine-readable output.
+  - Knowledge base helpers: `rlp kb migrate`, `rlp kb query "<SQL>"`, `rlp kb search <keyword>`, and `rlp kb why <entity>` all operate on the local POG databases.
+- **`agtop`** – per‑agent CPU/RSS/token metrics, error rate.
+- **Tracing** – `runloop trace <id>` prints a ladder diagram of crossings.
 
 ---
 

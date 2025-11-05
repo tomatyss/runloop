@@ -84,3 +84,7 @@ See [`docs/rmp-registry.md`](rmp-registry.md) for reserved ranges and assignment
 ---
 
 For questions or proposals, file an ADR referencing this document and update the registry table accordingly.
+
+---
+
+MVP note: model streaming is disabled. Broker requests MAY include `stream: true`, but implementations SHOULD return an unsupported error. When surfaced as a protocol message, use the `Error.Report` schema with a stable `code` such as `stream_unsupported` and a human‑readable `message`.
