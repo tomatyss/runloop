@@ -2470,6 +2470,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "runloop-core",
+ "runloop-router",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -2580,6 +2581,18 @@ dependencies = [
  "serde",
  "thiserror 1.0.69",
  "tokio",
+]
+
+[[package]]
+name = "runloop-router"
+version = "0.1.0"
+dependencies = [
+ "once_cell",
+ "regex",
+ "runloop-core",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

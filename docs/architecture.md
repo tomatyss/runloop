@@ -28,6 +28,12 @@
 3. Agents emit events → ledger append; materializer updates views; vector index refreshes.
 4. Outputs recorded in POG, surfaced in UI; provenance links back to agent + schema IDs.
 
+## Router configuration (MVP)
+- `router.fastpath_shell`: enable or disable the shell fast-path.
+- `router.default_opening`: opening name used when routing to agents.
+- `router.allowlist` / `router.denylist`: prompt patterns that force or block shell execution.
+- `router.known_commands`: extra command names layered onto the builtin + PATH discovery set.
+
 ## Trust & Capabilities Model
 - Agents declare capabilities via `policy.caps` (see `docs/policy-caps.md`).
 - Overrides located at `~/.runloop/caps/overrides` only revoke privileges.
