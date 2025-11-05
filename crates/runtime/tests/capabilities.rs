@@ -67,6 +67,12 @@ fn time_capability_denied_records_audit() {
     assert_eq!(audits.len(), 1, "expected single audit record");
     assert_eq!(audits[0].cap, "time.now");
     assert_eq!(audits[0].decision, runloop_kb::AuditDecision::Deny);
+    assert_eq!(audits[0].reason, "cap_missing");
+    assert_ne!(
+        audits[0].args_hash, [0u8; 32],
+        "args hash should be populated"
+    );
+    assert_eq!(audits[0].severity, runloop_kb::AuditSeverity::Warn);
 
     let stats = runtime.hostcall_stats();
     assert!(stats.denied() >= 1);

@@ -3,7 +3,7 @@
 > An **agent‑native operating layer** for your machine: terminal‑first, Rust‑powered, agents in lightweight **WASM/WASI** sandboxes, composed into **Openings** (DAGs) over a typed local message bus (RMP).
 
 **Status:** pre‑alpha design + docs. Debian‑first; portable later. Runloop is **not a kernel or distro**—it sits above your OS to route prompts to either the shell or to AI agents.  
-See [ROADMAP.md](./ROADMAP.md) for the phased plan.
+See [ROADMAP.md](./ROADMAP.md) for the phased plan and [docs/perf.md](./docs/perf.md) for the performance harness.
 
 ---
 

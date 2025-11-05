@@ -14,7 +14,7 @@ mod secrets;
 mod spec;
 mod stats;
 
-pub use caps::{CapabilitySet, Caps, FsCapability, NetLocation};
+pub use caps::{CapabilitySet, Caps, DebugPreopen, FsCapability, NetLocation};
 pub use error::Error;
 pub use hostcalls::HostcallStats;
 pub use runtime::{AgentHandle, Runtime, RuntimeBuilder};
