@@ -2604,7 +2604,7 @@ dependencies = [
  "runloop-kb",
  "runloop-model-broker",
  "runloop-rmp",
- "rustix 0.38.44",
+ "rustix 1.1.2",
  "serde",
  "serde_json",
  "sysinfo",
