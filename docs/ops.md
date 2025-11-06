@@ -159,6 +159,20 @@ See `docs/security-model.md` for secret-store details. Ops tasks:
 - Only UI/TUI processes may publish `action.decision`; the bus rejects other publishers and emits an audit event.
 - The runtime publishes drop notices (`DropNotice`) on `rlp/sys/drops` whenever TTL expiry or duplicate suppression occurs. Operators should scrape this topic for reliability dashboards.
 
+### 8.1 Bus publisher ACL (configuration)
+
+Configure publisher kinds allowed to emit specific schemas:
+
+```yaml
+bus:
+  auth:
+    publishers:
+      action_decision:
+        allowed_kinds: ["ui", "tui"]
+```
+
+Defaults permit only `ui` and `tui`. Publishers establish identity at connect time (`connect_as`).
+
 ## Appendix A. Repo admin checklist
 
 ### Branch protection (owner: @release-eng)

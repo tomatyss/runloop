@@ -3,7 +3,11 @@ use futures_core::Stream;
 use lru::LruCache;
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
-use runloop_core::{Error as CoreError, content::CT_BUS_DROP_NOTICE, ids::AgentId};
+use runloop_core::{
+    Error as CoreError,
+    content::{CT_ACTION_DECISION, CT_BUS_DROP_NOTICE},
+    ids::AgentId,
+};
 use runloop_rmp::{Error as RmpError, Header, encode_payload};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -42,6 +46,8 @@ pub enum BusError {
     BodyLengthMismatch { expected: u32, actual: usize },
     #[error("backpressure timeout for topic {topic}")]
     BackpressureTimeout { topic: String },
+    #[error("forbidden: {0}")]
+    Forbidden(String),
 }
 
 impl From<BusError> for CoreError {
@@ -92,6 +98,15 @@ fn map_rmp_error(err: RmpError) -> BusError {
 #[derive(Clone)]
 pub struct Bus {
     inner: Arc<Server>,
+    kind: PublisherKind,
+}
+
+/// Publisher identity kinds for ACL checks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PublisherKind {
+    Ui,
+    Tui,
+    Agent,
 }
 
 impl Bus {
@@ -122,12 +137,25 @@ impl Bus {
         if server.closed.load(Ordering::SeqCst) {
             return Err(BusError::Closed);
         }
-        Ok(Self { inner: server })
+        Ok(Self {
+            inner: server,
+            kind: PublisherKind::Agent,
+        })
+    }
+
+    /// Connect with an explicit publisher kind (for ACL decisions).
+    pub async fn connect_as<P: AsRef<Path>>(
+        path: P,
+        kind: PublisherKind,
+    ) -> Result<Self, BusError> {
+        let mut bus = Self::connect(path).await?;
+        bus.kind = kind;
+        Ok(bus)
     }
 
     /// Publish a message to a topic (fan-out to subscribers).
     pub async fn publish(&self, topic: &str, message: Message) -> Result<(), BusError> {
-        self.inner.publish(topic, message, true).await
+        self.inner.publish(topic, message, true, self.kind).await
     }
 
     /// Send a direct message to an agent.
@@ -247,9 +275,18 @@ impl Server {
         topic: &str,
         message: Message,
         emit_notifications: bool,
+        publisher: PublisherKind,
     ) -> Result<(), BusError> {
         if self.closed.load(Ordering::SeqCst) {
             return Err(BusError::Closed);
+        }
+        // ACL: Only UI/TUI may publish action decisions
+        if message.header.schema_id == CT_ACTION_DECISION
+            && !self.allowed_action_decision_publisher(publisher)
+        {
+            return Err(BusError::Forbidden(
+                "publisher kind not permitted to publish action.decision".into(),
+            ));
         }
         let now_ms = current_millis();
         if message.is_expired(now_ms)? {
@@ -517,6 +554,8 @@ struct BusConfig {
     send_timeout: Duration,
     dedupe_capacity: usize,
     dedupe_max_age_ms: u64,
+    allow_action_decision_ui: bool,
+    allow_action_decision_tui: bool,
 }
 
 impl Default for BusConfig {
@@ -526,9 +565,23 @@ impl Default for BusConfig {
             send_timeout: Duration::from_millis(50),
             dedupe_capacity: 65_536,
             dedupe_max_age_ms: 120_000,
+            allow_action_decision_ui: true,
+            allow_action_decision_tui: true,
         }
     }
 }
+
+impl Server {
+    fn allowed_action_decision_publisher(&self, kind: PublisherKind) -> bool {
+        match kind {
+            PublisherKind::Ui => self.config.allow_action_decision_ui,
+            PublisherKind::Tui => self.config.allow_action_decision_tui,
+            _ => false,
+        }
+    }
+}
+
+//
 
 enum PushError {
     ChannelClosed,
@@ -973,5 +1026,40 @@ mod tests {
         server.close();
 
         assert!(sub.next().await.is_none(), "subscriber did not terminate");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn action_decision_acl_rejects_agent_and_allows_ui() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("bus-acl");
+        let server = Bus::bind(&path).await.unwrap();
+
+        // Agent-kind publisher should be forbidden for action.decision
+        let agent = Bus::connect(&path).await.unwrap();
+        let mut header = Header::default();
+        header.schema_id = CT_ACTION_DECISION;
+        header.created_at_ms = current_millis();
+        header.ttl_ms = 5_000;
+        header.trace_id = 0xabc;
+        header.msg_id = 1;
+        let msg = Message::new(header, Bytes::from_static(b"{}")).expect("message");
+        let res = agent.publish("actions/decision", msg);
+        assert!(matches!(res.await, Err(BusError::Forbidden(_))));
+
+        // UI-kind publisher is allowed
+        let ui = Bus::connect_as(&path, PublisherKind::Ui).await.unwrap();
+        let mut inbox = ui.subscribe("actions/decision").await.unwrap();
+        let mut header = Header::default();
+        header.schema_id = CT_ACTION_DECISION;
+        header.created_at_ms = current_millis();
+        header.ttl_ms = 5_000;
+        header.trace_id = 0xabc;
+        header.msg_id = 2;
+        let ok_msg = Message::new(header, Bytes::from_static(b"{}")).expect("ok message");
+        ui.publish("actions/decision", ok_msg).await.unwrap();
+        let delivered = inbox.next().await.expect("delivered");
+        assert_eq!(delivered.header.msg_id, 2);
+
+        drop(server);
     }
 }

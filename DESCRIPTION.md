@@ -67,7 +67,7 @@ review.ok    -> send.in
 - `created_at_ms` (sender clock) + `ttl_ms` (expiry)
 - `trace_id`, `opening_id`, `msg_id`
 - **Body**: `{ type, payload, meta? }` with a **JSON‑schema** (on-disk canonical) and **MsgPack** on the wire.
-- **Primitives**: `Observation`, `Intent`, `ToolCall`, `Artifact`, `Critique`, `StateDelta`.
+- **Primitives**: `Observation`, `Intent`, `ToolCall`, `ToolResult`, `Artifact`, `Critique`, `StateDelta`.
 - **Delivery**: pub/sub + RPC, idempotent handlers, backoff retries.
 - **Provenance**: every message carries `who/why/what/model@version`.
 
@@ -108,12 +108,12 @@ Runloop supports **user** and **system** modes with explicit, non‑overlapping 
 
 - **User mode (single user / dev)**  
 - State: `~/.runloop/`  
-- Socket: `~/.runloop/sock`  
+- Socket: `$XDG_RUNTIME_DIR/runloop/runloopd.sock` (fallback `~/.runloop/run/runloopd.sock`)  
 - Logs: `~/.runloop/logs` (or `stderr` when attached)
 - **System mode (daemon)**  
 - Service user: `runloop`  
 - State: `/var/lib/runloop/`  
-- Socket: `/run/runloop`  
+- Socket: `/run/runloop/runloopd.sock`  
 - Logs: journald or `/var/log/runloop/`
 
 ## Configuration (v1 schema sketch)

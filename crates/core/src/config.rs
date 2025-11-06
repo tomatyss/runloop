@@ -30,6 +30,8 @@ pub struct Config {
     pub openings: SearchDirsConfig,
     #[serde(default)]
     pub agents: SearchDirsConfig,
+    #[serde(default)]
+    pub bus: BusConfig,
 }
 
 impl Default for Config {
@@ -49,6 +51,7 @@ impl Default for Config {
             agents: SearchDirsConfig {
                 search_dirs: vec!["~/.runloop/agents".into(), "/usr/lib/runloop/agents".into()],
             },
+            bus: BusConfig::default(),
         }
     }
 }
@@ -69,6 +72,7 @@ impl Config {
             match load_yaml_value(&path) {
                 Ok(Some(mut value)) => {
                     normalize_router_aliases(&mut value);
+                    normalize_kb_aliases(&mut value);
                     warn_unknown_keys(&value, Path::new(""));
                     merge_value(&mut base, value);
                 }
@@ -82,6 +86,7 @@ impl Config {
         }
 
         normalize_router_aliases(&mut base);
+        normalize_kb_aliases(&mut base);
 
         let mut config: Config = serde_json::from_value(base)
             .map_err(|err| Error::Config(format!("config deserialization failed: {err}")))?;
@@ -115,6 +120,26 @@ impl Config {
     fn expand_paths(&mut self) {
         self.runtime.workdir = expand_path(&self.runtime.workdir);
         self.runtime.sockets_dir = expand_path(&self.runtime.sockets_dir);
+        // Deprecation rewrite: only rewrite exact '~/.runloop/sock' (post expansion), not any substring.
+        {
+            let p = std::path::Path::new(&self.runtime.sockets_dir);
+            let last = p.file_name().and_then(|s| s.to_str()) == Some("sock");
+            let parent_is_runloop = p
+                .parent()
+                .and_then(|pp| pp.file_name().and_then(|s| s.to_str()))
+                == Some(".runloop");
+            if last && parent_is_runloop {
+                warn!(
+                    "runtime.sockets_dir '~/.runloop/sock' is deprecated; using '~/.runloop/run' instead"
+                );
+                if let Some(parent) = p.parent() {
+                    self.runtime.sockets_dir = parent.join("run").to_string_lossy().into_owned();
+                }
+            }
+        }
+        if let Some(path) = &self.runtime.socket_path {
+            self.runtime.socket_path = Some(expand_path(path));
+        }
 
         for provider in &mut self.models.broker.providers {
             if let Some(dir) = &provider.model_dir {
@@ -145,6 +170,8 @@ pub struct RuntimeConfig {
     pub base: String,
     #[serde(default = "default_agent_container")]
     pub agent_container: String,
+    #[serde(default)]
+    pub socket_path: Option<String>,
     #[serde(default = "default_runtime_workdir")]
     pub workdir: String,
     #[serde(default = "default_runtime_sockets_dir")]
@@ -160,6 +187,7 @@ impl Default for RuntimeConfig {
         Self {
             base: default_runtime_base(),
             agent_container: default_agent_container(),
+            socket_path: None,
             workdir: default_runtime_workdir(),
             sockets_dir: default_runtime_sockets_dir(),
             max_agents: 0,
@@ -476,6 +504,49 @@ pub struct SearchDirsConfig {
     pub search_dirs: Vec<String>,
 }
 
+// Bus auth configuration
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct BusConfig {
+    #[serde(default)]
+    pub auth: BusAuthConfig,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct BusAuthConfig {
+    #[serde(default)]
+    pub publishers: BusPublishersConfig,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BusPublishersConfig {
+    #[serde(default = "default_allowed_action_decision_kinds")]
+    pub action_decision: BusPublisherRule,
+}
+
+impl Default for BusPublishersConfig {
+    fn default() -> Self {
+        Self {
+            action_decision: default_allowed_action_decision_kinds(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BusPublisherRule {
+    #[serde(default = "default_action_decision_kinds")]
+    pub allowed_kinds: Vec<String>,
+}
+
+fn default_allowed_action_decision_kinds() -> BusPublisherRule {
+    BusPublisherRule {
+        allowed_kinds: default_action_decision_kinds(),
+    }
+}
+
+fn default_action_decision_kinds() -> Vec<String> {
+    vec!["ui".into(), "tui".into()]
+}
+
 // Defaults helpers
 fn default_runtime_base() -> String {
     "debian".into()
@@ -487,7 +558,18 @@ fn default_runtime_workdir() -> String {
     "~/.runloop".into()
 }
 fn default_runtime_sockets_dir() -> String {
-    "~/.runloop/sock".into()
+    // Prefer XDG_RUNTIME_DIR for per-user runtime sockets; fallback to ~/.runloop/run
+    let xdg = std::env::var("XDG_RUNTIME_DIR").ok();
+    default_runtime_sockets_dir_with(xdg.as_deref())
+}
+
+fn default_runtime_sockets_dir_with(xdg: Option<&str>) -> String {
+    if let Some(xdg) = xdg
+        && !xdg.trim().is_empty()
+    {
+        return format!("{}/runloop", xdg.trim_end_matches('/'));
+    }
+    "~/.runloop/run".into()
 }
 fn default_cpu_pct() -> u8 {
     90
@@ -652,6 +734,32 @@ fn normalize_router_aliases(value: &mut Value) {
     }
 }
 
+fn normalize_kb_aliases(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::Object(kb)) = map.get_mut("kb") {
+                if let Some(ledger) = kb.remove("ledger") {
+                    warn!("configuration key 'kb.ledger' is deprecated; use 'kb.events_db'");
+                    kb.entry("events_db").or_insert(ledger);
+                }
+                if let Some(materialized) = kb.remove("materialized") {
+                    warn!("configuration key 'kb.materialized' is deprecated; use 'kb.view_db'");
+                    kb.entry("view_db").or_insert(materialized);
+                }
+            }
+            for value in map.values_mut() {
+                normalize_kb_aliases(value);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                normalize_kb_aliases(item);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn apply_env_overrides(
     root: &mut serde_json::Map<String, Value>,
     env_pairs: impl IntoIterator<Item = (String, String)>,
@@ -799,11 +907,12 @@ fn known_keys_for_path(path: &Path) -> BTreeSet<&'static str> {
     match path_string(path).as_str() {
         "" => BTreeSet::from([
             "version", "runtime", "models", "kb", "security", "router", "ui", "logging",
-            "openings", "agents",
+            "openings", "agents", "bus",
         ]),
         "runtime" => BTreeSet::from([
             "base",
             "agent_container",
+            "socket_path",
             "workdir",
             "sockets_dir",
             "max_agents",
@@ -856,6 +965,10 @@ fn known_keys_for_path(path: &Path) -> BTreeSet<&'static str> {
         "ui" => BTreeSet::from(["theme", "confirm_prompts"]),
         "logging" => BTreeSet::from(["level", "file", "format"]),
         "openings" | "agents" => BTreeSet::from(["search_dirs"]),
+        "bus" => BTreeSet::from(["auth"]),
+        "bus/auth" => BTreeSet::from(["publishers"]),
+        "bus/auth/publishers" => BTreeSet::from(["action_decision"]),
+        "bus/auth/publishers/action_decision" => BTreeSet::from(["allowed_kinds"]),
         _ => BTreeSet::new(),
     }
 }
@@ -909,5 +1022,68 @@ security:
         assert_eq!(config.router.default_opening, "compose_support_ticket");
         assert_eq!(config.security.confirm_external_actions, false);
         assert!(config.kb.root_dir.ends_with(".custom-pog"));
+    }
+
+    #[test]
+    fn kb_aliases_normalized() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config_path = temp.path().join("config.yaml");
+        let mut file = std::fs::File::create(&config_path).expect("create config file");
+        write!(
+            file,
+            r#"
+version: 1
+kb:
+  ledger: "events.sqlite"
+  materialized: "pog.sqlite"
+"#
+        )
+        .expect("write config");
+        let env_pairs: Vec<(String, String)> = vec![];
+        let config = Config::load_from_sources(vec![config_path], env_pairs).expect("config load");
+        assert_eq!(config.kb.events_db, "events.sqlite");
+        assert_eq!(config.kb.view_db, "pog.sqlite");
+    }
+
+    #[test]
+    fn sockets_dir_prefers_xdg_runtime_dir() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let xdg_dir = temp.path().join("xdg");
+        std::fs::create_dir_all(&xdg_dir).expect("mkdir xdg");
+        let xdg_str = xdg_dir.to_string_lossy().to_string();
+        let resolved = super::default_runtime_sockets_dir_with(Some(&xdg_str));
+        let expected_prefix = format!(
+            "{}/runloop",
+            xdg_dir.to_string_lossy().trim_end_matches('/')
+        );
+        assert!(
+            resolved.starts_with(&expected_prefix),
+            "sockets_dir={} expected prefix {}",
+            resolved,
+            expected_prefix
+        );
+    }
+
+    #[test]
+    fn deprecation_rewrite_for_sock_dir() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config_path = temp.path().join("config.yaml");
+        let mut file = std::fs::File::create(&config_path).expect("create config file");
+        write!(
+            file,
+            r#"
+version: 1
+runtime:
+  agent_container: "wasm32-wasi"
+  sockets_dir: "~/.runloop/sock"
+"#
+        )
+        .expect("write config");
+        let config = Config::load_from_sources(vec![config_path], Vec::new()).expect("load");
+        assert!(
+            config.runtime.sockets_dir.ends_with("/.runloop/run"),
+            "sockets_dir rewrite failed: {}",
+            config.runtime.sockets_dir
+        );
     }
 }
