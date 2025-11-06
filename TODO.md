@@ -188,26 +188,31 @@
 
 **G1. DSL parser**
 
-* [ ] Path: `crates/openings/`.
-* [ ] YAML→IR: nodes (name,use,with), edges (from,to), policy (budget,timeout,confirm_external).
-* [ ] Templating: `{{params.foo}}` expansion only (no loops/logic).
+* [x] Path: `crates/openings/`.
+* [x] YAML→IR: nodes (name,use,with), edges (from,to), policy (budget,timeout,confirm_external).
+* [x] Templating: `{{params.foo}}` expansion only (no loops/logic).
 
-**DoD:** Parse `examples/openings/compose_email.yaml` into IR; validation errors include line/col.
+**DoD:** Parse `examples/openings/compose_email.yaml` into IR; validation errors include line/col. ✅
 
 **G2. Runner & scheduler**
 
-* [ ] Topological execution; fan‑in waits; fan‑out sends clones of artifacts.
-* [ ] Retries with backoff from policy; per‑node timeout; propagate failure with reason.
-* [ ] Pass **Artifacts** and simple scalars between nodes.
+* [x] Topological execution; fan‑in waits; fan‑out sends clones of artifacts.
+* [x] Retries with backoff from policy; per‑node timeout; propagate failure with reason.
+* [x] Pass **Artifacts** and simple scalars between nodes.
 
-**DoD:** End‑to‑end run with recorded per‑node status.
+**DoD:** End‑to‑end run with recorded per‑node status. ✅
 
 **G3. Replay**
 
-* [ ] Record inputs/outputs per node (message ids); `replay(trace_id)` re‑feeds inputs to produce same outputs (when providers deterministic).
-* [ ] Diff tool: show mismatches (if any).
+* [x] Record inputs/outputs per node and output hashes; `rlp replay` re‑feeds inputs to produce same outputs (when providers deterministic).
+* [x] Diff tool: show mismatches (if any).
 
-**DoD:** Replay of a deterministic run matches outputs hash.
+**DoD:** Replay of a deterministic run matches outputs hash. ✅
+
+**Follow-ups**
+
+* [ ] Integrate Runner with `runloopd`/bus executor so node work goes through real agents instead of the local stub.
+* [ ] Persist run/replay traces in the knowledge base (`run.*` / `node.*` events) once schemas are ready.
 
 ---
 

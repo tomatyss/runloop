@@ -1,8 +1,15 @@
+use async_trait::async_trait;
 use clap::{Args, Parser, Subcommand};
-use runloop_core::Config;
+use runloop_core::{Config, TraceId};
 use runloop_kb::{KnowledgeBase, Materializer};
+use runloop_openings::{
+    Executor, NodeExecution, NodeExecutionRequest, NodeOutputs, NodeState, ReplayMismatch,
+    RunReport, RunTrace, Runner, RunnerError, parse_opening_str, replay,
+};
 use runloop_router::{Classification, Router};
-use serde_json::to_string_pretty;
+use serde_json::{Value as JsonValue, to_string_pretty, to_writer_pretty};
+use serde_yaml::{self, Mapping as YamlMapping, Value as YamlValue};
+use std::{fs, fs::File, path::PathBuf, sync::Arc};
 use thiserror::Error;
 
 #[derive(Parser, Debug)]
@@ -32,16 +39,25 @@ struct WhyArgs {
 
 #[derive(Args, Debug)]
 struct RunArgs {
-    /// Prompt to execute via router.
-    #[arg(value_name = "PROMPT", trailing_var_arg = true)]
-    prompt: Vec<String>,
+    /// Path to the opening YAML file to execute.
+    #[arg(value_name = "OPENING_PATH")]
+    path: String,
+    /// Optional JSON object providing parameter overrides.
+    #[arg(long, value_name = "JSON")]
+    params: Option<String>,
+    /// Optional path to write a serialized run trace for replay.
+    #[arg(long, value_name = "TRACE_PATH")]
+    trace_out: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
 struct ReplayArgs {
-    /// Trace identifier to replay.
-    #[arg(value_name = "TRACE_ID")]
-    trace_id: Option<String>,
+    /// Path to a previously recorded run trace (JSON).
+    #[arg(value_name = "TRACE_PATH")]
+    trace_path: String,
+    /// Opening YAML to use when replaying the trace.
+    #[arg(long, value_name = "OPENING_PATH")]
+    opening: String,
 }
 
 #[derive(Subcommand, Debug)]
@@ -83,6 +99,49 @@ enum CliError {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Kb(#[from] runloop_kb::Error),
+    #[error(transparent)]
+    Openings(#[from] runloop_openings::Error),
+    #[error(transparent)]
+    Runner(#[from] RunnerError),
+    #[error("invalid parameters: {0}")]
+    InvalidParams(String),
+    #[error("invalid trace: {0}")]
+    InvalidTrace(String),
+    #[error("opening run failed (trace {0})")]
+    RunFailure(TraceId),
+    #[error("replay detected mismatches")]
+    ReplayFailure(Vec<ReplayMismatch>),
+}
+
+struct LocalExecutor;
+
+#[async_trait]
+impl Executor for LocalExecutor {
+    async fn execute(
+        &self,
+        request: NodeExecutionRequest<'_>,
+    ) -> Result<NodeExecution, RunnerError> {
+        println!(
+            "executing node '{}' (attempt {})",
+            request.node.id, request.attempt
+        );
+        let mut outputs = NodeOutputs::default();
+        for (port, values) in &request.inputs.ports {
+            for value in values {
+                outputs.push(port, value.clone());
+            }
+        }
+        if !outputs.ports.contains_key("out") {
+            outputs.push(
+                "out",
+                JsonValue::String(format!("{}::out", request.node.id)),
+            );
+        }
+        if !outputs.ports.contains_key("ok") {
+            outputs.push("ok", JsonValue::Bool(true));
+        }
+        Ok(NodeExecution::Completed(outputs))
+    }
 }
 
 #[tokio::main]
@@ -117,25 +176,102 @@ async fn handle_why(args: WhyArgs) -> Result<(), CliError> {
 }
 
 async fn handle_run(args: RunArgs) -> Result<(), CliError> {
-    let prompt = args.prompt.join(" ");
-    if prompt.is_empty() {
-        println!("run command not yet implemented; provide a prompt to execute");
-    } else {
-        println!(
-            "run command not yet implemented; received prompt: {}",
-            prompt
-        );
+    let source = fs::read_to_string(&args.path)?;
+    let mut doc: YamlValue = serde_yaml::from_str(&source)
+        .map_err(|err| CliError::InvalidTrace(format!("invalid YAML: {err}")))?;
+
+    if let Some(params_json) = args.params.as_deref() {
+        let parsed: JsonValue = serde_json::from_str(params_json)?;
+        let obj = parsed
+            .as_object()
+            .ok_or_else(|| CliError::InvalidParams("params must be a JSON object".into()))?;
+
+        let mapping = doc
+            .as_mapping_mut()
+            .ok_or_else(|| CliError::InvalidTrace("opening YAML must be a mapping".into()))?;
+
+        let params_entry = mapping
+            .entry(YamlValue::from("params"))
+            .or_insert_with(|| YamlValue::Mapping(YamlMapping::new()));
+
+        let params_mapping = params_entry
+            .as_mapping_mut()
+            .ok_or_else(|| CliError::InvalidParams("existing params must be a mapping".into()))?;
+
+        for (key, value) in obj {
+            let yaml_value = serde_yaml::to_value(value.clone())
+                .map_err(|err| CliError::InvalidParams(format!("invalid param value: {err}")))?;
+            params_mapping.insert(YamlValue::from(key.clone()), yaml_value);
+        }
     }
-    Ok(())
+
+    let opening_yaml =
+        serde_yaml::to_string(&doc).map_err(|err| CliError::InvalidTrace(err.to_string()))?;
+    let opening = parse_opening_str(&opening_yaml)?;
+
+    let opening_name = opening.name.clone();
+    let executor = Arc::new(LocalExecutor);
+    let runner = Runner::new(opening, executor);
+    let report: RunReport = runner.run().await?;
+
+    println!("opening: {}", opening_name);
+    println!("trace id: {}", report.trace.trace_id);
+    for record in &report.node_records {
+        match &record.state {
+            NodeState::Succeeded => println!("  {} -> succeeded", record.node_id),
+            NodeState::Failed { reason } => {
+                println!("  {} -> failed ({reason})", record.node_id);
+            }
+            NodeState::Skipped => println!("  {} -> skipped", record.node_id),
+            NodeState::Cancelled => println!("  {} -> cancelled", record.node_id),
+            other => println!("  {} -> {:?}", record.node_id, other),
+        }
+    }
+    println!("success: {}", report.trace.success);
+    println!("final hash: {}", report.trace.final_hash);
+
+    if let Some(path) = args.trace_out {
+        let file = File::create(&path)?;
+        to_writer_pretty(file, &report.trace)?;
+        println!("trace saved to {}", path.display());
+    }
+
+    if report.trace.success {
+        Ok(())
+    } else {
+        Err(CliError::RunFailure(report.trace.trace_id))
+    }
 }
 
 async fn handle_replay(args: ReplayArgs) -> Result<(), CliError> {
-    if let Some(trace_id) = args.trace_id {
-        println!("replay command not yet implemented; trace id: {trace_id}");
+    let trace_data = fs::read_to_string(&args.trace_path)?;
+    let trace: RunTrace =
+        serde_json::from_str(&trace_data).map_err(|err| CliError::InvalidTrace(err.to_string()))?;
+
+    let opening_source = fs::read_to_string(&args.opening)?;
+    let opening = parse_opening_str(&opening_source)?;
+
+    let executor = LocalExecutor;
+    let report = replay(&executor, &opening, &trace).await?;
+
+    println!("trace id: {}", trace.trace_id);
+    println!("original success: {}", trace.success);
+    println!("replay hash: {}", report.replay_hash);
+    if report.matches {
+        println!("replay matches recorded outputs");
+        Ok(())
     } else {
-        println!("replay command not yet implemented; supply a trace id");
+        println!("replay mismatches detected ({}):", report.mismatches.len());
+        for mismatch in &report.mismatches {
+            let expected = mismatch.expected_hash.as_deref().unwrap_or("<none>");
+            let actual = mismatch.actual_hash.as_deref().unwrap_or("<none>");
+            println!(
+                "  {} -> {} (expected {}, actual {})",
+                mismatch.node_id, mismatch.reason, expected, actual
+            );
+        }
+        Err(CliError::ReplayFailure(report.mismatches.clone()))
     }
-    Ok(())
 }
 
 async fn handle_kb(cmd: KbCommands) -> Result<(), CliError> {

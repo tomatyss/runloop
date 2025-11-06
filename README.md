@@ -158,6 +158,8 @@ opening "compose_email" {
 }
 ```
 
+See the canonical YAML at `examples/openings/compose_email.yaml` for the normative form used by the parser.
+
 ---
 
 ## Message Protocol (RMP)
@@ -181,10 +183,12 @@ Local‑first storage with:
 
 ## CLI & TUI
 
-- **`rlp`** – prompt entry (routes to shell fast‑path or to an Opening), budget flags, dry‑run.
+- **`rlp`** – prompt entry (routes to shell fast-path or to an Opening), budget flags, dry-run.
   - Explain routing decisions with `cargo run -p rlp -- why "ls -la"` (plain text) or append `--json` for machine-readable output.
+  - Run an Opening locally with `cargo run -p rlp -- run examples/openings/compose_email.yaml --params '{"recipient":"john","topic":"Q4 plan"}' --trace-out trace.json`. The command executes the YAML via the openings engine, prints per-node status, and optionally writes a replayable trace. (The current executor is a stub that echoes inputs and marks nodes `ok=true`; hook it to `runloopd` in production.)
+  - Replay a recorded run with `cargo run -p rlp -- replay trace.json --opening examples/openings/compose_email.yaml`; mismatches are reported per node with output hashes.
   - Knowledge base helpers: `rlp kb migrate`, `rlp kb query "<SQL>"`, `rlp kb search <keyword>`, and `rlp kb why <entity>` all operate on the local POG databases.
-- **`agtop`** – per‑agent CPU/RSS/token metrics, error rate.
+- **`agtop`** – per-agent CPU/RSS/token metrics, error rate.
 - **Tracing** – `runloop trace <id>` prints a ladder diagram of crossings.
 
 ---

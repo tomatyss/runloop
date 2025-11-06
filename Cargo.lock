@@ -2810,12 +2810,15 @@ dependencies = [
 name = "rlp"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "clap",
  "runloop-core",
  "runloop-kb",
+ "runloop-openings",
  "runloop-router",
  "serde",
  "serde_json",
+ "serde_yaml",
  "thiserror 1.0.69",
  "tokio",
 ]
@@ -2915,10 +2918,17 @@ dependencies = [
 name = "runloop-openings"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "blake3",
+ "indexmap",
+ "rand 0.8.5",
  "runloop-core",
  "serde",
+ "serde_json",
+ "serde_spanned",
  "serde_yaml",
  "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]

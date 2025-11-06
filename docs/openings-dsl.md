@@ -8,7 +8,7 @@
 
 An **Opening** is a typed, declarative **DAG** of agents (“nodes”) and their connections (“edges”). It is the plan the runtime executes: fan‑out/fan‑in, retries, timeouts, budgets, and deterministic **replay** are first‑class. The bus carries schema‑tagged messages (RMP), and every crossing is traced and auditable.
 
-**MVP reference opening (compose_email):** `contact_resolver → context_gatherer → writer → critic → mailer (human‑confirm)`; used throughout examples.
+**MVP reference opening (compose_email):** `contact_resolver → context_gatherer → writer → critic → mailer (human-confirm)`; used throughout examples. The canonical YAML lives at `examples/openings/compose_email.yaml`.
 
 ---
 
@@ -219,11 +219,12 @@ RMP **schema_id** is a `u16` referencing a small registry of content types (e.g.
 
 ## 10) CLI integration
 
-* Run: `rlp run openings/compose_email.yaml --params '{"recipient":"john","topic":"Q4 plan"}'`
+* Run: `rlp run examples/openings/compose_email.yaml --params '{"recipient":"john","topic":"Q4 plan"}' --trace-out trace.json`
+  * Executes the YAML plan via the openings engine, prints node status, and writes an optional JSON trace for later replay. The CLI currently uses a local stub executor (echoes inputs + `ok=true`) while the daemon integration is being wired up.
 * Explain routing: `rlp why "<prompt>"`
-* Replay: `rlp replay <trace_id>`
-* KB: `rlp kb query ...`, `rlp kb why <id>`
-  All commands produce structured output with sensible exit codes.
+* Replay: `rlp replay trace.json --opening examples/openings/compose_email.yaml`
+  * KB: `rlp kb query ...`, `rlp kb why <id>`
+    All commands produce structured output with sensible exit codes.
 
 ---
 
