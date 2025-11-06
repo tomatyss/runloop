@@ -114,3 +114,70 @@ The hostcall treats `prompt_len` as both the size of the prompt to read and the 
 ### Recommended Fix
 
 Extend the hostcall signature to separate the prompt input length from the output buffer capacity (or write into a distinct pointer). The host should read only the initialized prompt slice and use an explicit capacity when checking for response truncation.
+
+## 6. Predicate Comparisons Overflow On Large Unsigned Values
+
+- **Status:** High  
+- **Scope:** `crates/openings/src/runner.rs:216-254`
+
+### What Happens
+
+`evaluate_predicate` handles integer literals by first checking `num.as_i64()`, then falling back to `num.as_u64()` and casting the result to `i64`. Values above `i64::MAX` therefore wrap into the negative range before being compared, so predicates like `foo.score >= 9223372036854775808` evaluate against a negative number.
+
+### Impact
+
+- Openings that gate on monotonically increasing counters or IDs (e.g., Snowflake IDs) report false negatives.
+- Success conditions tied to large numeric thresholds can be bypassed because the comparison sees wrapped values.
+- Replay traces drift from real world runs when large unsigned outputs appear.
+
+### Root Cause
+
+The integer code path truncates `u64` values to `i64` instead of keeping the comparison in an unsigned domain (or promoting both sides to `f64`/BigInt).
+
+### Recommended Fix
+
+Preserve unsigned comparisons—either compare using `u128`/`u64` throughout or branch on the literal type so `Literal::Integer` drives `as_i128`/`as_u128`-aware logic without lossy casts.
+
+## 7. Default Config Emits Spurious Missing-Directory Warnings
+
+- **Status:** Medium  
+- **Scope:** `crates/core/src/config.rs:48-134`
+
+### What Happens
+
+`Config::validate` now calls `warn_missing_search_dirs` for openings and agents. The new defaults include repo-relative paths (`./examples/openings`, `./agents`) and user directories (`~/.runloop/*`) that typically do not exist on a fresh install, so every CLI invocation prints multiple WARN lines.
+
+### Impact
+
+- Users see noisy warnings even when nothing is misconfigured, reducing trust in diagnostics.
+- CI and scripted runs that treat WARN as noteworthy now look degraded after this change.
+
+### Root Cause
+
+The helper unconditionally warns on missing directories, including those injected by the default configuration instead of user-provided overrides.
+
+### Recommended Fix
+
+Downgrade the log level (e.g., to debug) for default paths, or emit warnings only for directories supplied via config files/env overrides. Alternatively, create the repo-relative directories during validation instead of warning.
+
+## 8. Node Status Output Order Is Non-Deterministic
+
+- **Status:** Low  
+- **Scope:** `crates/openings/src/runner.rs:170-212`
+
+### What Happens
+
+`RunReport` collects `node_records` from a `HashMap`, and the CLI prints them in that iteration order. Because `HashMap` iteration is randomized, successive runs of the same opening emit node statuses in different orders (e.g., `review` before `contacts`).
+
+### Impact
+
+- Harder to eyeball regressions in CLI runs because the table reshuffles each invocation.
+- Replay comparisons require extra diff noise filtering to spot real differences.
+
+### Root Cause
+
+The report drains `records.into_values()` instead of preserving the topological or declared node order.
+
+### Recommended Fix
+
+Collect records in `opening.nodes` order (or perform a topological sort) before returning them, ensuring deterministic CLI output and trace serialization.
