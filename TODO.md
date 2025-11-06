@@ -171,16 +171,16 @@
 **F1. Broker interface**
 
 * [x] Path: `crates/model-broker/`.
-* [ ] `complete(ModelRequest) -> ModelOutput` with `budget_tokens`, `timeout`, `cache_key`.
-* [ ] Providers: `NullProvider` (echo), `HttpProvider` (configurable base URL + `secret_id`).
+* [x] `complete(ModelRequest) -> ModelOutput` with `budget_tokens`, `timeout`, `cache_key`.
+* [x] Providers: `NullProvider` (echo), `HttpProvider` (configurable base URL + `secret_id`).
 
-**DoD:** Budget/timeout enforced; `NullProvider` available for offline tests; [x] `stream=true` returns a deterministic unsupported error. [ ] Upgrade to typed ERROR_REPORT end-to-end.
+**DoD:** Budget/timeout enforced; `NullProvider` available for offline tests; `stream=true` returns a deterministic `StreamingUnsupported` error until the Phase-3 feature flag lands. ✅
 
 **F2. Simple cache**
 
-* [ ] LRU in‑memory keyed by `(model,prompt,params)`; TTL configurable.
+* [x] LRU in‑memory keyed by `(model,prompt,params)`; TTL configurable.
 
-**DoD:** Cache hit metric increments; unit test hits after warm.
+**DoD:** Cache hit metric increments; unit test hits after warm. ✅
 
 ---
 

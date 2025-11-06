@@ -1,7 +1,9 @@
 use crate::Error;
 use dirs::{config_dir, home_dir};
+use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
@@ -237,19 +239,24 @@ impl Default for ModelsConfig {
 pub struct BrokerConfig {
     #[serde(default)]
     pub providers: Vec<ModelProvider>,
+    #[serde(
+        default = "default_route_vec",
+        alias = "routing",
+        deserialize_with = "deserialize_route"
+    )]
+    pub route: Vec<ModelRoute>,
     #[serde(default)]
-    pub routing: BTreeMap<String, String>,
+    pub cache: BrokerCacheConfig,
     #[serde(default)]
     pub budgets: ModelBudgets,
 }
 
 impl Default for BrokerConfig {
     fn default() -> Self {
-        let mut routing = BTreeMap::new();
-        routing.insert("*".into(), "local".into());
         Self {
             providers: Vec::new(),
-            routing,
+            route: default_route_vec(),
+            cache: BrokerCacheConfig::default(),
             budgets: ModelBudgets::default(),
         }
     }
@@ -264,7 +271,88 @@ pub struct ModelProvider {
     #[serde(default)]
     pub base_url: Option<String>,
     #[serde(default)]
-    pub auth: Option<String>,
+    pub secret_id: Option<String>,
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
+    #[serde(default)]
+    pub schema: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ModelRoute {
+    pub pattern: String,
+    pub provider: String,
+    #[serde(default)]
+    pub target_model: Option<String>,
+}
+
+fn deserialize_route<'de, D>(deserializer: D) -> Result<Vec<ModelRoute>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum RouteRepr {
+        List(Vec<ModelRoute>),
+        Map(BTreeMap<String, String>),
+    }
+
+    let maybe = Option::<RouteRepr>::deserialize(deserializer)?;
+    let routes = match maybe {
+        Some(RouteRepr::List(list)) => list,
+        Some(RouteRepr::Map(map)) => {
+            let mut entries: Vec<_> = map.into_iter().collect();
+            entries.sort_by(|(left, _), (right, _)| {
+                route_pattern_key(left).cmp(&route_pattern_key(right))
+            });
+            entries
+                .into_iter()
+                .map(|(pattern, provider)| ModelRoute {
+                    pattern,
+                    provider,
+                    target_model: None,
+                })
+                .collect()
+        }
+        None => default_route_vec(),
+    };
+    if routes.is_empty() {
+        Ok(default_route_vec())
+    } else {
+        Ok(routes)
+    }
+}
+
+fn route_pattern_key(pattern: &str) -> (bool, bool, Reverse<usize>, &str) {
+    let is_catch_all = pattern == "*";
+    let has_wildcard = pattern.contains('*');
+    let specificity = pattern.chars().filter(|c| *c != '*').count();
+    (is_catch_all, has_wildcard, Reverse(specificity), pattern)
+}
+
+fn default_route_vec() -> Vec<ModelRoute> {
+    vec![ModelRoute {
+        pattern: "*".into(),
+        provider: "local".into(),
+        target_model: None,
+    }]
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BrokerCacheConfig {
+    #[serde(default = "default_broker_cache_ttl_ms")]
+    pub ttl_ms: u64,
+    #[serde(default = "default_broker_cache_capacity")]
+    pub capacity: usize,
+}
+
+impl Default for BrokerCacheConfig {
+    fn default() -> Self {
+        Self {
+            ttl_ms: default_broker_cache_ttl_ms(),
+            capacity: default_broker_cache_capacity(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -588,6 +676,12 @@ fn default_broker_default_tokens() -> u32 {
 }
 fn default_per_request_cap() -> u32 {
     2_000
+}
+fn default_broker_cache_ttl_ms() -> u64 {
+    600_000
+}
+fn default_broker_cache_capacity() -> usize {
+    1_024
 }
 fn default_kb_root() -> String {
     "~/.runloop/pog".into()
@@ -1085,5 +1179,58 @@ runtime:
             "sockets_dir rewrite failed: {}",
             config.runtime.sockets_dir
         );
+    }
+
+    #[test]
+    fn broker_route_map_orders_catch_all_last() {
+        let json = r#"{
+            "version": 1,
+            "models": {
+                "broker": {
+                    "route": {
+                        "gpt4*": "openai",
+                        "*": "local"
+                    }
+                }
+            }
+        }"#;
+        let config: Config = serde_json::from_str(json).expect("config parse");
+        let routes = &config.models.broker.route;
+        assert_eq!(routes.len(), 2);
+        assert_eq!(routes[0].pattern, "gpt4*");
+        assert_eq!(routes[1].pattern, "*");
+    }
+
+    #[test]
+    fn legacy_routing_key_deserializes() {
+        let json = r#"{
+            "version": 1,
+            "models": {
+                "broker": {
+                    "routing": {
+                        "*": "local"
+                    }
+                }
+            }
+        }"#;
+        let config: Config = serde_json::from_str(json).expect("config parse");
+        assert_eq!(config.models.broker.route.len(), 1);
+        assert_eq!(config.models.broker.route[0].provider, "local");
+    }
+
+    #[test]
+    fn missing_route_defaults_to_local() {
+        let json = r#"{
+            "version": 1,
+            "models": {
+                "broker": {
+                    "providers": []
+                }
+            }
+        }"#;
+        let config: Config = serde_json::from_str(json).expect("config parse");
+        assert_eq!(config.models.broker.route.len(), 1);
+        assert_eq!(config.models.broker.route[0].provider, "local");
+        assert_eq!(config.models.broker.route[0].pattern, "*");
     }
 }

@@ -33,9 +33,10 @@ use crate::spec::{AgentIdentity, AgentSpec};
 use crate::stats::{AgentStats, read_stats};
 
 use runloop_bus::{Bus, Message};
+use runloop_core::config::BrokerConfig;
 use runloop_core::ids::AgentId;
 use runloop_kb::KnowledgeBase;
-use runloop_model_broker::Broker;
+use runloop_model_broker::{Broker, SecretResolver};
 
 /// Runtime embedding for agent Wasm modules.
 pub struct Runtime {
@@ -81,6 +82,39 @@ impl AsyncSpawner {
     {
         self.handle.block_on(fut)
     }
+
+    fn handle(&self) -> TokioHandle {
+        self.handle.clone()
+    }
+}
+
+struct RuntimeSecretResolver {
+    inner: RwLock<Arc<dyn SecretProvider>>,
+}
+
+impl RuntimeSecretResolver {
+    fn new(provider: Arc<dyn SecretProvider>) -> Self {
+        Self {
+            inner: RwLock::new(provider),
+        }
+    }
+
+    fn set(&self, provider: Arc<dyn SecretProvider>) {
+        *self.inner.write() = provider;
+    }
+}
+
+impl SecretResolver for RuntimeSecretResolver {
+    fn resolve(&self, secret_id: &str) -> Option<String> {
+        self.inner.read().resolve(secret_id)
+    }
+}
+
+fn default_broker(resolver: &Arc<RuntimeSecretResolver>) -> Arc<Broker> {
+    let resolver_arc: Arc<dyn SecretResolver> = resolver.clone();
+    Arc::new(
+        Broker::new(BrokerConfig::default(), resolver_arc).expect("default broker configuration"),
+    )
 }
 
 struct AgentProcess {
@@ -108,6 +142,8 @@ pub struct RuntimeBuilder {
     kb: Arc<KnowledgeBase>,
     broker: Arc<Broker>,
     secrets: Arc<dyn SecretProvider>,
+    secret_resolver: Arc<RuntimeSecretResolver>,
+    broker_overridden: bool,
     bus: Option<Bus>,
     audit_capacity: usize,
     async_handle: Option<TokioHandle>,
@@ -117,10 +153,14 @@ impl RuntimeBuilder {
     #[must_use]
     pub fn new() -> Self {
         let secrets: Arc<dyn SecretProvider> = Arc::new(SecretStore::new());
+        let secret_resolver = Arc::new(RuntimeSecretResolver::new(Arc::clone(&secrets)));
+        let broker = default_broker(&secret_resolver);
         Self {
             kb: Arc::new(KnowledgeBase::new()),
-            broker: Arc::new(Broker::new()),
+            broker,
             secrets,
+            secret_resolver,
+            broker_overridden: false,
             bus: None,
             audit_capacity: 512,
             async_handle: None,
@@ -136,12 +176,17 @@ impl RuntimeBuilder {
     #[must_use]
     pub fn model_broker(mut self, broker: Arc<Broker>) -> Self {
         self.broker = broker;
+        self.broker_overridden = true;
         self
     }
 
     #[must_use]
     pub fn secrets(mut self, secrets: Arc<dyn SecretProvider>) -> Self {
+        self.secret_resolver.set(Arc::clone(&secrets));
         self.secrets = secrets;
+        if !self.broker_overridden {
+            self.broker = default_broker(&self.secret_resolver);
+        }
         self
     }
 
@@ -261,6 +306,10 @@ impl Runtime {
             self.inner.hostcall_stats.clone(),
             id,
             identity_label.clone(),
+            self.inner
+                .async_spawner
+                .as_ref()
+                .map(|spawner| spawner.handle()),
         ));
 
         let process = Arc::new(AgentProcess {
@@ -696,5 +745,29 @@ impl<'a> TidGuard<'a> {
 impl<'a> Drop for TidGuard<'a> {
     fn drop(&mut self) {
         self.tid.store(0, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::*;
+
+    struct TestProvider(&'static str);
+
+    impl SecretProvider for TestProvider {
+        fn resolve(&self, _secret_id: &str) -> Option<String> {
+            Some(self.0.to_string())
+        }
+    }
+
+    #[test]
+    fn runtime_secret_resolver_switches_providers() {
+        let initial: Arc<dyn SecretProvider> = Arc::new(TestProvider("alpha"));
+        let resolver = RuntimeSecretResolver::new(Arc::clone(&initial));
+        assert_eq!(resolver.resolve("any"), Some("alpha".into()));
+
+        let updated: Arc<dyn SecretProvider> = Arc::new(TestProvider("beta"));
+        resolver.set(Arc::clone(&updated));
+        assert_eq!(resolver.resolve("any"), Some("beta".into()));
     }
 }

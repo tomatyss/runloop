@@ -2069,6 +2069,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "metrics"
+version = "0.22.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56d05972e8cbac2671e85aa9d04d9160d193f8bebd1a5c1a2f4542c62e65d1d0"
+dependencies = [
+ "ahash",
+ "portable-atomic",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2357,6 +2367,12 @@ name = "pkg-config"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
+
+[[package]]
+name = "portable-atomic"
+version = "1.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f84267b20a16ea918e43c6a88433c2d54fa145c92a811b5b047ccbe153674483"
 
 [[package]]
 name = "postcard"
@@ -2883,7 +2899,10 @@ dependencies = [
 name = "runloop-model-broker"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "blake3",
  "lru 0.16.2",
+ "metrics",
  "reqwest 0.12.24",
  "runloop-core",
  "serde",
@@ -2943,6 +2962,7 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "procfs",
+ "rmp-serde",
  "runloop-bus",
  "runloop-core",
  "runloop-kb",
