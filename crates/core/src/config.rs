@@ -559,7 +559,12 @@ fn default_runtime_workdir() -> String {
 }
 fn default_runtime_sockets_dir() -> String {
     // Prefer XDG_RUNTIME_DIR for per-user runtime sockets; fallback to ~/.runloop/run
-    if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR")
+    let xdg = std::env::var("XDG_RUNTIME_DIR").ok();
+    default_runtime_sockets_dir_with(xdg.as_deref())
+}
+
+fn default_runtime_sockets_dir_with(xdg: Option<&str>) -> String {
+    if let Some(xdg) = xdg
         && !xdg.trim().is_empty()
     {
         return format!("{}/runloop", xdg.trim_end_matches('/'));
@@ -1043,23 +1048,20 @@ kb:
     #[test]
     fn sockets_dir_prefers_xdg_runtime_dir() {
         let temp = tempfile::tempdir().expect("tempdir");
-        // Set XDG_RUNTIME_DIR for this test
         let xdg_dir = temp.path().join("xdg");
         std::fs::create_dir_all(&xdg_dir).expect("mkdir xdg");
-        std::env::set_var("XDG_RUNTIME_DIR", &xdg_dir);
-        // Loading defaults should pick up XDG path
-        let config = Config::load_from_sources(vec![], Vec::new()).expect("config load");
+        let xdg_str = xdg_dir.to_string_lossy().to_string();
+        let resolved = super::default_runtime_sockets_dir_with(Some(&xdg_str));
         let expected_prefix = format!(
             "{}/runloop",
             xdg_dir.to_string_lossy().trim_end_matches('/')
         );
         assert!(
-            config.runtime.sockets_dir.starts_with(&expected_prefix),
+            resolved.starts_with(&expected_prefix),
             "sockets_dir={} expected prefix {}",
-            config.runtime.sockets_dir,
+            resolved,
             expected_prefix
         );
-        std::env::remove_var("XDG_RUNTIME_DIR");
     }
 
     #[test]
