@@ -48,10 +48,18 @@ impl Default for Config {
             ui: UiConfig::default(),
             logging: LoggingConfig::default(),
             openings: SearchDirsConfig {
-                search_dirs: vec!["~/.runloop/openings".into(), "/etc/runloop/openings".into()],
+                search_dirs: vec![
+                    "~/.runloop/openings".into(),
+                    "./examples/openings".into(),
+                    "/etc/runloop/openings".into(),
+                ],
             },
             agents: SearchDirsConfig {
-                search_dirs: vec!["~/.runloop/agents".into(), "/usr/lib/runloop/agents".into()],
+                search_dirs: vec![
+                    "~/.runloop/agents".into(),
+                    "./agents".into(),
+                    "/usr/lib/runloop/agents".into(),
+                ],
             },
             bus: BusConfig::default(),
         }
@@ -116,6 +124,8 @@ impl Config {
                 "router denylist empty while confirmations required; consider keeping protective entries"
             );
         }
+        warn_missing_search_dirs("openings.search_dirs", &self.openings.search_dirs);
+        warn_missing_search_dirs("agents.search_dirs", &self.agents.search_dirs);
         Ok(())
     }
 
@@ -973,6 +983,16 @@ fn expand_path(path: &str) -> String {
     shellexpand::full(path)
         .map(|cow| cow.to_string())
         .unwrap_or_else(|_| path.to_string())
+}
+
+fn warn_missing_search_dirs(label: &str, dirs: &[String]) {
+    for dir in dirs {
+        let expanded = expand_path(dir);
+        let path = Path::new(&expanded);
+        if !path.exists() {
+            warn!("configured {} entry '{}' does not exist", label, expanded);
+        }
+    }
 }
 
 fn warn_unknown_keys(document: &Value, path: &Path) {

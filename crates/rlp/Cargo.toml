@@ -7,8 +7,11 @@ edition = "2024"
 runloop-core = { path = "../core" }
 runloop-router = { path = "../router" }
 runloop-kb = { path = "../kb" }
+runloop-openings = { path = "../openings" }
 clap = { version = "4.5", features = ["derive"] }
 tokio = { version = "1.38", features = ["rt-multi-thread", "macros"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"
+serde_yaml = "0.9"
+async-trait = "0.1"
