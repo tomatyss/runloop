@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc as sync_mpsc;
 
 use crate::audit::{AuditCategory, AuditSink};
 use crate::caps::{CapabilitySet, Caps, NetLocation};
@@ -9,8 +10,9 @@ use anyhow::anyhow;
 use parking_lot::Mutex;
 use runloop_core::ids::{AgentId, TraceId};
 use runloop_kb::{AuditDecision, AuditSeverity, CapAuditRecord, KnowledgeBase};
-use runloop_model_broker::{Broker, CompletionRequest};
+use runloop_model_broker::{Broker, BrokerError, ModelRequest, ModelResult};
 use runloop_rmp::Header;
+use tokio::runtime::{Builder as TokioBuilder, Handle as TokioHandle};
 use tokio::sync::mpsc;
 use url::Url;
 use wasmtime::{AsContext, AsContextMut, Caller, Error as WasmtimeError, Linker, Memory};
@@ -36,6 +38,7 @@ pub(crate) struct HostState {
     trace_id: TraceId,
     identity: String,
     deny_flag: Arc<AtomicBool>,
+    async_handle: Option<TokioHandle>,
 }
 
 impl HostState {
@@ -49,6 +52,7 @@ impl HostState {
         hostcall_stats: Arc<HostcallStats>,
         agent_id: AgentId,
         identity: String,
+        async_handle: Option<TokioHandle>,
     ) -> Self {
         Self {
             caps,
@@ -61,6 +65,7 @@ impl HostState {
             trace_id: TraceId::new(),
             identity,
             deny_flag: Arc::new(AtomicBool::new(false)),
+            async_handle,
         }
     }
 
@@ -90,6 +95,28 @@ impl HostState {
 
     pub(crate) fn consume_denial_flag(&self) -> bool {
         self.deny_flag.swap(false, Ordering::Relaxed)
+    }
+
+    fn broker_complete(&self, request: ModelRequest) -> ModelResult {
+        if let Some(handle) = &self.async_handle {
+            let (tx, rx) = sync_mpsc::sync_channel(1);
+            let broker = Arc::clone(&self.broker);
+            handle.spawn({
+                async move {
+                    let result = broker.complete(&request).await;
+                    let _ = tx.send(result);
+                }
+            });
+            return rx.recv().unwrap_or(Err(BrokerError::Cancelled));
+        }
+        let runtime = TokioBuilder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|err| BrokerError::ProviderFault {
+                code: "runtime_init".into(),
+                message: err.to_string(),
+            })?;
+        runtime.block_on(self.broker.complete(&request))
     }
 
     fn record_cap_denial(&self, cap: &str, op: &str, target: &str, args: &[u8], reason: &str) {
@@ -404,38 +431,83 @@ fn host_kb_write(
     Ok(0)
 }
 
+const MODEL_ESTREAM: i32 = -1;
+const MODEL_EBUDGET: i32 = -2;
+const MODEL_ETIMEOUT: i32 = -3;
+const MODEL_EPROVIDER: i32 = -4;
+const MODEL_EINVAL: i32 = -5;
+const MODEL_ENOSPACE: i32 = -6;
+const MODEL_ECANCELLED: i32 = -7;
+
 fn host_model_complete(
     mut caller: Caller<'_, StoreData>,
-    prompt_ptr: i32,
-    prompt_len: i32,
-    model_ptr: i32,
-    model_len: i32,
+    req_ptr: i32,
+    req_len: i32,
+    out_ptr: i32,
+    out_cap: i32,
+    meta_ptr: i32,
+    meta_cap: i32,
 ) -> Result<i32, WasmtimeError> {
     caller.data().state.ensure_model()?;
-    if prompt_len < 0 || model_len < 0 {
+    if req_len <= 0 || out_cap < 0 || meta_cap < 0 {
         return Err(host_error("invalid buffer length"));
     }
-    let prompt = read_utf8(&mut caller, prompt_ptr, prompt_len)?;
-    let model = if model_len > 0 {
-        Some(read_utf8(&mut caller, model_ptr, model_len)?)
-    } else {
-        None
+
+    let request_bytes = read_bytes(&mut caller, req_ptr, req_len)?;
+    let request: ModelRequest = match rmp_serde::from_slice(&request_bytes) {
+        Ok(req) => req,
+        Err(_) => return Ok(MODEL_EINVAL),
     };
-    let response = caller
-        .data()
-        .state
-        .broker
-        .complete(&CompletionRequest { prompt, model });
-    let rendered = response.output.as_bytes();
-    if rendered.len() > i32::MAX as usize {
-        return Err(host_error("model response too large"));
+
+    let result = caller.data().state.broker_complete(request);
+    let response = match result {
+        Ok(output) => output,
+        Err(err) => return Ok(map_broker_error(err)),
+    };
+
+    let output_bytes = response.text.as_bytes();
+    if output_bytes.len() > i32::MAX as usize {
+        return Ok(MODEL_ENOSPACE);
     }
-    let available = prompt_len as usize;
-    if rendered.len() > available {
-        return Ok(-(rendered.len() as i32));
+    if output_bytes.len() > out_cap as usize {
+        return Ok(MODEL_ENOSPACE);
     }
-    write_bytes(&mut caller, prompt_ptr, rendered)?;
-    Ok(rendered.len() as i32)
+    write_bytes(&mut caller, out_ptr, output_bytes)?;
+
+    if meta_cap > 0 {
+        if meta_cap < 4 {
+            return Ok(MODEL_ENOSPACE);
+        }
+        let meta = response.meta();
+        let meta_bytes = match rmp_serde::to_vec(&meta) {
+            Ok(bytes) => bytes,
+            Err(_) => return Ok(MODEL_EPROVIDER),
+        };
+        if meta_bytes.len() > (meta_cap as usize - 4) {
+            return Ok(MODEL_ENOSPACE);
+        }
+        // Encode meta as: [u32 little-endian length][msgpack payload].
+        let len_bytes = (meta_bytes.len() as u32).to_le_bytes();
+        write_bytes(&mut caller, meta_ptr, &len_bytes)?;
+        let meta_data_ptr = meta_ptr
+            .checked_add(4)
+            .ok_or_else(|| host_error("meta pointer overflow"))?;
+        write_bytes(&mut caller, meta_data_ptr, &meta_bytes)?;
+    }
+
+    Ok(output_bytes.len() as i32)
+}
+
+fn map_broker_error(err: BrokerError) -> i32 {
+    match err {
+        BrokerError::StreamingUnsupported => MODEL_ESTREAM,
+        BrokerError::BudgetExceeded { .. } => MODEL_EBUDGET,
+        BrokerError::Timeout { .. } => MODEL_ETIMEOUT,
+        BrokerError::ProviderFault { .. } => MODEL_EPROVIDER,
+        BrokerError::InvalidRequest { .. } => MODEL_EINVAL,
+        BrokerError::Cancelled => MODEL_ECANCELLED,
+        BrokerError::OutputTooLarge { .. } => MODEL_ENOSPACE,
+    }
 }
 
 fn host_resolve_secret(
@@ -575,9 +647,10 @@ mod tests {
     use crate::caps::Caps;
     use crate::secrets::SecretStore;
     use bytes::Bytes;
-    use runloop_core::ids::AgentId;
+    use rmp_serde::{from_slice as rmp_from_slice, to_vec as rmp_to_vec};
+    use runloop_core::ids::{AgentId, TraceId};
     use runloop_kb::KnowledgeBase;
-    use runloop_model_broker::Broker;
+    use runloop_model_broker::{Broker, ModelOutputMeta, ModelParams, ModelRequest};
     use runloop_rmp::Header;
     use serde::Deserialize;
     use tokio::sync::mpsc;
@@ -610,6 +683,24 @@ mod tests {
                 (return (i32.const 0))
             ))"#;
         Module::new(engine, wat).expect("compile module")
+    }
+
+    fn compile_model_module(engine: &Engine) -> Module {
+        let wat = r#"(module
+            (import "runloop" "model_complete" (func $model_complete (param i32 i32 i32 i32 i32 i32) (result i32)))
+            (memory (export "memory") 4)
+            (func (export "call") (param $req_len i32) (result i32)
+                (call $model_complete
+                    (i32.const 0)
+                    (local.get $req_len)
+                    (i32.const 1024)
+                    (i32.const 512)
+                    (i32.const 2048)
+                    (i32.const 512)
+                )
+            )
+        )"#;
+        Module::new(engine, wat).expect("compile model module")
     }
 
     fn snapshot_region(instance: &Instance, store: &mut Store<StoreData>, start: usize) -> Vec<u8> {
@@ -652,7 +743,7 @@ mod tests {
         let mailbox = AgentMailbox::new(rx);
         let kb = KnowledgeBase::new();
         let kb = std::sync::Arc::new(kb);
-        let broker = std::sync::Arc::new(Broker::new());
+        let broker = std::sync::Arc::new(Broker::default());
         let secrets = std::sync::Arc::new(SecretStore::new());
         let audit = AuditSink::new(16);
         let host_state = std::sync::Arc::new(HostState::new(
@@ -664,6 +755,7 @@ mod tests {
             std::sync::Arc::new(HostcallStats::new()),
             AgentId::new(),
             "probe".to_string(),
+            None,
         ));
 
         let store_data = StoreData {
@@ -696,5 +788,121 @@ mod tests {
         let body_region = snapshot_region(&instance, &mut store, 512);
         let body_cstr = body_region.split(|b| *b == 0).next().unwrap();
         assert_eq!(body_cstr, b"ping");
+    }
+
+    #[test]
+    fn model_complete_writes_output_and_meta() {
+        let engine = Engine::default();
+        let module = compile_model_module(&engine);
+
+        let mut linker: Linker<StoreData> = Linker::new(&engine);
+        p1::add_to_linker_sync(&mut linker, |data: &mut StoreData| &mut data.wasi)
+            .expect("link wasi");
+        add_to_linker(&mut linker).expect("link hostcalls");
+
+        let wasi = wasmtime_wasi::WasiCtxBuilder::new().arg("model").build_p1();
+        let mailbox = AgentMailbox::new(mpsc::channel(1).1);
+        let kb = Arc::new(KnowledgeBase::new());
+        let broker = Arc::new(Broker::default());
+        let secrets = Arc::new(SecretStore::new());
+        let audit = AuditSink::new(16);
+        let mut caps = Caps::deny_all();
+        caps.model = true;
+        let host_state = Arc::new(HostState::new(
+            caps,
+            audit,
+            kb,
+            broker,
+            secrets,
+            Arc::new(HostcallStats::new()),
+            AgentId::new(),
+            "model".to_string(),
+            None,
+        ));
+
+        let store_data = StoreData {
+            wasi,
+            state: host_state,
+            mailbox: Arc::new(mailbox),
+        };
+
+        let mut store = Store::new(&engine, store_data);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate model module");
+
+        let memory = instance
+            .get_export(&mut store, "memory")
+            .and_then(|ext| ext.into_memory())
+            .expect("memory export");
+
+        let request = ModelRequest {
+            trace_id: TraceId::new(),
+            model: "local:echo".into(),
+            prompt: "hello world".into(),
+            params: Some(ModelParams {
+                temperature: Some(0.1),
+                max_tokens: Some(32),
+                ..ModelParams::default()
+            }),
+            budget_tokens: Some(256),
+            timeout_ms: Some(5000),
+            cache_ttl_ms: Some(10_000),
+            cache_key: Some("smoke".into()),
+            stream: false,
+        };
+
+        let request_bytes = rmp_to_vec(&request).expect("encode request");
+        memory
+            .write(&mut store, 0, &request_bytes)
+            .expect("write request");
+        memory
+            .write(&mut store, 1024, &vec![0u8; 512])
+            .expect("zero output");
+        memory
+            .write(&mut store, 2048, &vec![0u8; 512])
+            .expect("zero meta");
+
+        let call = instance
+            .get_typed_func::<i32, i32>(&mut store, "call")
+            .expect("export call");
+        let written = call
+            .call(&mut store, request_bytes.len() as i32)
+            .expect("model call");
+        assert!(written > 0);
+
+        let mut out_buf = vec![0u8; written as usize];
+        memory
+            .read(&mut store, 1024, &mut out_buf)
+            .expect("read output");
+        let output = String::from_utf8(out_buf).expect("utf8 output");
+        assert_eq!(output, "hello world");
+
+        let mut len_buf = [0u8; 4];
+        memory
+            .read(&mut store, 2048, &mut len_buf)
+            .expect("read meta len");
+        let meta_len = u32::from_le_bytes(len_buf) as usize;
+        assert!(meta_len > 0);
+        let mut meta_buf = vec![0u8; meta_len];
+        memory
+            .read(&mut store, 2052, &mut meta_buf)
+            .expect("read meta payload");
+        let meta: ModelOutputMeta = rmp_from_slice(&meta_buf).expect("decode meta");
+        assert_eq!(meta.provider, "local");
+        assert_eq!(meta.provider_model, "local:echo");
+        assert!(!meta.cached);
+        assert_eq!(meta.finish_reason.as_deref(), Some("stop"));
+
+        let mut stream_request = request;
+        stream_request.stream = true;
+        let stream_bytes = rmp_to_vec(&stream_request).expect("encode stream request");
+        memory
+            .write(&mut store, 0, &stream_bytes)
+            .expect("write stream request");
+        let code = call
+            .call(&mut store, stream_bytes.len() as i32)
+            .expect("model call stream");
+        assert_eq!(code, MODEL_ESTREAM);
     }
 }

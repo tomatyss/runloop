@@ -36,6 +36,14 @@ RUNLOOP_SECURITY_CONFIRM_EXTERNAL_ACTIONS=true
 RUNLOOP_CONFIG=/custom/path/config.yaml
 ```
 
+### 1.3 Model broker configuration _(MVP)_
+
+- `models.broker.providers` lists named backends. HTTP providers accept `base_url`, `secret_id`, optional static headers, and a `schema` (MVP supports `openai-completions`).
+- `models.broker.route` is an ordered array of `{ pattern, provider, target_model? }` entries; the first matching pattern wins. Legacy map syntax like `{ "*": "local" }` (or the legacy key `routing`) still deserialises into the same shape.
+- `models.broker.cache` exposes `ttl_ms` and `capacity` for the in-memory LRU. Requests may override TTL via `cache_ttl_ms`; `0` disables caching for that call.
+- `models.broker.budgets` retains `default_tokens`, `per_request_tokens_cap`, and `hard_cap_usd`. Per-request budgets clamp to the stricter of the request and config-provided values.
+- Provider `secret_id` values resolve at runtime via the configured secret store; raw API keys should never be stored in YAML.
+
 ## 2. Knowledge Base (POG) operations _(normative)_
 
 The POG consists of two SQLite files and a derived vector index.
@@ -152,6 +160,7 @@ See `docs/security-model.md` for secret-store details. Ops tasks:
 
 - Default logging: JSON (ndjson) with keys `ts`, `level`, `service.name`, `trace_id`, `opening_id`, `agent_id`.
 - Tracing & metrics via OpenTelemetry OTLP. Configure endpoint, protocol, and sampling under `observability` in config.
+- Model broker exports `runloop_broker_calls_total`, `runloop_broker_cache_hits_total`, and `runloop_broker_errors_total{kind=*}` counters for dashboards.
 - `agtop` pane + `rlp trace` rely on the metrics exported by agents.
 
 ## 8. Message bus topics _(normative)_

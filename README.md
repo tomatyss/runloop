@@ -65,7 +65,17 @@ runtime:
 models:
   default: "local:llama3.1-8b"
   broker:
-    providers: ["local", "openai", "anthropic"]
+    providers:
+      - id: "openai"
+        kind: "http"
+        base_url: "https://api.openai.com"
+        secret_id: "runloop/models/openai"
+    route:
+      - pattern: "*"
+        provider: "openai"
+    cache:
+      ttl_ms: 600000
+      capacity: 1024
     budgets:
       default_tokens: 8000
       hard_cap_usd: 0.50

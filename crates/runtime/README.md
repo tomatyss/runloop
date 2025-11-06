@@ -23,7 +23,7 @@ decision is denied.
 | `time_now`         | Returns wall-clock microseconds; denied if `Caps::time` is false. |
 | `http_request`     | Allows HTTP(S) only to domains in `Caps::net_hosts`; HTTPS unless `allow_http`. |
 | `kb_read` / `kb_write` | Verifies namespace access using `CapabilitySet`.             |
-| `model_complete`   | Invokes the model broker. If the guest-supplied buffer is too small, the hostcall returns **`-(required_len)`** so the caller can grow its allocation. No bytes are written on that path. |
+| `model_complete`   | Invokes the model broker (`ModelRequest` in msgpack form) and writes UTF-8 output into the provided buffer, returning the byte count or a negative error (`MODEL_E*`). When a metadata buffer is supplied the host prefixes a little-endian `u32` length followed by msgpack-encoded `ModelOutputMeta`. |
 | `resolve_secret`   | Returns opaque secret identifiers when permitted.                 |
 | `exec_spawn`       | Stubbed until exec caps are enabled; guard rail in place.         |
 | `mailbox_peek_meta`| Returns the next message header as JSON (`trace_id`, `msg_id`, `created_at_ms`, `ttl_ms`, `schema_id`) without consuming the mailbox. |
