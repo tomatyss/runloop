@@ -48,7 +48,7 @@ jobs:
           tool: cargo-audit
 
       - name: Run cargo audit
-        run: cargo audit --deny-warnings
+        run: cargo audit --deny warnings
 
   licenses:
     name: License & Bans (cargo-deny)
