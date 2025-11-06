@@ -1,0 +1,40 @@
+#############################################
+# cargo-deny configuration (initial baseline)
+#############################################
+
+[advisories]
+version = 2
+ignore = []
+# Treat vulnerabilities as deny, informational as warnings
+vulnerability = "deny"
+unmaintained = "warn"
+unsound = "warn"
+yanked = "warn"
+
+[licenses]
+version = 2
+confidence-threshold = 0.8
+unlicensed = "warn"
+copyleft = "warn"
+allow = [
+  "Apache-2.0",
+  "MIT",
+  "BSD-3-Clause",
+  "BSD-2-Clause",
+  "ISC",
+  "MPL-2.0",
+  "Unicode-DFS-2016",
+  "Zlib",
+  "OpenSSL",
+  "CC0-1.0",
+  "BSL-1.0",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+deny = []
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
