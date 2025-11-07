@@ -5,7 +5,15 @@ use runloop_runtime::{AgentIdentity, AgentSpec, Error, RuntimeBuilder};
 use tempfile::tempdir;
 
 fn write_wasm(path: &std::path::Path) {
-    let wasm = wat::parse_str("(module (func (export \"_start\")))").expect("valid wat");
+    let wasm = wat::parse_str(
+        r#"(module
+            (import "runloop" "notify_ready" (func $notify_ready))
+            (func (export "_start")
+                (call $notify_ready)
+            )
+        )"#,
+    )
+    .expect("valid wat");
     std::fs::write(path, wasm).expect("write wasm");
 }
 
@@ -23,13 +31,12 @@ fn bus_send_errors_propagate() {
     let bus_path = temp.path().join("bus.sock");
 
     // Prepare a closed bus handle.
-    let bus = {
+    let (bus, mut server) = {
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
         rt.block_on(async {
             let server = Bus::bind(&bus_path).await.expect("bind bus");
             let bus = Bus::connect(&bus_path).await.expect("connect bus");
-            server.close();
-            bus
+            (bus, server)
         })
     };
 
@@ -45,6 +52,9 @@ fn bus_send_errors_propagate() {
         .build()
         .expect("spec");
     let handle = runtime.spawn(spec).expect("spawn");
+
+    // Drop the server after the agent is running so subsequent sends fail.
+    server.close();
 
     let header = Header {
         msg_id: 1,

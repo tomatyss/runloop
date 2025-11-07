@@ -5,11 +5,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, mpsc as std_mpsc};
 use std::task::{Context, Poll};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use cfg_if::cfg_if;
 use dashmap::DashMap;
 use futures_util::StreamExt;
+use metrics::{counter, histogram};
 use parking_lot::RwLock;
 use tokio::io::AsyncWrite;
 use tokio::runtime::Handle as TokioHandle;
@@ -24,10 +26,11 @@ use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
 
 use crate::audit::AuditSink;
 use crate::caps::Caps;
-use crate::error::Error;
+use crate::error::{CapDeniedInfo, Error};
 use crate::hostcalls::{self, AgentEnvelope, AgentMailbox, HostState, HostcallStats, StoreData};
 use crate::module_cache::ModuleCache;
 use crate::output::OutputRing;
+use crate::ready::{ReadyAckKind, ReadyFailure, ready_barrier};
 use crate::secrets::{SecretProvider, SecretStore};
 use crate::spec::{AgentIdentity, AgentSpec};
 use crate::stats::{AgentStats, read_stats};
@@ -37,6 +40,11 @@ use runloop_core::config::BrokerConfig;
 use runloop_core::ids::AgentId;
 use runloop_kb::KnowledgeBase;
 use runloop_model_broker::{Broker, SecretResolver};
+
+const METRIC_READY_LATENCY: &str = "runloop.runtime.spawn.ready_latency_ms";
+const METRIC_READY_TIMEOUTS: &str = "runloop.runtime.spawn.ready_timeouts_total";
+const METRIC_READY_FAILURES: &str = "runloop.runtime.spawn.failures_total";
+const DEFAULT_READY_TIMEOUT_MS: u64 = 5_000;
 
 /// Runtime embedding for agent Wasm modules.
 pub struct Runtime {
@@ -54,6 +62,7 @@ struct RuntimeInner {
     hostcall_stats: Arc<HostcallStats>,
     bus: Option<Bus>,
     async_spawner: Option<AsyncSpawner>,
+    ready_timeout: Duration,
 }
 
 struct AsyncSpawner {
@@ -134,7 +143,7 @@ struct AgentProcess {
 
 enum StartupSignal {
     Ready,
-    Failed { cap_denied: bool, message: String },
+    Failed(FailureSummary),
 }
 
 /// Builder for configuring runtime dependencies.
@@ -147,6 +156,7 @@ pub struct RuntimeBuilder {
     bus: Option<Bus>,
     audit_capacity: usize,
     async_handle: Option<TokioHandle>,
+    ready_timeout: Duration,
 }
 
 impl RuntimeBuilder {
@@ -164,6 +174,7 @@ impl RuntimeBuilder {
             bus: None,
             audit_capacity: 512,
             async_handle: None,
+            ready_timeout: default_ready_timeout(),
         }
     }
 
@@ -205,6 +216,12 @@ impl RuntimeBuilder {
     #[must_use]
     pub fn async_handle(mut self, handle: TokioHandle) -> Self {
         self.async_handle = Some(handle);
+        self
+    }
+
+    #[must_use]
+    pub fn spawn_ready_timeout(mut self, timeout: Duration) -> Self {
+        self.ready_timeout = timeout.max(Duration::from_millis(1));
         self
     }
 
@@ -250,6 +267,7 @@ impl RuntimeBuilder {
             hostcall_stats,
             bus: self.bus,
             async_spawner,
+            ready_timeout: self.ready_timeout,
         };
 
         Ok(Runtime {
@@ -264,6 +282,15 @@ impl Default for RuntimeBuilder {
     }
 }
 
+fn default_ready_timeout() -> Duration {
+    std::env::var("RUNLOOP_SPAWN_READY_TIMEOUT_MS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+        .map(Duration::from_millis)
+        .unwrap_or_else(|| Duration::from_millis(DEFAULT_READY_TIMEOUT_MS))
+}
+
 impl Runtime {
     /// Construct a new runtime instance with a configured Wasmtime engine.
     pub fn new() -> Result<Self, Error> {
@@ -273,6 +300,21 @@ impl Runtime {
     /// Spawn a new agent instance. The guest runs on a dedicated OS thread.
     pub fn spawn(&self, mut spec: AgentSpec) -> Result<AgentHandle, Error> {
         spec.sanitize();
+        let agent_identity = spec.identity.clone();
+        let ready_timeout = spec
+            .spawn_ready_timeout_ms
+            .and_then(|ms| {
+                if ms > 0 {
+                    Some(Duration::from_millis(ms))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(self.inner.ready_timeout)
+            .max(Duration::from_millis(1));
+        let spawn_start = Instant::now();
+        let deadline = spawn_start + ready_timeout;
+        let (ready_handle, ready_emitter, ready_waiter) = ready_barrier();
         let id = AgentId::new();
         if self.inner.agents.contains_key(&id) {
             return Err(Error::AgentAlreadyExists(id.to_string()));
@@ -310,6 +352,7 @@ impl Runtime {
                 .async_spawner
                 .as_ref()
                 .map(|spawner| spawner.handle()),
+            ready_emitter.clone(),
         ));
 
         let process = Arc::new(AgentProcess {
@@ -327,6 +370,7 @@ impl Runtime {
             _host_state: host_state.clone(),
         });
 
+        let spec_for_thread = spec.clone();
         let engine = self.inner.engine.clone();
         let policy_caps = spec.caps.clone();
         let stdout_stream = RingStdout::new(stdout_ring.clone(), stdout_buffer.clone());
@@ -336,12 +380,14 @@ impl Runtime {
         let mailbox_for_thread = mailbox.clone();
         let module_for_thread = module.clone();
         let (startup_tx, startup_rx) = std_mpsc::channel();
+        let ready_handle_for_thread = ready_handle.clone();
 
         let join_handle = thread::Builder::new()
             .name(format!("agent-{}", spec.identity.name()))
             .spawn(move || {
                 let wasm_path = wasm_path_thread.clone();
                 let result = (|| -> Result<(), Error> {
+                    let spec = spec_for_thread;
                     let _tid_guard = TidGuard::new(&process_for_thread.tid);
                     let tid = current_thread_id();
                     if tid != 0 {
@@ -442,6 +488,10 @@ impl Runtime {
                                 &msg,
                             );
                         }
+                        ready_handle_for_thread.fail(ReadyFailure::Host {
+                            info: host_state_for_thread.take_last_denial(),
+                            message: err.to_string(),
+                        });
                         let mapped = map_wasmtime_error(err, &wasm_path);
                         return Err(mapped);
                     }
@@ -450,48 +500,55 @@ impl Runtime {
                     Ok(())
                 })();
                 if let Err(err) = &result {
-                    let _ = startup_tx.send(StartupSignal::Failed {
-                        cap_denied: matches!(err, Error::CapDenied(_)),
-                        message: err.to_string(),
-                    });
+                    let _ = startup_tx.send(StartupSignal::Failed(FailureSummary::from_error(err)));
                 }
 
                 result
             })
             .map_err(|err| Error::spawn_failed(wasm_path.clone(), err.to_string()))?;
 
-        match startup_rx.recv().map_err(|_| {
-            Error::spawn_failed(wasm_path.clone(), String::from("startup channel closed"))
-        })? {
+        let mut join_handle_opt = Some(join_handle);
+
+        let startup_signal = match wait_for_startup_signal(&startup_rx, deadline) {
+            Ok(signal) => signal,
+            Err(failure) => {
+                let err = map_ready_failure(failure, &agent_identity, ready_timeout, &wasm_path);
+                record_spawn_failure_metric(&agent_identity, failure_reason_label(&err));
+                cleanup_spawn_failure(process.clone(), join_handle_opt.take());
+                return Err(err);
+            }
+        };
+
+        match startup_signal {
             StartupSignal::Ready => {}
-            StartupSignal::Failed {
-                cap_denied,
-                message,
-            } => {
-                let err = if cap_denied {
-                    Error::CapDenied(message)
-                } else {
-                    Error::spawn_failed(wasm_path.clone(), message)
+            StartupSignal::Failed(summary) => {
+                let err = match join_handle_opt.take() {
+                    Some(handle) => match handle.join() {
+                        Ok(Ok(())) => summary.as_error(&wasm_path),
+                        Ok(Err(thread_err)) => thread_err,
+                        Err(_) => Error::AgentJoinFailed("thread panicked".into()),
+                    },
+                    None => summary.as_error(&wasm_path),
                 };
-                match join_handle.join() {
-                    Ok(Ok(())) => return Err(err),
-                    Ok(Err(thread_err)) => return Err(thread_err),
-                    Err(_) => return Err(Error::AgentJoinFailed("thread panicked".into())),
-                }
+                record_spawn_failure_metric(&agent_identity, failure_reason_label(&err));
+                cleanup_spawn_failure(process.clone(), join_handle_opt.take());
+                return Err(err);
             }
         }
 
-        process.join.lock().unwrap().replace(join_handle);
-
+        let mut bus_ready_rx = None;
         if let (Some(bus), Some(spawner)) =
             (self.inner.bus.clone(), self.inner.async_spawner.as_ref())
         {
             let topic = Bus::direct_topic(&id);
             let sender = process.inbox.clone();
             let subscribe_bus = bus.clone();
+            let (bus_ready_tx, bus_ready_rx_inner) = std_mpsc::channel();
+            let ready_handle_for_bus = ready_handle.clone();
             let task = spawner.spawn(async move {
                 match subscribe_bus.subscribe(&topic).await {
                     Ok(mut subscription) => {
+                        let _ = bus_ready_tx.send(Ok(()));
                         while let Some(message) = subscription.next().await {
                             let Message { header, body } = message;
                             let envelope = AgentEnvelope::new(header, body.to_vec());
@@ -502,18 +559,49 @@ impl Runtime {
                     }
                     Err(err) => {
                         tracing::warn!(%topic, "failed to subscribe agent mailbox: {err}");
+                        let _ = bus_ready_tx.send(Err(Error::spawn_failed(
+                            PathBuf::from("bus"),
+                            err.to_string(),
+                        )));
+                        ready_handle_for_bus.fail(ReadyFailure::Host {
+                            info: None,
+                            message: format!("bus subscribe failed: {err}"),
+                        });
                     }
                 }
             });
             process.bus_task.lock().unwrap().replace(task);
+            bus_ready_rx = Some(bus_ready_rx_inner);
         }
 
-        self.inner.agents.insert(id, process);
+        if let Err(err) = wait_for_bus_ready(bus_ready_rx, deadline) {
+            record_spawn_failure_metric(&agent_identity, failure_reason_label(&err));
+            cleanup_spawn_failure(process.clone(), join_handle_opt.take());
+            return Err(err);
+        } else {
+            ready_handle.signal_host_ready();
+        }
 
-        Ok(AgentHandle {
-            runtime: self.inner.clone(),
-            agent_id: id,
-        })
+        match ready_waiter.wait_until(deadline) {
+            Ok(ack) => {
+                let latency = spawn_start.elapsed();
+                record_ready_success(&agent_identity, ack, latency);
+                if let Some(handle) = join_handle_opt.take() {
+                    process.join.lock().unwrap().replace(handle);
+                }
+                self.inner.agents.insert(id, Arc::clone(&process));
+                Ok(AgentHandle {
+                    runtime: self.inner.clone(),
+                    agent_id: id,
+                })
+            }
+            Err(failure) => {
+                let err = map_ready_failure(failure, &agent_identity, ready_timeout, &wasm_path);
+                record_spawn_failure_metric(&agent_identity, failure_reason_label(&err));
+                cleanup_spawn_failure(process.clone(), join_handle_opt.take());
+                Err(err)
+            }
+        }
     }
 
     pub fn kill(&self, agent_id: AgentId) -> Result<(), Error> {
@@ -691,7 +779,12 @@ impl AsyncWrite for RingAsyncWrite {
 
 fn map_wasmtime_error(err: WasmtimeError, wasm_path: &Path) -> Error {
     if let Some(msg) = capability_denied_message(&err) {
-        return Error::CapDenied(msg);
+        return Error::CapDenied(CapDeniedInfo::new(
+            "runtime",
+            "_start",
+            wasm_path.display().to_string(),
+            msg,
+        ));
     }
     Error::spawn_failed(wasm_path.to_path_buf(), err.to_string())
 }
@@ -745,6 +838,156 @@ impl<'a> TidGuard<'a> {
 impl<'a> Drop for TidGuard<'a> {
     fn drop(&mut self) {
         self.tid.store(0, Ordering::SeqCst);
+    }
+}
+
+fn cleanup_spawn_failure(
+    process: Arc<AgentProcess>,
+    join_handle: Option<thread::JoinHandle<Result<(), Error>>>,
+) {
+    if let Some(task) = process.bus_task.lock().unwrap().take() {
+        task.abort();
+    }
+    if let Some(handle) = join_handle {
+        thread::spawn(move || {
+            let _ = handle.join();
+        });
+    }
+}
+
+fn record_ready_success(identity: &AgentIdentity, ack: ReadyAckKind, latency: Duration) {
+    histogram!(
+        METRIC_READY_LATENCY,
+        "agent" => identity.name().to_owned(),
+        "ack" => ack.as_label()
+    )
+    .record(latency.as_millis() as f64);
+}
+
+fn record_spawn_failure_metric(identity: &AgentIdentity, reason: &'static str) {
+    counter!(
+        METRIC_READY_FAILURES,
+        "agent" => identity.name().to_owned(),
+        "reason" => reason
+    )
+    .increment(1);
+    if reason == "timeout" {
+        counter!(
+            METRIC_READY_TIMEOUTS,
+            "agent" => identity.name().to_owned()
+        )
+        .increment(1);
+    }
+}
+
+fn failure_reason_label(err: &Error) -> &'static str {
+    match err {
+        Error::ReadyTimeout { .. } => "timeout",
+        Error::CapDenied(_) => "cap_denied",
+        Error::AgentJoinFailed(_) => "panic",
+        _ => "other",
+    }
+}
+
+fn map_ready_failure(
+    failure: ReadyFailure,
+    identity: &AgentIdentity,
+    timeout: Duration,
+    wasm_path: &Path,
+) -> Error {
+    match failure {
+        ReadyFailure::Timeout => Error::ReadyTimeout {
+            ms: duration_to_ms(timeout),
+            agent: identity.name().to_string(),
+        },
+        ReadyFailure::Host { info, message } => {
+            if let Some(info) = info {
+                Error::CapDenied(info)
+            } else {
+                Error::spawn_failed(wasm_path.to_path_buf(), message)
+            }
+        }
+        ReadyFailure::ChannelClosed => {
+            Error::AgentJoinFailed(String::from("ready barrier closed before completion"))
+        }
+    }
+}
+
+fn duration_to_ms(duration: Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
+}
+
+fn wait_for_bus_ready(
+    receiver: Option<std_mpsc::Receiver<Result<(), Error>>>,
+    deadline: Instant,
+) -> Result<(), Error> {
+    if let Some(rx) = receiver {
+        loop {
+            if Instant::now() >= deadline {
+                return Err(Error::spawn_failed(
+                    PathBuf::from("bus"),
+                    String::from("bus subscription timed out"),
+                ));
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(remaining) {
+                Ok(result) => return result,
+                Err(std_mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std_mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(Error::spawn_failed(
+                        PathBuf::from("bus"),
+                        String::from("bus readiness channel closed"),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn wait_for_startup_signal(
+    rx: &std_mpsc::Receiver<StartupSignal>,
+    deadline: Instant,
+) -> Result<StartupSignal, ReadyFailure> {
+    while Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(remaining) {
+            Ok(signal) => return Ok(signal),
+            Err(std_mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std_mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(ReadyFailure::ChannelClosed);
+            }
+        }
+    }
+    Err(ReadyFailure::Timeout)
+}
+
+#[derive(Clone)]
+struct FailureSummary {
+    info: Option<CapDeniedInfo>,
+    message: String,
+}
+
+impl FailureSummary {
+    fn from_error(err: &Error) -> Self {
+        match err {
+            Error::CapDenied(info) => Self {
+                info: Some(info.clone()),
+                message: info.to_string(),
+            },
+            _ => Self {
+                info: None,
+                message: err.to_string(),
+            },
+        }
+    }
+
+    fn as_error(&self, wasm_path: &Path) -> Error {
+        if let Some(info) = &self.info {
+            Error::CapDenied(info.clone())
+        } else {
+            Error::spawn_failed(wasm_path.to_path_buf(), self.message.clone())
+        }
     }
 }
 

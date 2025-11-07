@@ -1,0 +1,14 @@
+[package]
+name = "agent-shim"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+runloop-sdk = { path = "../runloop-sdk" }
+runloop-core = { path = "../../core" }
+clap = { version = "4.5", features = ["derive"] }
+tokio = { version = "1.38", features = ["rt-multi-thread", "macros", "signal", "process"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+anyhow = "1.0"
+serde_json = "1.0"

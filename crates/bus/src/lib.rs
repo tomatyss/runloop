@@ -22,6 +22,8 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tracing::warn;
 
+mod ipc;
+
 /// Topic reserved for bus drop notifications.
 pub const DROP_TOPIC: &str = "rlp/sys/drops";
 const DIRECT_TOPIC_PREFIX: &str = "agent/";
@@ -30,7 +32,7 @@ static REGISTRY: Lazy<Mutex<HashMap<PathBuf, Arc<Server>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Bus-level errors.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Serialize, Deserialize)]
 pub enum BusError {
     #[error("bus already bound at {0}")]
     AlreadyBound(PathBuf),
@@ -97,12 +99,18 @@ fn map_rmp_error(err: RmpError) -> BusError {
 /// Active bus instance exposed to clients.
 #[derive(Clone)]
 pub struct Bus {
-    inner: Arc<Server>,
+    backend: BusBackend,
     kind: PublisherKind,
 }
 
+#[derive(Clone)]
+enum BusBackend {
+    Local(Arc<Server>),
+    Remote(Arc<ipc::IpcClient>),
+}
+
 /// Publisher identity kinds for ACL checks.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PublisherKind {
     Ui,
     Tui,
@@ -120,26 +128,53 @@ impl Bus {
         }
         let server = Arc::new(Server::new());
         guard.insert(path.clone(), server.clone());
+        drop(guard);
+        let ipc = match ipc::spawn_ipc_server(&path, server.clone()) {
+            Ok(opt) => opt,
+            Err(err) => {
+                warn!(?err, ?path, "failed to start ipc bus listener");
+                None
+            }
+        };
         Ok(BusServerHandle {
             path,
             inner: server,
+            ipc,
         })
     }
 
     /// Connect to the bus bound at `path`.
     pub async fn connect<P: AsRef<Path>>(path: P) -> Result<Self, BusError> {
+        Self::connect_with_kind(path, PublisherKind::Agent).await
+    }
+
+    async fn connect_with_kind<P: AsRef<Path>>(
+        path: P,
+        kind: PublisherKind,
+    ) -> Result<Self, BusError> {
         let path = path.as_ref().to_path_buf();
-        let guard = REGISTRY.lock().expect("registry poisoned");
-        let server = guard
-            .get(&path)
-            .ok_or_else(|| BusError::NotFound(path.clone()))?
-            .clone();
-        if server.closed.load(Ordering::SeqCst) {
-            return Err(BusError::Closed);
+        let server = {
+            let guard = REGISTRY.lock().expect("registry poisoned");
+            guard.get(&path).cloned()
+        };
+        if let Some(server) = server {
+            if server.closed.load(Ordering::SeqCst) {
+                return Err(BusError::Closed);
+            }
+            return Ok(Self {
+                backend: BusBackend::Local(server),
+                kind,
+            });
         }
+        if kind != PublisherKind::Agent {
+            return Err(BusError::Forbidden(
+                "remote publishers limited to agent kind".into(),
+            ));
+        }
+        let client = ipc::connect_ipc_client(&path, PublisherKind::Agent).await?;
         Ok(Self {
-            inner: server,
-            kind: PublisherKind::Agent,
+            backend: BusBackend::Remote(Arc::new(client)),
+            kind,
         })
     }
 
@@ -148,14 +183,15 @@ impl Bus {
         path: P,
         kind: PublisherKind,
     ) -> Result<Self, BusError> {
-        let mut bus = Self::connect(path).await?;
-        bus.kind = kind;
-        Ok(bus)
+        Self::connect_with_kind(path, kind).await
     }
 
     /// Publish a message to a topic (fan-out to subscribers).
     pub async fn publish(&self, topic: &str, message: Message) -> Result<(), BusError> {
-        self.inner.publish(topic, message, true, self.kind).await
+        match &self.backend {
+            BusBackend::Local(server) => server.publish(topic, message, true, self.kind).await,
+            BusBackend::Remote(client) => client.publish(topic, message).await,
+        }
     }
 
     /// Send a direct message to an agent.
@@ -167,7 +203,17 @@ impl Bus {
     /// Subscribe to a topic.
     #[allow(clippy::unused_async)]
     pub async fn subscribe(&self, topic: &str) -> Result<Subscription, BusError> {
-        self.inner.subscribe(topic).await
+        match &self.backend {
+            BusBackend::Local(server) => server.subscribe(topic).await,
+            BusBackend::Remote(client) => {
+                let (rx, dropper) = client.subscribe(topic).await?;
+                Ok(Subscription {
+                    rx,
+                    guard: None,
+                    on_drop: Some(dropper),
+                })
+            }
+        }
     }
 
     /// Utility to derive the direct-message topic for `agent_id`.
@@ -180,16 +226,20 @@ impl Bus {
 pub struct BusServerHandle {
     path: PathBuf,
     inner: Arc<Server>,
+    ipc: Option<ipc::IpcServer>,
 }
 
 impl BusServerHandle {
     /// Shut down the server and remove it from the registry.
-    pub fn close(&self) {
+    pub fn close(&mut self) {
         if !self.inner.shutdown() {
             return;
         }
         let mut guard = REGISTRY.lock().expect("registry poisoned");
         guard.remove(&self.path);
+        if let Some(ipc) = self.ipc.take() {
+            drop(ipc);
+        }
     }
 
     /// Retrieve a snapshot of bus metrics.
@@ -208,6 +258,7 @@ impl Drop for BusServerHandle {
 pub struct Subscription {
     rx: mpsc::Receiver<Message>,
     guard: Option<SubscriptionGuard>,
+    on_drop: Option<Box<dyn FnOnce() + Send + Sync>>,
 }
 
 impl Stream for Subscription {
@@ -223,6 +274,9 @@ impl Drop for Subscription {
     fn drop(&mut self) {
         if let Some(guard) = self.guard.take() {
             guard.unregister();
+        }
+        if let Some(dropper) = self.on_drop.take() {
+            dropper();
         }
     }
 }
@@ -439,6 +493,7 @@ impl Server {
         Ok(Subscription {
             rx,
             guard: Some(guard),
+            on_drop: None,
         })
     }
 
@@ -806,10 +861,13 @@ fn format_direct_topic(agent_id: &AgentId) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use crate::ipc;
     use futures_util::StreamExt;
     use runloop_core::{content::CT_TRACE_LINE, ids::AgentId};
     use runloop_rmp::decode_payload;
     use serde_json::json;
+    use std::time::Duration;
     use tokio::{task, time};
 
     fn test_message(seq: u64) -> Message {
@@ -1019,7 +1077,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn close_shuts_down_subscribers() {
         let path = PathBuf::from("/tmp/runloop-test-bus-close");
-        let server = Bus::bind(&path).await.unwrap();
+        let mut server = Bus::bind(&path).await.unwrap();
         let client = Bus::connect(&path).await.unwrap();
         let mut sub = client.subscribe("close/topic").await.unwrap();
 
@@ -1061,5 +1119,98 @@ mod tests {
         assert_eq!(delivered.header.msg_id, 2);
 
         drop(server);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ipc_publish_propagates_errors() {
+        let path = PathBuf::from("/tmp/runloop-ipc-publish");
+        let _ = std::fs::remove_file(&path);
+        let server = Bus::bind(&path).await.unwrap();
+        for _ in 0..10 {
+            if path.exists() {
+                break;
+            }
+            time::sleep(Duration::from_millis(10)).await;
+        }
+        if !path.exists() {
+            eprintln!(
+                "skipping ipc publish test; socket unavailable at {:?}",
+                path
+            );
+            return;
+        }
+        let client = {
+            let mut attempt = 0;
+            loop {
+                match ipc::connect_ipc_client(&path, PublisherKind::Agent).await {
+                    Ok(client) => break client,
+                    Err(err) => {
+                        attempt += 1;
+                        if attempt > 10 {
+                            panic!("ipc client: {err:?}");
+                        }
+                        time::sleep(Duration::from_millis(10)).await;
+                    }
+                }
+            }
+        };
+
+        let mut header = Header::default();
+        header.schema_id = CT_ACTION_DECISION;
+        header.created_at_ms = current_millis();
+        header.trace_id = 1;
+        header.msg_id = 7;
+        let message = Message::new(header, Bytes::from_static(b"{}")).unwrap();
+
+        let err = client
+            .publish("action.decision", message)
+            .await
+            .expect_err("publish should fail");
+        assert!(matches!(err, BusError::Forbidden(_)));
+
+        drop(server);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ipc_subscribe_error_surfaces() {
+        let path = PathBuf::from("/tmp/runloop-ipc-subscribe");
+        let _ = std::fs::remove_file(&path);
+        let mut server = Bus::bind(&path).await.unwrap();
+        for _ in 0..10 {
+            if path.exists() {
+                break;
+            }
+            time::sleep(Duration::from_millis(10)).await;
+        }
+        if !path.exists() {
+            eprintln!(
+                "skipping ipc subscribe test; socket unavailable at {:?}",
+                path
+            );
+            return;
+        }
+        let client = {
+            let mut attempt = 0;
+            loop {
+                match ipc::connect_ipc_client(&path, PublisherKind::Agent).await {
+                    Ok(client) => break client,
+                    Err(err) => {
+                        attempt += 1;
+                        if attempt > 10 {
+                            panic!("ipc client: {err:?}");
+                        }
+                        time::sleep(Duration::from_millis(10)).await;
+                    }
+                }
+            }
+        };
+        server.close();
+
+        match client.subscribe("offline/topic").await {
+            Err(err) => assert!(matches!(err, BusError::Closed)),
+            Ok(_) => panic!("subscribe should not succeed"),
+        }
     }
 }

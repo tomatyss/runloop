@@ -60,9 +60,9 @@ review.ok    -> send.in
 
 ### 4) Message protocol (RMP)
 
-- **Framing**: big-endian length prefix, fixed 60-byte header, MsgPack body.
+- **Framing**: big-endian length prefix, fixed 68-byte header, MsgPack body.
 - **Header (v0) — key fields**:
-- `magic="RMP0"`, `header_version=1`, `header_len=60`, `flags`
+- `magic="RMP0"`, `header_version=1`, `header_len=68`, `flags`
 - `schema_id`, `body_len`
 - `created_at_ms` (sender clock) + `ttl_ms` (expiry)
 - `trace_id`, `opening_id`, `msg_id`

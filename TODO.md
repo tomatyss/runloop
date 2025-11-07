@@ -41,7 +41,7 @@
 **B1. RMP header & frame codec**
 
 * [x] Path: `crates/rmp/`.
-* [x] Define fixed 60-byte header with `magic`, `header_version`, `header_len`, `flags`, `schema_id`, `body_len`, `created_at_ms`, `ttl_ms`, `trace_id`, `msg_id`.
+* [x] Define fixed 68-byte header with `magic`, `header_version`, `header_len`, `flags`, `schema_id`, `body_len`, `created_at_ms`, `ttl_ms`, `trace_id`, `msg_id`.
 * [x] Implement `{type, payload}` MsgPack envelope helpers + encode/decode APIs.
 * [x] Parse/validate TTL, expose helpers for `expires_at_ms`, duplicate keys.
 
@@ -219,6 +219,12 @@
 ## Epic H — Canonical agents (MVP set)
 
 > All agents are WASM bundles with `manifest.toml`, `policy.caps`, `README.md`. For MVP you can implement them as *native processes* first (behind a host “shim”) to validate flow, then convert to WASM—**but** the runtime and caps checks must be in place.
+
+**H0. native_agent_shim**
+
+* [x] `runloop-sdk` crate exposes capability parser, handshake payloads, and bus helpers.
+* [x] `agent-shim` binary loads `RUNLOOP_*` env, publishes `agent.hello`, then launches the native process under the enforced caps.
+* [x] Add README/docs so agents know the env contract; add publish/subscribe integration test in `runloop-sdk`.
 
 **H1. contact_resolver**
 

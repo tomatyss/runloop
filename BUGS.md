@@ -2,30 +2,7 @@
 
 The new `runloop-runtime` crate introduces a richer Wasmtime embedding, but several high-priority defects remain outstanding. Each issue below captures the observed behavior, impact, suspected root cause, and recommended next actions.
 
-## 1. Spawn Success Is Reported Before Guest Startup Completes
-
-- **Status:** Critical  
-- **Scope:** `crates/runtime/src/runtime.rs:118-224`
-
-### What Happens
-
-`Runtime::spawn` returns `Ok(AgentHandle)` immediately after the worker thread is spawned. If Wasmtime instantiation fails or `_start` traps, the guest thread exits with an `Err`, but the main thread only sees that failure when `kill` joins the handle (or never, if kill is not called). Callers therefore observe a "running" agent even though startup failed.
-
-### Impact
-
-- Transient Wasm bugs look like hung agents instead of failing fast.
-- Supervisors may enqueue messages to an agent that never booted, leading to lost work.
-- Observability and audit trails lack the failure signal until teardown.
-
-### Root Cause
-
-`spawn` does not block on any readiness signal from the worker thread. The join handle is stored, but the function returns before `_start` finishes.
-
-### Recommended Fix
-
-Introduce a `oneshot` channel (or similar) so the worker thread reports success or failure before `spawn` returns. Propagate the first error immediately and only publish the agent handle once the guest is truly running.
-
-## 2. Stdout/Stderr Buffers Grow Without Bound
+## 1. Stdout/Stderr Buffers Grow Without Bound
 
 - **Status:** High  
 - **Scope:** `crates/runtime/src/runtime.rs:90-114,334-340`
@@ -47,7 +24,7 @@ The `_stdout_buffer` and `_stderr_buffer` fields exist but no consumer drains th
 
 Either remove the unbounded buffers entirely, or enforce a capacity (matching the ring) and drop old data when full.
 
-## 3. Module Cache Ignores On-Disk Updates
+## 2. Module Cache Ignores On-Disk Updates
 
 - **Status:** Medium  
 - **Scope:** `crates/runtime/src/module_cache.rs:23-31`
@@ -69,7 +46,7 @@ The cache key is the raw path, and there is no mtime/hash check to detect change
 
 Track file metadata (e.g., mtime + length) or a content hash alongside the cached module. If the file changes, evict and recompile before returning the module.
 
-## 4. Bus Sends Panic Inside Nested Tokio Runtimes
+## 3. Bus Sends Panic Inside Nested Tokio Runtimes
 
 - **Status:** High  
 - **Scope:** `crates/runtime/src/runtime.rs:493-505`
@@ -92,7 +69,7 @@ The new bus integration replaced the non-async `inbox.try_send` path with a hard
 
 Offload the async send without calling `block_on` on the current handle—e.g., spawn a task that writes to the bus and synchronizes via a oneshot, or fall back to the in-process channel when the runtime already has direct access to the agent inbox.
 
-## 5. `model_complete` Corrupts Prompt Buffer When Reserving Output Space
+## 4. `model_complete` Corrupts Prompt Buffer When Reserving Output Space
 
 - **Status:** High  
 - **Scope:** `crates/runtime/src/hostcalls.rs:314-345`
@@ -115,7 +92,7 @@ The hostcall treats `prompt_len` as both the size of the prompt to read and the 
 
 Extend the hostcall signature to separate the prompt input length from the output buffer capacity (or write into a distinct pointer). The host should read only the initialized prompt slice and use an explicit capacity when checking for response truncation.
 
-## 6. Predicate Comparisons Overflow On Large Unsigned Values
+## 5. Predicate Comparisons Overflow On Large Unsigned Values
 
 - **Status:** High  
 - **Scope:** `crates/openings/src/runner.rs:216-254`
@@ -138,7 +115,7 @@ The integer code path truncates `u64` values to `i64` instead of keeping the com
 
 Preserve unsigned comparisons—either compare using `u128`/`u64` throughout or branch on the literal type so `Literal::Integer` drives `as_i128`/`as_u128`-aware logic without lossy casts.
 
-## 7. Default Config Emits Spurious Missing-Directory Warnings
+## 6. Default Config Emits Spurious Missing-Directory Warnings
 
 - **Status:** Medium  
 - **Scope:** `crates/core/src/config.rs:48-134`
@@ -160,7 +137,7 @@ The helper unconditionally warns on missing directories, including those injecte
 
 Downgrade the log level (e.g., to debug) for default paths, or emit warnings only for directories supplied via config files/env overrides. Alternatively, create the repo-relative directories during validation instead of warning.
 
-## 8. Node Status Output Order Is Non-Deterministic
+## 7. Node Status Output Order Is Non-Deterministic
 
 - **Status:** Low  
 - **Scope:** `crates/openings/src/runner.rs:170-212`
@@ -181,3 +158,49 @@ The report drains `records.into_values()` instead of preserving the topological 
 ### Recommended Fix
 
 Collect records in `opening.nodes` order (or perform a topological sort) before returning them, ensuring deterministic CLI output and trace serialization.
+
+## 8. KB Write Denials Are Misclassified As Read Denials
+
+- **Status:** High  
+- **Scope:** `crates/runtime/src/error.rs:21-42`
+
+### What Happens
+
+`CapKind::from_label` truncates labels at the first `.` before matching the prefix. Labels like `kb.write.repo` therefore collapse to `kb` and fall through to the `KbRead` arm. Structured errors emitted through `CapDeniedInfo` and surfaced via `Error::CapDenied` will always report `cap=kb_read`, even when a write namespace triggered the denial.
+
+### Impact
+
+- Audit trails and metrics can no longer distinguish read vs. write policy violations.  
+- Alerts for write-only regressions never fire because those denials are misbucketed under the read counters.  
+- Automated remediations that depend on the structured `cap` field become unreliable.
+
+### Root Cause
+
+`CapKind::from_label` never checks for `kb.write` before truncating, so the `KbWrite` variant is effectively unreachable.
+
+### Recommended Fix
+
+Match the full label before stripping suffixes (or only split when the full label is unknown) so `kb.write.*` resolves to `CapKind::KbWrite` while retaining prefix matching for other capability families.
+
+## 9. Agents That Only Call `mailbox_peek_meta` Never Reach Ready State
+
+- **Status:** High  
+- **Scope:** `crates/runtime/src/hostcalls.rs:111-117,417-420` and `crates/runtime/src/runtime.rs:298-365`
+
+### What Happens
+
+The readiness barrier introduced for `Runtime::spawn` only listens for `runloop::notify_ready` or a `mailbox_recv` invocation. Legacy agents that idle by polling `mailbox_peek_meta` (and only call `mailbox_recv` after they see a header) never exercise either code path, so `spawn` waits until `spawn_ready_timeout_ms` elapses and returns `Error::ReadyTimeout` even though `_start` succeeded and the agent is idle.
+
+### Impact
+
+- Peek-first agents can no longer be supervised; every launch times out.  
+- Operators must either disable the readiness gate (defeating the feature) or rebuild every agent to add `notify_ready`, slowing staged rollouts.  
+- The documented fallback path for "pre-ready binaries" is incomplete, making the regression hard to diagnose.
+
+### Root Cause
+
+`host_mailbox_recv` calls `HostState::notify_mailbox_recv`, but `mailbox_peek_meta` never does, so the readiness emitter is never tripped when guests remain in peek mode.
+
+### Recommended Fix
+
+Treat `mailbox_peek_meta` as a readiness signal (either on the first invocation or once it returns a header), or add a small hostcall that legacy agents can invoke before entering their peek loop.

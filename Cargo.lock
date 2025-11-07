@@ -18,6 +18,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "agent-shim"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "runloop-core",
+ "runloop-sdk",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "agtop"
 version = "0.1.0"
 dependencies = [
@@ -269,6 +283,9 @@ name = "camino"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "276a59bf2b2c967788139340c9f0c5b12d7fd6630315c15c217e559de85d2609"
+dependencies = [
+ "serde_core",
+]
 
 [[package]]
 name = "cap-fs-ext"
@@ -371,9 +388,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.44"
+version = "1.2.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37521ac7aabe3d13122dc382493e20c9416f299d2ccd5b3a5340a2570cdeb0f3"
+checksum = "35900b6c8d709fb1d854671ae27aeaa9eec2f8b01b364e1619a40da3e6fe2afe"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -2525,9 +2542,9 @@ dependencies = [
 
 [[package]]
 name = "quote"
-version = "1.0.41"
+version = "1.0.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce25767e7b499d1b604768e7cde645d14cc8584231ea6b295e9c9eb22c02e1d1"
+checksum = "a338cc41d27e6cc6dce6cefc13a0729dfbb81c262b1f519331575dd80ef3067f"
 dependencies = [
  "proc-macro2",
 ]
@@ -2969,6 +2986,7 @@ dependencies = [
  "directories",
  "futures-util",
  "libc",
+ "metrics",
  "once_cell",
  "parking_lot",
  "procfs",
@@ -2997,10 +3015,18 @@ dependencies = [
 name = "runloop-sdk"
 version = "0.1.0"
 dependencies = [
+ "bytes",
+ "camino",
+ "futures-util",
+ "runloop-bus",
  "runloop-core",
+ "runloop-rmp",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 1.0.69",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

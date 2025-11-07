@@ -7,6 +7,7 @@ use runloop_runtime::{AgentHandle, AgentIdentity, AgentSpec, Runtime};
 fn write_preopen_listing_wasm(path: &std::path::Path) {
     let wat = wat::parse_str(
         r#"(module
+            (import "runloop" "notify_ready" (func $notify_ready))
             (import "wasi_snapshot_preview1" "fd_prestat_get"
                 (func $fd_prestat_get (param i32 i32) (result i32)))
             (import "wasi_snapshot_preview1" "fd_prestat_dir_name"
@@ -23,6 +24,7 @@ fn write_preopen_listing_wasm(path: &std::path::Path) {
                 (local $fd i32)
                 (local $ret i32)
                 (local $name_len i32)
+                (call $notify_ready)
                 (local.set $fd (i32.const 3))
                 (block $exit
                     (loop $scan

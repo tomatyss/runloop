@@ -9,21 +9,21 @@ The Runloop Message Protocol (RMP) is a binary envelope for agent messages. It p
 
 ## 1. Wire framing (normative)
 
-RMP v0 frames are prefixed with a 32-bit length (big-endian, excluding the prefix), followed by a **fixed 60-byte header** and then a MsgPack body. All multi-byte integers in the prefix and header are encoded in **network byte order (big-endian)**.
+RMP v0 frames are prefixed with a 32-bit length (big-endian, excluding the prefix), followed by a **fixed 68-byte header** and then a MsgPack body. All multi-byte integers in the prefix and header are encoded in **network byte order (big-endian)**.
 
 | Offset | Field | Type | Notes |
 | ------ | ----- | ---- | ----- |
 | 0 | Magic | `[u8;4]` | ASCII `RMP0` |
 | 4 | `header_version` | `u16` | Always `1` for v0 |
-| 6 | `header_len` | `u16` | Always `60` |
+| 6 | `header_len` | `u16` | Always `68` |
 | 8 | `flags` | `u16` | bit 0 = ack requested; others reserved (MUST be 0) |
 | 10 | `schema_id` | `u16` | Payload schema ID |
 | 12 | `body_len` | `u32` | Length of the MsgPack body |
 | 16 | `created_at_ms` | `u64` | UTC milliseconds when the header was produced |
 | 24 | `ttl_ms` | `u32` | Relative TTL; `0` disables expiry |
 | 28 | `trace_id` | `[u8;16]` | UUIDv7 recommended |
-| 44 | `opening_id` | `u64` | Logical opening/workflow identifier |
-| 52 | `msg_id` | `u64` | Monotonic per sender for idempotency |
+| 44 | `opening_id` | `u128` | Logical opening/workflow identifier |
+| 60 | `msg_id` | `u64` | Monotonic per sender for idempotency |
 
 Receivers MUST validate `magic`, `header_version`, and `header_len` before processing a frame. Frames whose TTL has expired relative to the local clock MUST be dropped, with a drop notice published on `rlp/sys/drops`. Duplicate detection is performed on `(trace_id, msg_id)` pairs with an LRU cache per receiver; implementations SHOULD generate monotonically increasing identifiers (e.g., UUIDv7 or time-ordered 64-bit IDs) to keep caches efficient. Publishers that time out on back-pressure MUST emit the same drop notice with reason `backpressure_timeout`.
 
@@ -77,7 +77,7 @@ See [`docs/rmp-registry.md`](rmp-registry.md) for reserved ranges and assignment
 
 ## 7. Backwards compatibility rules (normative)
 
-1. **Header struct:** the 60-byte header is fixed; adding or reordering fields requires a new `header_version` (e.g., v1) and, if the size changes, a different `header_len`.
+1. **Header struct:** the 68-byte header is fixed; adding or reordering fields requires a new `header_version` (e.g., v1) and, if the size changes, a different `header_len`.
 2. **Bodies:** additive fields must be ignored by older agents; removing/renaming requires new `schema_id`.
 3. **Flags:** toggling new bits requires documentation and negotiation via config; unknown bits MUST be rejected in v0.
 

@@ -8,11 +8,13 @@ use runloop_runtime::{AgentHandle, AgentIdentity, AgentSpec, Runtime};
 fn write_wasm(path: &std::path::Path) {
     let wasm = wat::parse_str(
         r#"(module
+            (import "runloop" "notify_ready" (func $notify_ready))
             (import "wasi_snapshot_preview1" "fd_write"
                 (func $fd_write (param i32 i32 i32 i32) (result i32)))
             (memory (export "memory") 1)
             (data (i32.const 0) "ready")
             (func (export "_start")
+                (call $notify_ready)
                 (i32.store (i32.const 12) (i32.const 0))
                 (i32.store (i32.const 16) (i32.const 5))
                 (call $fd_write (i32.const 1) (i32.const 12) (i32.const 1) (i32.const 20))

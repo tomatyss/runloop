@@ -9,6 +9,7 @@ mod hostcalls;
 mod module_cache;
 mod output;
 mod policy;
+mod ready;
 mod runtime;
 mod secrets;
 mod spec;

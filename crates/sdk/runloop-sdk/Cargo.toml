@@ -1,0 +1,23 @@
+[package]
+name = "runloop-sdk"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "runloop_sdk"
+
+[dependencies]
+runloop-core = { path = "../../core" }
+runloop-rmp = { path = "../../rmp" }
+runloop-bus = { path = "../../bus" }
+camino = { version = "1.1", features = ["serde1"] }
+bytes = "1.6"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+uuid = { version = "1", features = ["serde"] }
+
+[dev-dependencies]
+tokio = { version = "1.38", features = ["macros", "rt-multi-thread"] }
+futures-util = "0.3"
+tempfile = "3.10"
