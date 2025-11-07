@@ -44,6 +44,13 @@ RUNLOOP_CONFIG=/custom/path/config.yaml
 - `models.broker.budgets` retains `default_tokens`, `per_request_tokens_cap`, and `hard_cap_usd`. Per-request budgets clamp to the stricter of the request and config-provided values.
 - Provider `secret_id` values resolve at runtime via the configured secret store; raw API keys should never be stored in YAML.
 
+### 1.4 Runtime readiness gate _(normative)_
+
+- Agents only become visible to supervisors after a **two-sided readiness handshake**: Wasmtime instantiates, the bus mailbox subscribes, tracing context is seeded, and the guest either calls the hostcall `runloop::notify_ready()` or enters its `mailbox_recv` loop (fallback for pre-ready binaries).
+- `runtime.spawn_ready_timeout_ms` (default **5000 ms**) controls how long the runtime waits for that handshake. Per-agent overrides live in `AgentSpec::spawn_ready_timeout_ms`; environment variable `RUNLOOP_SPAWN_READY_TIMEOUT_MS` is the lowest-precedence fallback.
+- When the timeout elapses, callers receive `Error::ReadyTimeout`, the runtime emits `runloop.runtime.spawn.ready_timeouts_total`, and it tears down any partially created bus subscriptions/audit state to prevent ghost agents.
+- Treat `notify_ready` as part of the minimum agent ABI going forward; older agents that cannot be rebuilt should block on `mailbox_recv` immediately so the fallback signal still fires.
+
 ## 2. Knowledge Base (POG) operations _(normative)_
 
 The POG consists of two SQLite files and a derived vector index.

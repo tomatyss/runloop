@@ -1,7 +1,101 @@
 use std::io;
 use std::path::PathBuf;
 
+use runloop_core::ids::EventId;
 use thiserror::Error;
+
+/// Capability bucket identifier for denial reporting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapKind {
+    Fs,
+    Net,
+    Time,
+    KbRead,
+    KbWrite,
+    Model,
+    Secrets,
+    Exec,
+    Other,
+}
+
+impl CapKind {
+    #[must_use]
+    pub fn from_label(label: &str) -> Self {
+        if let Some((prefix, _)) = label.split_once('.') {
+            return Self::from_prefix(prefix);
+        }
+        Self::from_prefix(label)
+    }
+
+    fn from_prefix(prefix: &str) -> Self {
+        match prefix {
+            "fs" | "fs_ro" | "fs_rw" => CapKind::Fs,
+            "net" | "net.http" => CapKind::Net,
+            "time" => CapKind::Time,
+            "kb" | "kb.read" => CapKind::KbRead,
+            "kb.write" => CapKind::KbWrite,
+            "model" => CapKind::Model,
+            "secrets" => CapKind::Secrets,
+            "exec" => CapKind::Exec,
+            _ => CapKind::Other,
+        }
+    }
+}
+
+impl std::fmt::Display for CapKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            CapKind::Fs => "fs",
+            CapKind::Net => "net",
+            CapKind::Time => "time",
+            CapKind::KbRead => "kb_read",
+            CapKind::KbWrite => "kb_write",
+            CapKind::Model => "model",
+            CapKind::Secrets => "secrets",
+            CapKind::Exec => "exec",
+            CapKind::Other => "other",
+        };
+        write!(f, "{name}")
+    }
+}
+
+/// Structured capability denial context propagated to callers.
+#[derive(Debug, Clone)]
+pub struct CapDeniedInfo {
+    pub cap: CapKind,
+    pub op: String,
+    pub detail: String,
+    pub reason: String,
+    pub audit_event: Option<EventId>,
+}
+
+impl CapDeniedInfo {
+    #[must_use]
+    pub fn new(
+        cap: impl AsRef<str>,
+        op: impl Into<String>,
+        detail: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            cap: CapKind::from_label(cap.as_ref()),
+            op: op.into(),
+            detail: detail.into(),
+            reason: reason.into(),
+            audit_event: None,
+        }
+    }
+}
+
+impl std::fmt::Display for CapDeniedInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "capability denied: cap={}, op={}, detail={}, reason={}",
+            self.cap, self.op, self.detail, self.reason
+        )
+    }
+}
 
 /// Top-level runtime errors surfaced to callers.
 #[derive(Debug, Error)]
@@ -16,14 +110,16 @@ pub enum Error {
     InvalidNetworkHost(String),
     #[error("invalid capability entry: {0}")]
     InvalidCapabilityEntry(String),
-    #[error("capability denied: {0}")]
-    CapDenied(String),
+    #[error("{0}")]
+    CapDenied(CapDeniedInfo),
     #[error("unknown agent")]
     UnknownAgent,
     #[error("agent already exists: {0}")]
     AgentAlreadyExists(String),
     #[error("agent spawn failed: {0}")]
     SpawnFailed(String),
+    #[error("agent failed to enter ready state within {ms} ms")]
+    ReadyTimeout { ms: u64, agent: String },
     #[error("agent task join failed: {0}")]
     AgentJoinFailed(String),
     #[error("statistics unavailable")]
@@ -46,11 +142,20 @@ impl Error {
     }
 }
 
+impl From<CapDeniedInfo> for Error {
+    fn from(info: CapDeniedInfo) -> Self {
+        Self::CapDenied(info)
+    }
+}
+
 impl From<Error> for runloop_core::Error {
     fn from(err: Error) -> Self {
         use runloop_core::Error as CoreError;
         match err {
-            Error::CapDenied(msg) => CoreError::CapDenied(msg),
+            Error::CapDenied(info) => CoreError::CapDenied(info.to_string()),
+            Error::ReadyTimeout { ms, agent } => {
+                CoreError::Timeout(format!("agent {agent} not ready after {ms} ms"))
+            }
             Error::Config(msg) => CoreError::Config(msg),
             Error::Io(err) => CoreError::Io(err),
             Error::Wasmtime(err) => CoreError::Runtime(err.to_string()),

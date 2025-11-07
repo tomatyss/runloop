@@ -2986,6 +2986,7 @@ dependencies = [
  "directories",
  "futures-util",
  "libc",
+ "metrics",
  "once_cell",
  "parking_lot",
  "procfs",

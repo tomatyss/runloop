@@ -49,6 +49,7 @@ pub struct AgentSpec {
     pub stdout_capacity: usize,
     pub stderr_capacity: usize,
     pub working_dir: Option<Utf8PathBuf>,
+    pub spawn_ready_timeout_ms: Option<u64>,
 }
 
 impl AgentSpec {
@@ -63,6 +64,7 @@ impl AgentSpec {
             stdout_capacity: 64 * 1024,
             stderr_capacity: 64 * 1024,
             working_dir: None,
+            spawn_ready_timeout_ms: None,
         }
     }
 
@@ -83,6 +85,7 @@ pub struct AgentSpecBuilder {
     stdout_capacity: usize,
     stderr_capacity: usize,
     working_dir: Option<Utf8PathBuf>,
+    spawn_ready_timeout_ms: Option<u64>,
 }
 
 impl AgentSpecBuilder {
@@ -125,6 +128,11 @@ impl AgentSpecBuilder {
         self
     }
 
+    pub fn spawn_ready_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.spawn_ready_timeout_ms = Some(timeout_ms);
+        self
+    }
+
     pub fn build(self) -> Result<AgentSpec, Error> {
         let policy_path = self
             .policy_path
@@ -142,6 +150,7 @@ impl AgentSpecBuilder {
             stdout_capacity: self.stdout_capacity,
             stderr_capacity: self.stderr_capacity,
             working_dir: self.working_dir,
+            spawn_ready_timeout_ms: self.spawn_ready_timeout_ms,
         };
         spec.sanitize();
         Ok(spec)

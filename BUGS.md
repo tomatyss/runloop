@@ -25,6 +25,12 @@ The new `runloop-runtime` crate introduces a richer Wasmtime embedding, but seve
 
 Introduce a `oneshot` channel (or similar) so the worker thread reports success or failure before `spawn` returns. Propagate the first error immediately and only publish the agent handle once the guest is truly running.
 
+### Resolution (2025-11-07)
+
+- `Runtime::spawn` now blocks on a readiness barrier that waits for Wasmtime instantiation, bus subscription, and a guest-side `notify_ready` hostcall (or the first `mailbox_recv`).
+- Supervisors receive `Error::ReadyTimeout` if the handshake exceeds the configurable `spawn_ready_timeout_ms` (default 5s). The runtime records metrics (`runloop.runtime.spawn.ready_latency_ms`, `…ready_timeouts_total`, `…failures_total{reason}`) and emits a host audit event before tearing down partial state.
+- A new hostcall `runloop::notify_ready()` lets agents explicitly ack readiness; older binaries can rely on the mailbox fallback but should be rebuilt to call the hostcall directly.
+
 ## 2. Stdout/Stderr Buffers Grow Without Bound
 
 - **Status:** High  
@@ -289,3 +295,49 @@ Update `DESCRIPTION.md` to state `header_len=68`, matching the code and other do
 ### Resolution
 
 `DESCRIPTION.md` now lists `header_len=68`, matching `runloop-rmp` and the rest of the protocol docs.
+
+## 13. KB Write Denials Are Misclassified As Read Denials
+
+- **Status:** High  
+- **Scope:** `crates/runtime/src/error.rs:21-42`
+
+### What Happens
+
+`CapKind::from_label` truncates labels at the first `.` before matching the prefix. Labels like `kb.write.repo` therefore collapse to `kb` and fall through to the `KbRead` arm. Structured errors emitted through `CapDeniedInfo` and surfaced via `Error::CapDenied` will always report `cap=kb_read`, even when a write namespace triggered the denial.
+
+### Impact
+
+- Audit trails and metrics can no longer distinguish read vs. write policy violations.  
+- Alerts for write-only regressions never fire because those denials are misbucketed under the read counters.  
+- Automated remediations that depend on the structured `cap` field become unreliable.
+
+### Root Cause
+
+`CapKind::from_label` never checks for `kb.write` before truncating, so the `KbWrite` variant is effectively unreachable.
+
+### Recommended Fix
+
+Match the full label before stripping suffixes (or only split when the full label is unknown) so `kb.write.*` resolves to `CapKind::KbWrite` while retaining prefix matching for other capability families.
+
+## 14. Agents That Only Call `mailbox_peek_meta` Never Reach Ready State
+
+- **Status:** High  
+- **Scope:** `crates/runtime/src/hostcalls.rs:111-117,417-420` and `crates/runtime/src/runtime.rs:298-365`
+
+### What Happens
+
+The readiness barrier introduced for `Runtime::spawn` only listens for `runloop::notify_ready` or a `mailbox_recv` invocation. Legacy agents that idle by polling `mailbox_peek_meta` (and only call `mailbox_recv` after they see a header) never exercise either code path, so `spawn` waits until `spawn_ready_timeout_ms` elapses and returns `Error::ReadyTimeout` even though `_start` succeeded and the agent is idle.
+
+### Impact
+
+- Peek-first agents can no longer be supervised; every launch times out.  
+- Operators must either disable the readiness gate (defeating the feature) or rebuild every agent to add `notify_ready`, slowing staged rollouts.  
+- The documented fallback path for "pre-ready binaries" is incomplete, making the regression hard to diagnose.
+
+### Root Cause
+
+`host_mailbox_recv` calls `HostState::notify_mailbox_recv`, but `mailbox_peek_meta` never does, so the readiness emitter is never tripped when guests remain in peek mode.
+
+### Recommended Fix
+
+Treat `mailbox_peek_meta` as a readiness signal (either on the first invocation or once it returns a header), or add a small hostcall that legacy agents can invoke before entering their peek loop.

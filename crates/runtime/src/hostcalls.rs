@@ -4,7 +4,8 @@ use std::sync::mpsc as sync_mpsc;
 
 use crate::audit::{AuditCategory, AuditSink};
 use crate::caps::{CapabilitySet, Caps, NetLocation};
-use crate::error::Error;
+use crate::error::{CapDeniedInfo, CapKind, Error};
+use crate::ready::ReadyEmitter;
 use crate::secrets::SecretProvider;
 use anyhow::anyhow;
 use parking_lot::Mutex;
@@ -39,6 +40,8 @@ pub(crate) struct HostState {
     identity: String,
     deny_flag: Arc<AtomicBool>,
     async_handle: Option<TokioHandle>,
+    ready: ReadyEmitter,
+    last_denial: Arc<Mutex<Option<CapDeniedInfo>>>,
 }
 
 impl HostState {
@@ -53,6 +56,7 @@ impl HostState {
         agent_id: AgentId,
         identity: String,
         async_handle: Option<TokioHandle>,
+        ready: ReadyEmitter,
     ) -> Self {
         Self {
             caps,
@@ -66,6 +70,8 @@ impl HostState {
             identity,
             deny_flag: Arc::new(AtomicBool::new(false)),
             async_handle,
+            ready,
+            last_denial: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -91,10 +97,23 @@ impl HostState {
 
     pub(crate) fn reset_denial_flag(&self) {
         self.deny_flag.store(false, Ordering::Relaxed);
+        self.last_denial.lock().take();
     }
 
     pub(crate) fn consume_denial_flag(&self) -> bool {
         self.deny_flag.swap(false, Ordering::Relaxed)
+    }
+
+    pub(crate) fn take_last_denial(&self) -> Option<CapDeniedInfo> {
+        self.last_denial.lock().take()
+    }
+
+    pub(crate) fn notify_ready_hostcall(&self) {
+        self.ready.notify_hostcall();
+    }
+
+    pub(crate) fn notify_mailbox_recv(&self) {
+        self.ready.notify_mailbox_recv();
     }
 
     fn broker_complete(&self, request: ModelRequest) -> ModelResult {
@@ -141,6 +160,14 @@ impl HostState {
             AuditSeverity::Warn,
         );
         self.kb.record_cap_audit(record);
+        let info = CapDeniedInfo {
+            cap: CapKind::from_label(cap),
+            op: op.to_string(),
+            detail: target.to_string(),
+            reason: reason.to_string(),
+            audit_event: None,
+        };
+        *self.last_denial.lock() = Some(info);
     }
 
     fn ensure_time(&self, op: &str) -> Result<(), WasmtimeError> {
@@ -384,6 +411,9 @@ pub(crate) fn add_to_linker(linker: &mut Linker<StoreData>) -> Result<(), Error>
         .func_wrap("runloop", "exec_spawn", host_exec_spawn)
         .map_err(|err| Error::SpawnFailed(err.to_string()))?;
     linker
+        .func_wrap("runloop", "notify_ready", host_notify_ready)
+        .map_err(|err| Error::SpawnFailed(err.to_string()))?;
+    linker
         .func_wrap("runloop", "mailbox_peek_meta", host_mailbox_peek_meta)
         .map_err(|err| Error::SpawnFailed(err.to_string()))?;
     linker
@@ -543,11 +573,17 @@ fn host_exec_spawn(
     Ok(0)
 }
 
+fn host_notify_ready(caller: Caller<'_, StoreData>) -> Result<(), WasmtimeError> {
+    caller.data().state.notify_ready_hostcall();
+    Ok(())
+}
+
 fn host_mailbox_recv(
     mut caller: Caller<'_, StoreData>,
     ptr: i32,
     len: i32,
 ) -> Result<i32, WasmtimeError> {
+    caller.data().state.notify_mailbox_recv();
     let Some(message) = caller.data().mailbox.try_recv() else {
         return Ok(0);
     };
@@ -756,6 +792,7 @@ mod tests {
             AgentId::new(),
             "probe".to_string(),
             None,
+            ReadyEmitter::noop(),
         ));
 
         let store_data = StoreData {
@@ -818,6 +855,7 @@ mod tests {
             AgentId::new(),
             "model".to_string(),
             None,
+            ReadyEmitter::noop(),
         ));
 
         let store_data = StoreData {
