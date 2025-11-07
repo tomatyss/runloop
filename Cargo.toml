@@ -11,7 +11,8 @@ members = [
   "crates/runloopd",
   "crates/rlp",
   "crates/agtop",
-  "crates/sdk",
+  "crates/sdk/runloop-sdk",
+  "crates/sdk/agent-shim",
 ]
 resolver = "2"
 

@@ -181,3 +181,111 @@ The report drains `records.into_values()` instead of preserving the topological 
 ### Recommended Fix
 
 Collect records in `opening.nodes` order (or perform a topological sort) before returning them, ensuring deterministic CLI output and trace serialization.
+
+## 9. Lockfile References Non-Existent `serde_core` Crate
+
+- **Status:** Closed — false positive (2025-11-07)  
+- **Scope:** `Cargo.lock`
+
+### What Happens
+
+`Cargo.lock` now declares multiple dependencies on a crate named `serde_core` (e.g., under `camino`, `semver`, and `serde_json`), and even contains a `[[package]] name = "serde_core"` stanza. Crates.io does not publish such a crate, so `cargo metadata --locked`, `cargo fetch`, and all build/test commands fail immediately with “no matching package named `serde_core` found.”
+
+### Impact
+
+- Completely blocks `cargo build`, `cargo test`, and CI until the lockfile is repaired.  
+- Developers cannot run `cargo fmt`/`cargo clippy` because Cargo refuses to resolve dependencies.  
+- Automation (packaging, release, CI) is dead in the water, halting progress on every crate.
+
+### Root Cause
+
+The lockfile was edited manually (or by a broken tool) to replace `serde` with the non-existent `serde_core`. No corresponding `Cargo.toml` entry references that package, so the resolver cannot satisfy the dependency graph.
+
+### Recommended Fix
+
+Regenerate the lockfile from authoritative manifests—e.g., run `cargo update -p serde` (or `cargo update`) to restore the proper `serde` package entries. Commit the regenerated `Cargo.lock` so CI and developers can resolve dependencies again.
+
+### Resolution
+
+`cargo generate-lockfile` now succeeds with the current workspace manifests, and `cargo metadata --locked` runs cleanly. The `serde_core` crate (v1.0.228) is an official crates.io package that several dependencies enable, so the lockfile is valid and no further action is required.
+
+## 10. Remote IPC Clients Hang On Socket Disconnects
+
+- **Status:** Fixed (2025-11-07)  
+- **Scope:** `crates/bus/src/ipc/unix.rs:148-255`
+
+### What Happens
+
+When the Unix socket is closed or the runtime restarts, `read_frames` exits its loop without flushing any of the outstanding `PendingAck` entries for publishes/subscribes. The callers are all awaiting a `oneshot` that never receives a value, so the corresponding `shim.publish(..)` / `shim.subscribe(..)` futures hang forever and never surface an error.
+
+### Impact
+
+- Native agents that lose their bus connection deadlock instead of reconnecting, wedging openings.  
+- Supervisors can’t detect the outage because the shim never returns a `BusError`.  
+- A single transient socket blip requires a full process restart to clear stuck awaiters.
+
+### Root Cause
+
+`read_frames` simply `break`s on any `read_exact` failure without iterating over `inner.pending` to send `Err(BusError::Closed)` to each stored oneshot. The `subscriptions` map is also left populated, leaking channels that will never be serviced again.
+
+### Recommended Fix
+
+Before returning from `read_frames`, drain `pending` and send `Err(BusError::Closed)` (or `BusError::NotFound`) to every waiter, and remove all subscriptions. That allows higher layers to observe the disconnect and attempt a clean reconnect.
+
+### Resolution
+
+`read_frames` now always drains `pending` acks and active subscription channels via `IpcClientInner::teardown` before exiting, ensuring all waiters observe `BusError::Closed` and subscribers receive channel closures.
+
+## 11. Slow Subscriber Can Deadlock IPC Reader
+
+- **Status:** Fixed (2025-11-07)  
+- **Scope:** `crates/bus/src/ipc/unix.rs:226-235`
+
+### What Happens
+
+For each `IpcEvent::Message`, the client tries `tx.try_send`. If the channel is full, it calls `tx.send(msg).await` **inside the reader task**, with no timeout or buffering. If that subscriber stops polling, the await never resolves and the reader stops processing frames entirely—blocking publish acks, subscribe acks, and all other subscriptions on that connection.
+
+### Impact
+
+- One misbehaving native agent can wedge every other subscriber on the same shim.  
+- Pending publish operations never get their acks, so the caller believes the bus hung.  
+- Backpressure semantics diverge from the in-process bus (which enforces timeouts and drop notices), making remote behavior harder to reason about.
+
+### Root Cause
+
+The reader task multiplexes both control and data traffic on a single async loop. Awaiting `tx.send` inside that loop means message delivery is no longer fair; the backlog of a single receiver blocks processing of unrelated frames.
+
+### Recommended Fix
+
+Either spawn per-subscription forwarding tasks (so a blocked subscriber only stalls itself) or mirror the bus’s timeout semantics by cancelling the send after `config.send_timeout` and dropping the subscriber. At minimum, ensure the reader loop never awaits on per-subscriber backpressure.
+
+### Resolution
+
+Message forwarding now clones the `Sender` and pushes blocking sends into background tasks; stalled subscribers are dropped via `cleanup_subscription`, so the reader task never awaits on per-subscriber backpressure.
+
+## 12. Protocol Docs Still Cite 60-Byte Header
+
+- **Status:** Fixed (2025-11-07)  
+- **Scope:** `DESCRIPTION.md:60-70`
+
+### What Happens
+
+The high-level protocol description now says “fixed 68-byte header” in the bullet list but immediately lists `header_len=60` in the parenthetical field summary. Readers comparing this description with `README.md`/`docs/message-protocol.md` (and the actual `runloop-rmp` implementation) get conflicting numbers for the header size.
+
+### Impact
+
+- External consumers implementing the wire protocol may allocate the wrong header size.  
+- Documentation reviewers waste time reconciling contradictory specs.  
+- Undermines confidence that the README/specs are authoritative.
+
+### Root Cause
+
+The header length was bumped to 68 bytes when `opening_id` became a `u128`, but `DESCRIPTION.md` still mentions the old `header_len=60` constant.
+
+### Recommended Fix
+
+Update `DESCRIPTION.md` to state `header_len=68`, matching the code and other docs. Optionally add a short note explaining that `opening_id` is now 16 bytes to prevent regressions.
+
+### Resolution
+
+`DESCRIPTION.md` now lists `header_len=68`, matching `runloop-rmp` and the rest of the protocol docs.

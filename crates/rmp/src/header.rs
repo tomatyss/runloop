@@ -8,7 +8,7 @@ pub const MAGIC: [u8; 4] = *b"RMP0";
 /// Current protocol header version.
 pub const HEADER_VERSION: u16 = 1;
 /// Expected header length in bytes.
-pub const HEADER_LEN: u16 = 60;
+pub const HEADER_LEN: u16 = 68;
 
 /// Maximum frame payload supported by the decoder (1 MiB by default).
 pub const DEFAULT_MAX_FRAME_LEN: u32 = 1_048_576;
@@ -37,7 +37,10 @@ pub enum FrameDecodeError {
 }
 
 /// RMP header fields (v1).
-#[derive(Debug, Clone, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+/// RMP header fields (v1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Header {
     pub header_version: u16,
     pub header_len: u16,
@@ -47,7 +50,7 @@ pub struct Header {
     pub created_at_ms: u64,
     pub ttl_ms: u32,
     pub trace_id: u128,
-    pub opening_id: u64,
+    pub opening_id: u128,
     pub msg_id: u64,
 }
 
@@ -80,7 +83,7 @@ impl Header {
         buf.put_u64(self.created_at_ms);
         buf.put_u32(self.ttl_ms);
         buf.put_u128(self.trace_id);
-        buf.put_u64(self.opening_id);
+        buf.put_u128(self.opening_id);
         buf.put_u64(self.msg_id);
     }
 
@@ -109,7 +112,7 @@ impl Header {
             created_at_ms: buf.get_u64(),
             ttl_ms: buf.get_u32(),
             trace_id: buf.get_u128(),
-            opening_id: buf.get_u64(),
+            opening_id: buf.get_u128(),
             msg_id: buf.get_u64(),
         })
     }
@@ -229,7 +232,7 @@ mod tests {
         buf.put_u32(1);
         buf.put_u128(0);
         buf.put_u64(0);
-        buf.put_u64(0);
+        buf.put_u128(0);
         assert!(matches!(
             Header::decode_from(&buf[..]),
             Err(FrameDecodeError::InvalidMagic(_))

@@ -126,6 +126,7 @@ Runtime socket settings: prefer `runtime.socket_path` (explicit file). If unset,
 
 - **Daemon (`runloopd`)** – hosts the local bus, schedules agents, enforces capabilities.
 - **Runtime** – spawns agents as **WASM/WASI** tasks (fast start, low RSS, sandboxed).
+- **SDK & Shim** – `runloop-sdk` + the `agent-shim` bootstrap allow MVP native agents to speak the bus/RMP protocol with the same capability envelope until their WASM bundles land.
 - **RMP (Runloop Message Protocol)** – typed, traceable messages over UDS: headers carry trace/budget/TTL; bodies are schema‑tagged.
 - **Openings** – declarative DAGs that define a crew of agents and their crossings; supports retries, timeouts, budgets, and deterministic replay.
 - **POG (knowledge base)** – local‑first event log + materialized views, with embeddings for semantic recall and full provenance.
@@ -164,7 +165,7 @@ See the canonical YAML at `examples/openings/compose_email.yaml` for the normati
 
 ## Message Protocol (RMP)
 
-**MVP (RMP v0)** wire format uses a fixed 60-byte header (`magic`, `version`, `len`, `flags`, `schema_id`, `body_len`, `created_at_ms`, `ttl_ms`, `trace_id`, `opening_id`, `msg_id`) followed by a MsgPack body containing typed payload + optional metadata (budgets, priority, capability hints).
+**MVP (RMP v0)** wire format uses a fixed 68-byte header (`magic`, `version`, `len`, `flags`, `schema_id`, `body_len`, `created_at_ms`, `ttl_ms`, `trace_id`, `opening_id`, `msg_id`) followed by a MsgPack body containing typed payload + optional metadata (budgets, priority, capability hints).
 Receivers enforce TTL using `created_at_ms + ttl_ms`. **RMP 0.2** (later in the roadmap) adds signatures/acks and richer metadata; wire compatibility is preserved.
 
 Message bodies are schema‑tagged (JSON Schema on write; msgpack on the wire is allowed). Provenance is attached to each message for audit/replay.

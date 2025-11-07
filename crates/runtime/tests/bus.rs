@@ -26,7 +26,7 @@ fn bus_send_errors_propagate() {
     let bus = {
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
         rt.block_on(async {
-            let server = Bus::bind(&bus_path).await.expect("bind bus");
+            let mut server = Bus::bind(&bus_path).await.expect("bind bus");
             let bus = Bus::connect(&bus_path).await.expect("connect bus");
             server.close();
             bus
