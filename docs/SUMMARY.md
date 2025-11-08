@@ -4,26 +4,24 @@
 - [Getting Started](getting-started.md)
 - [Architecture](architecture.md)
 
-- **Protocols**
+- [Protocols](protocols.md)
   - [Message Protocol](message-protocol.md)
   - [RMP Registry](rmp-registry.md)
   - [KB Schemas](kb-schemas.md)
 
-- **Openings**
+- [Openings](openings.md)
   - [Openings DSL](openings-dsl.md)
 
-- **Operations**
+- [Operations](operations.md)
   - [Operations Runbook](ops.md)
   - [Policy Capabilities](policy-caps.md)
   - [Security Model](security-model.md)
   - [Performance Harness](perf.md)
   - [Release Process](release-process.md)
 
-- **Tools**
+- [Tools](tools.md)
   - [TUI](tui.md)
 
 - [Contributor Guide](contributor-guide.md)
 - [Roadmap](roadmap.md)
-- **ADRs**
-  - [ADR Index](adr/README.md)
-
+- [ADRs](adr/README.md)
