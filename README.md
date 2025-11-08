@@ -7,6 +7,20 @@ See [ROADMAP.md](./ROADMAP.md) for the phased plan and [docs/perf.md](./docs/per
 
 ---
 
+## Documentation (mdBook)
+
+The documentation under `docs/` is organized as an mdBook.
+
+- Build: `mdbook build docs`
+- Serve locally: `mdbook serve docs -n 127.0.0.1 -p 3000`
+
+If you use `just`, convenient tasks are available:
+
+- `just docs-book` – builds the book into `docs/book/`
+- `just docs-serve` – serves with live-reload for local editing
+
+---
+
 ## What this repo is / is not
 
 **Is:** a terminal‑first layer that:
