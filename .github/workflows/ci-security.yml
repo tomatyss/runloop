@@ -70,6 +70,10 @@ jobs:
 
   codeql:
     name: CodeQL (Rust)
+    # Guard to avoid conflict with GitHub CodeQL Default setup.
+    # Run this advanced job only when the repository variable CI_CODEQL_ADVANCED is explicitly set to 'true'.
+    # If you enable this, disable Default setup in the GitHub UI first to avoid SARIF rejection.
+    if: ${{ vars.CI_CODEQL_ADVANCED == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       actions: read
