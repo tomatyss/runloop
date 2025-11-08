@@ -35,6 +35,12 @@ doc:
 doc-open:
 	@cargo doc --workspace --no-deps --open
 
+docs-book:
+	@mdbook build docs
+
+docs-serve:
+	@mdbook serve docs -n 127.0.0.1 -p 3000
+
 run-daemon *args:
 	@cargo run -p runloopd -- {{args}}
 

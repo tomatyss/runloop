@@ -1,0 +1,23 @@
+[book]
+title = "Runloop OS"
+description = "Runloop OS documentation: architecture, specs, and operations."
+authors = ["Runloop Maintainers"]
+language = "en"
+multilingual = false
+# Use the existing docs/ directory as the mdBook source
+src = "."
+
+[build]
+build-dir = "book"
+create-missing = true
+
+[output.html]
+git-repository-url = ""
+default-theme = "light"
+preferred-dark-theme = "ayu"
+site-url = "/"
+cname = ""
+
+[output.html.search]
+enable = true
+

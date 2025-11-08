@@ -6,6 +6,9 @@
 /.cargo/
 /.rustup/
 
+# mdBook build output
+docs/book/
+
 # Environment files
 .env
 
