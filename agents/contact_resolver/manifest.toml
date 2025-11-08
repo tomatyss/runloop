@@ -1,1 +1,13 @@
-# TODO: Populate manifest metadata for this agent (name, version, entrypoints).
+[agent]
+name = "contact_resolver"
+version = "0.1.0"
+kind = "native-shim"
+
+entry_native = { path = "bin/contact_resolver", blake3 = "0000000000000000000000000000000000000000000000000000000000000000" }
+
+[ports]
+in = ["intent.contact.lookup.v1"]
+out = ["artifact.contact.resolved.v1"]
+
+[caps]
+file = "policy.caps"

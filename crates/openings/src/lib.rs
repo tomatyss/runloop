@@ -40,7 +40,7 @@ mod tests {
         let opening = parse_opening_str(&yaml).expect("parse compose_email");
         assert_eq!(opening.name, "compose_email");
         assert_eq!(opening.nodes.len(), 5);
-        assert_eq!(opening.edges.len(), 4);
+        assert_eq!(opening.edges.len(), 8);
         assert!(matches!(
             opening.success,
             Some(SuccessCondition::AnyOf(exprs)) if !exprs.is_empty()

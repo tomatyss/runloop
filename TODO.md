@@ -228,41 +228,43 @@
 
 **H1. contact_resolver**
 
-* [ ] Inputs: `recipient_query` (string).
-* [ ] Action: `kb.query` for contact; if none, create stub with low trust and request human confirm.
-* [ ] Outputs: `ResolvedContact {name,email,confidence,contact_id}`.
+* [x] Inputs: `recipient_query` (string).
+* [x] Action: `kb.query` for contact; if none, create stub with low trust and request human confirm.
+* [x] Outputs: `ResolvedContact {name,email,confidence,contact_id}`.
 
 **DoD:** Given seeded KB with “John [john@acme.com](mailto:john@acme.com)”, returns correct email, confidence ≥ 0.8.
 
 **H2. context_gatherer**
 
-* [ ] Inputs: `topic`, `contact_id`.
-* [ ] Action: fetch recent artifacts tagged with contact/topic; summarize via broker or simple heuristic (fallback).
-* [ ] Outputs: `ContextBundle {bullets[], citations[event_id[]]}`.
+* [x] Inputs: `topic`, `contact_id`.
+* [x] Action: fetch recent artifacts tagged with contact/topic; summarize via broker or simple heuristic (fallback).
+* [x] Outputs: `ContextBundle {bullets[], citations[event_id[]]}`.
 
 **DoD:** Returns ≥1 bullet and citations referencing KB events.
 
+* [ ] Harden the LIKE predicate (lowercase `payload_json`, escape `%`/`_`) so topic/contact filters behave case-insensitively without accidental wildcard injection.
+
 **H3. writer**
 
-* [ ] Inputs: `recipient, topic, context`.
-* [ ] Action: prompt template; call broker; generate `Artifact(draft_email.md)`.
-* [ ] Outputs: `Draft {artifact_id, rationale}`.
+* [x] Inputs: `recipient, topic, context`.
+* [x] Action: prompt template; call broker; generate `Artifact(draft_email.md)`.
+* [x] Outputs: `Draft {artifact_id, rationale}`.
 
 **DoD:** Draft ≤ 180 words; artifact recorded; rationale present.
 
 **H4. critic**
 
-* [ ] Inputs: `Draft`.
-* [ ] Action: check for tone/length; if failing, propose edits; set `ok:boolean`.
-* [ ] Outputs: `Review {ok, notes}`.
+* [x] Inputs: `Draft`.
+* [x] Action: check for tone/length; if failing, propose edits; set `ok:boolean`.
+* [x] Outputs: `Review {ok, notes}`.
 
 **DoD:** For a too‑long draft, sets `ok=false` and suggests trimming.
 
-**H5. mailer (dry‑run)**
+**H5. mailer (dry-run)**
 
-* [ ] Inputs: `Draft`, `ResolvedContact`, `Review`.
-* [ ] Action: if `review.ok` → **require human confirm**; on confirm, record `email.sent` with `artifact_id`, print to stdout (no network send).
-* [ ] Outputs: `MailResult {status:'dry-run', recipients[]}`.
+* [x] Inputs: `Draft`, `ResolvedContact`, `Review`.
+* [x] Action: if `review.ok` → **require human confirm**; on confirm, record `email.sent` with `artifact_id`, print to stdout (no network send).
+* [x] Outputs: `MailResult {status:'dry-run', recipients[]}`.
 
 **DoD:** Confirmation gate works; KB has `email.sent` event referencing the draft artifact.
 
@@ -272,7 +274,7 @@
 
 **I1. CLI surface**
 
-* [ ] `rlp run openings/compose_email.yaml --params '{...}'`
+* [x] `rlp run openings/compose_email.yaml --params '{...}'`
 * [ ] `rlp why "<prompt>"`
 * [ ] `rlp replay <trace_id>`
 * [ ] `rlp kb query "<sql>"`
@@ -280,6 +282,10 @@
 * [ ] `rlp config path` (prints active config path)
 
 **DoD:** Commands print structured output (table or JSON); exit codes sensible.
+
+**Follow-ups**
+
+* [ ] `rlp run`: surface invalid agent param types (e.g., `recipient_query`) as hard errors instead of silently defaulting to an empty string.
 
 **I2. TUI monitor (`agtop`)**
 

@@ -2,6 +2,7 @@ use crate::{
     Executor, NodeExecution, NodeExecutionRequest, NodeState, Opening, RunTrace, RunnerError,
 };
 use blake3::Hasher;
+use runloop_core::AgentId;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -75,6 +76,9 @@ where
                     node,
                     inputs: &final_attempt.inputs,
                     attempt: final_attempt.attempt,
+                    trace_id: trace.trace_id,
+                    opening_id: trace.opening_id,
+                    agent_id: AgentId::new(),
                 };
 
                 let execution = executor.execute(request).await?;

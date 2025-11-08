@@ -1,1 +1,7 @@
-# TODO: Define capability grants for this agent.
+[capabilities]
+model = true
+kb_read = []
+kb_write = []
+fs = []
+net = []
+time = false

@@ -12,7 +12,7 @@ members = [
   "crates/rlp",
   "crates/agtop",
   "crates/sdk/runloop-sdk",
-  "crates/sdk/agent-shim",
+  "crates/sdk/agent-shim", "crates/agents/common", "crates/agents/contact_resolver", "crates/agents/context_gatherer", "crates/agents/writer", "crates/agents/critic", "crates/agents/mailer",
 ]
 resolver = "2"
 

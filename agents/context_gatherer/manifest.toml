@@ -1,1 +1,13 @@
-# TODO: Populate manifest metadata for this agent (name, version, entrypoints).
+[agent]
+name = "context_gatherer"
+version = "0.1.0"
+kind = "native-shim"
+
+entry_native = { path = "bin/context_gatherer", blake3 = "0000000000000000000000000000000000000000000000000000000000000000" }
+
+[ports]
+in = ["intent.context.gather.v1"]
+out = ["artifact.context.bundle.v1"]
+
+[caps]
+file = "policy.caps"
