@@ -1,1 +1,7 @@
-# TODO: Define capability grants for this agent.
+[capabilities]
+fs = ["~/.runloop/artifacts"]
+kb_read = ["artifacts"]
+kb_write = ["artifacts"]
+model = true
+net = []
+time = false

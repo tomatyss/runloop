@@ -2,7 +2,7 @@ use crate::{Edge, Literal, Node, Opening, Predicate, Retry, SuccessCondition};
 use async_trait::async_trait;
 use blake3::Hasher;
 use rand::Rng;
-use runloop_core::TraceId;
+use runloop_core::{AgentId, OpeningId, TraceId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::{HashMap, VecDeque};
@@ -70,6 +70,9 @@ pub struct NodeExecutionRequest<'a> {
     pub node: &'a Node,
     pub inputs: &'a NodeInputs,
     pub attempt: u32,
+    pub trace_id: TraceId,
+    pub opening_id: OpeningId,
+    pub agent_id: AgentId,
 }
 
 #[async_trait]
@@ -131,6 +134,8 @@ pub struct NodeTrace {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RunTrace {
     pub trace_id: TraceId,
+    #[serde(default)]
+    pub opening_id: OpeningId,
     pub nodes: Vec<NodeTrace>,
     pub final_hash: String,
     pub success: bool,
@@ -149,6 +154,7 @@ where
     opening: Opening,
     executor: Arc<E>,
     trace_id: TraceId,
+    opening_id: OpeningId,
 }
 
 impl<E> Runner<E>
@@ -160,11 +166,16 @@ where
             opening,
             executor,
             trace_id: TraceId::new(),
+            opening_id: OpeningId::new(),
         }
     }
 
     pub fn trace_id(&self) -> TraceId {
         self.trace_id
+    }
+
+    pub fn opening_id(&self) -> OpeningId {
+        self.opening_id
     }
 
     pub async fn run(&self) -> Result<RunReport, RunnerError> {
@@ -260,6 +271,9 @@ where
                     node,
                     inputs: &attempt_inputs,
                     attempt: attempts_used,
+                    trace_id: self.trace_id,
+                    opening_id: self.opening_id,
+                    agent_id: AgentId::new(),
                 };
 
                 let timeout_ms = node
@@ -459,6 +473,7 @@ where
         let final_hash = hasher.finalize().to_hex().to_string();
         let trace = RunTrace {
             trace_id: self.trace_id,
+            opening_id: self.opening_id,
             nodes: node_traces,
             final_hash,
             success: final_success,

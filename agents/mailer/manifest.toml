@@ -1,1 +1,13 @@
-# TODO: Populate manifest metadata for this agent (name, version, entrypoints).
+[agent]
+name = "mailer"
+version = "0.1.0"
+kind = "native-shim"
+
+entry_native = { path = "bin/mailer", blake3 = "0000000000000000000000000000000000000000000000000000000000000000" }
+
+[ports]
+in = ["intent.send.mail.v1"]
+out = ["state.mail.result.v1"]
+
+[caps]
+file = "policy.caps"

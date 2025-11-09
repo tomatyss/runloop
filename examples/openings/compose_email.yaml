@@ -30,6 +30,8 @@ nodes:
     use: agent:writer
     with:
       model: "mixtral-8x7b"
+      topic: "{{params.topic}}"
+      tone: "neutral-friendly"
     timeout_ms: 15000
     budget_tokens: 4000
 
@@ -40,14 +42,23 @@ nodes:
     use: agent:mailer
     with:
       require_human_confirm: true
+      topic: "{{params.topic}}"
 
 edges:
   - from: contacts.out
     to: draft.recipients
+  - from: contacts.out
+    to: context.contact
   - from: context.out
     to: draft.context
   - from: draft.out
     to: review.in
+  - from: draft.out
+    to: send.draft
+  - from: review.review
+    to: send.review
+  - from: contacts.out
+    to: send.contact
   - from: review.ok==true
     to: send.in
 

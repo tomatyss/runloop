@@ -67,7 +67,10 @@ nodes:
 
   - id: draft
     use: agent:writer
-    with: { model: "mixtral-8x7b" }
+    with:
+      model: "mixtral-8x7b"
+      topic: "{{params.topic}}"
+      tone: "neutral-friendly"
     timeout_ms: 15000
     budget_tokens: 4000
 
@@ -76,15 +79,25 @@ nodes:
 
   - id: send
     use: agent:mailer
-    with: { require_human_confirm: true }
+    with:
+      require_human_confirm: true
+      topic: "{{params.topic}}"
 
 edges:
   - from: contacts.out          # port on 'contacts'
     to:   draft.recipients
+  - from: contacts.out
+    to:   context.contact
   - from: context.out
     to:   draft.context
   - from: draft.out
     to:   review.in
+  - from: draft.out
+    to:   send.draft
+  - from: review.review
+    to:   send.review
+  - from: contacts.out
+    to:   send.contact
   - from: review.ok==true       # simple predicate on a boolean output
     to:   send.in
 
@@ -106,13 +119,17 @@ opening "compose_email" {
   nodes:
     contacts := agent("contact_resolver", query="{{params.recipient}}")
     context  := agent("context_gatherer", topic="{{params.topic}}")
-    draft    := agent("writer", model="mixtral-8x7b")
+    draft    := agent("writer", model="mixtral-8x7b", topic="{{params.topic}}", tone="neutral-friendly")
     review   := agent("critic")
-    send     := agent("mailer", require_human_confirm=true)
+    send     := agent("mailer", require_human_confirm=true, topic="{{params.topic}}")
   edges:
     contacts.out -> draft.recipients
+    contacts.out -> context.contact
     context.out  -> draft.context
     draft.out    -> review.in
+    draft.out    -> send.draft
+    review.review -> send.review
+    contacts.out -> send.contact
     review.ok==true -> send.in
 }
 ```
@@ -220,7 +237,7 @@ RMP **schema_id** is a `u16` referencing a small registry of content types (e.g.
 ## 10) CLI integration
 
 * Run: `rlp run examples/openings/compose_email.yaml --params '{"recipient":"john","topic":"Q4 plan"}' --trace-out trace.json`
-  * Executes the YAML plan via the openings engine, prints node status, and writes an optional JSON trace for later replay. The CLI currently uses a local stub executor (echoes inputs + `ok=true`) while the daemon integration is being wired up.
+  * Executes the YAML plan via the openings engine, drives the canonical crew (contact resolver → context gatherer → writer → critic → mailer), prints node status, and writes an optional JSON trace for later replay. You need a writable KB path plus a configured model broker; if no provider is reachable the writer falls back to the heuristic template. The CLI secret resolver reads broker credentials from the environment, and mail send still requires human confirmation unless you opt out in `security.confirm_external_actions`.
 * Explain routing: `rlp why "<prompt>"`
 * Replay: `rlp replay trace.json --opening examples/openings/compose_email.yaml`
   * KB: `rlp kb query ...`, `rlp kb why <id>`

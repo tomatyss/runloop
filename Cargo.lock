@@ -2829,8 +2829,15 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "clap",
+ "runloop-agent-contact-resolver",
+ "runloop-agent-context-gatherer",
+ "runloop-agent-critic",
+ "runloop-agent-mailer",
+ "runloop-agent-writer",
+ "runloop-agents-common",
  "runloop-core",
  "runloop-kb",
+ "runloop-model-broker",
  "runloop-openings",
  "runloop-router",
  "serde",
@@ -2838,6 +2845,7 @@ dependencies = [
  "serde_yaml",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2860,6 +2868,82 @@ dependencies = [
  "byteorder",
  "rmp",
  "serde",
+]
+
+[[package]]
+name = "runloop-agent-contact-resolver"
+version = "0.1.0"
+dependencies = [
+ "runloop-agents-common",
+ "runloop-core",
+ "runloop-kb",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "runloop-agent-context-gatherer"
+version = "0.1.0"
+dependencies = [
+ "runloop-agents-common",
+ "runloop-core",
+ "runloop-kb",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "runloop-agent-critic"
+version = "0.1.0"
+dependencies = [
+ "runloop-agents-common",
+ "runloop-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "runloop-agent-mailer"
+version = "0.1.0"
+dependencies = [
+ "runloop-agents-common",
+ "runloop-core",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "runloop-agent-writer"
+version = "0.1.0"
+dependencies = [
+ "runloop-agents-common",
+ "runloop-core",
+ "runloop-kb",
+ "runloop-model-broker",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "runloop-agents-common"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "runloop-core",
+ "runloop-kb",
+ "runloop-model-broker",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

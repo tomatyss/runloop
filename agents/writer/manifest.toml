@@ -1,1 +1,13 @@
-# TODO: Populate manifest metadata for this agent (name, version, entrypoints).
+[agent]
+name = "writer"
+version = "0.1.0"
+kind = "native-shim"
+
+entry_native = { path = "bin/writer", blake3 = "0000000000000000000000000000000000000000000000000000000000000000" }
+
+[ports]
+in = ["intent.draft.email.v1"]
+out = ["artifact.draft.email.v1"]
+
+[caps]
+file = "policy.caps"

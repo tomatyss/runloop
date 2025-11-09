@@ -1,0 +1,15 @@
+[package]
+name = "runloop-agent-mailer"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+runloop-agents-common = { path = "../common" }
+runloop-core = { path = "../../core" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = "0.1"
+
+[lints]
+workspace = true
