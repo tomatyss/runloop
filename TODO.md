@@ -275,23 +275,26 @@
 **I1. CLI surface**
 
 * [x] `rlp run openings/compose_email.yaml --params '{...}'`
-* [ ] `rlp why "<prompt>"`
-* [ ] `rlp replay <trace_id>`
-* [ ] `rlp kb query "<sql>"`
-* [ ] `rlp kb why <entity_id>`
-* [ ] `rlp config path` (prints active config path)
+* [ ] `rlp run` submits to `runloopd` via UDS (falls back to inline executor when the socket is unavailable) and streams `RunEvent`s. _CLI now probes sockets in priority order, emits NDJSON RunEvent v1 when running `--local`, and refuses to silently fall back; real daemon submission/control wiring still TODO (currently errors with a hint if the socket isn't serving)._ 
+* [x] `rlp why "<prompt>"` (table output by default, `--json` flag shared with other subcommands). _Shared renderer now enforces table-by-default when TTY; honors `--json/--table`/`--max-*`._
+* [ ] `rlp replay <trace_id>` (reads stored traces from KB; still accepts `<trace.json>` for dev). _CLI replay still operates on explicit trace files + `--opening`; KB lookups remain to do._
+* [x] `rlp kb query "<sql>"` (table default + `--json`).
+* [x] `rlp kb why <entity_id>` (ditto formatting and provenance view). _Outputs ladder table with `--resolve` stub TBD._
+* [x] `rlp config path` / `rlp config path --all` (highest-precedence file + provenance list). _Command implemented with layered table + JSON export._
 
 **DoD:** Commands print structured output (table or JSON); exit codes sensible.
 
 **Follow-ups**
 
-* [ ] `rlp run`: surface invalid agent param types (e.g., `recipient_query`) as hard errors instead of silently defaulting to an empty string.
+* [ ] `rlp run`: surface invalid agent param types (validated against agent `manifest.toml` schemas; openings may carry temporary hints).
+* [ ] `rlp run`: `--trace-out` writes the daemon-provided trace (side-effect-free replayer). _Flag currently dumps the inline runner’s trace when using `--local`; needs daemon plumbing once UDS flow lands._
 
 **I2. TUI monitor (`agtop`)**
 
-* [ ] Status bar (mode, opening, tokens, health).
-* [ ] Panes: **Log** (streaming), **Plan** (DAG with node statuses), **agtop** (per‑agent cpu/mem/tokens), **Trace** (ladder text). Navigation keys: `Tab`, `q`, `?`.
-* [ ] Toggle confirm dialogs for external actions (mailer).
+* [ ] Status bar (mode, opening name + trace, active pane, token/health summary, confirm badge).
+* [ ] Panes: **Log** (streaming), **Plan** (DAG with node statuses), **agtop** (per-agent cpu/mem/tokens), **Trace** (ladder text). Navigation keys: `Tab`, `Shift+Tab`, `q`, `?`, `/`, `.`, `!`.
+* [ ] Subscribes to bus topics `rlp/runs/<trace_id>/{plan,log,trace,status}` plus `rlp/sys/metrics` + `rlp/agents/<agent>/metrics`.
+* [ ] Toggle confirm dialogs for external actions via bus (`action.proposal` → `action.decision`).
 
 **DoD:** While running the opening, panes update live; switching panes does not freeze updates.
 

@@ -12,7 +12,8 @@ pub use parser::{Error, parse_opening_str};
 pub use replay::{ReplayMismatch, ReplayReport, replay};
 pub use runner::{
     Executor, NodeAttemptRecord, NodeAttemptTrace, NodeExecution, NodeExecutionRequest, NodeInputs,
-    NodeOutputs, NodeRecord, NodeState, NodeTrace, RunReport, RunTrace, Runner, RunnerError,
+    NodeOutputs, NodeRecord, NodeState, NodeTrace, RunEvent, RunReport, RunTrace, Runner,
+    RunnerError,
 };
 
 #[cfg(test)]
@@ -308,5 +309,96 @@ edges:
             replay_report.matches,
             "replay should match recorded failure"
         );
+    }
+
+    #[tokio::test]
+    async fn runner_emits_structured_events_in_order() {
+        let yaml = r#"
+version: 0
+name: single_node
+nodes:
+  - id: first
+    use: agent:first
+  - id: sink
+    use: agent:sink
+edges:
+  - from: first.out
+    to: sink.in
+success:
+  all_of:
+    - sink.ok == true
+"#;
+
+        let opening = parse_opening_str(yaml).expect("parse opening");
+        let mut responses = HashMap::new();
+        let mut first_outputs = NodeOutputs::default();
+        first_outputs.push("out", JsonValue::String("ok".into()));
+        responses.insert("first".to_string(), NodeExecution::Completed(first_outputs));
+        let mut sink_outputs = NodeOutputs::default();
+        sink_outputs.push("ok", JsonValue::Bool(true));
+        responses.insert("sink".to_string(), NodeExecution::Completed(sink_outputs));
+
+        let executor = Arc::new(MockExecutor::new(responses));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let runner = Runner::new(opening, executor).with_event_tx(tx);
+
+        let report = runner.run().await.expect("run opening");
+        let trace_id = report.trace.trace_id;
+        drop(runner);
+
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            events.push(event);
+        }
+
+        assert!(
+            events.len() >= 6,
+            "expected node lifecycle events before completion"
+        );
+
+        let first_slice = &events[0..5];
+        assert!(matches!(
+            first_slice[0],
+            RunEvent::NodeState {
+                state: NodeState::Running,
+                attempt: 1,
+                ref node_id
+            } if node_id == "first"
+        ));
+
+        assert!(matches!(
+            first_slice[1],
+            RunEvent::LogLine {
+                ref node_id,
+                ref level,
+                ..
+            } if node_id == "first" && level == "info"
+        ));
+
+        assert!(matches!(
+            first_slice[2],
+            RunEvent::NodeState {
+                state: NodeState::Succeeded,
+                attempt: 1,
+                ..
+            }
+        ));
+
+        assert!(matches!(
+            first_slice[3],
+            RunEvent::LogLine {
+                ref node_id,
+                ref message,
+                ..
+            } if node_id == "first" && message.contains("succeeded")
+        ));
+
+        assert!(matches!(first_slice[4], RunEvent::TraceLine { .. }));
+        match events.last() {
+            Some(RunEvent::Completed { trace }) => {
+                assert_eq!(trace.trace_id, trace_id, "completed trace id matches");
+            }
+            other => panic!("unexpected final event: {other:?}"),
+        }
     }
 }

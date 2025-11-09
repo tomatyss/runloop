@@ -303,7 +303,7 @@ impl KnowledgeBase {
         let events_conn = self.events.lock();
         let mut results = Vec::new();
         let mut stmt = events_conn.prepare(
-            "SELECT id, ts_ms, kind, payload_json, provenance_json
+            "SELECT id, ts_ms, kind, actor, scope, payload_json, provenance_json
              FROM events
              WHERE id = ?1
              ORDER BY id ASC",
@@ -500,6 +500,8 @@ pub struct EventRecord {
     pub id: EventId,
     pub ts_ms: u64,
     pub kind: String,
+    pub actor: String,
+    pub scope: String,
     pub payload: Value,
     pub provenance: Value,
 }
@@ -756,12 +758,14 @@ fn record_history(tx: &Transaction<'_>, entity_key: &str, event_id: i64) -> Resu
 fn load_event(stmt: &mut Statement<'_>, id: i64) -> Result<Option<EventRecord>, Error> {
     let mut rows = stmt.query(params![id])?;
     if let Some(row) = rows.next()? {
-        let payload: String = row.get(3)?;
-        let provenance: String = row.get(4)?;
+        let payload: String = row.get(5)?;
+        let provenance: String = row.get(6)?;
         Ok(Some(EventRecord {
             id: EventId(row.get::<_, i64>(0)?),
             ts_ms: row.get::<_, i64>(1)? as u64,
             kind: row.get::<_, String>(2)?,
+            actor: row.get::<_, String>(3)?,
+            scope: row.get::<_, String>(4)?,
             payload: serde_json::from_str(&payload).unwrap_or(Value::String(payload)),
             provenance: serde_json::from_str(&provenance).unwrap_or(Value::String(provenance)),
         }))

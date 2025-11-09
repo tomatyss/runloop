@@ -36,6 +36,36 @@ pub struct Config {
     pub bus: BusConfig,
 }
 
+/// Ordered list of configuration layers applied to build the final config.
+#[derive(Clone, Debug, Serialize)]
+pub struct ConfigLayer {
+    pub source: ConfigSource,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overrides: Vec<ConfigOverride>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum ConfigSource {
+    Defaults,
+    File {
+        path: PathBuf,
+        exists: bool,
+    },
+    Env {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        keys: Vec<String>,
+    },
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ConfigOverride {
+    pub key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous: Option<Value>,
+    pub new_value: Value,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -69,30 +99,72 @@ impl Default for Config {
 impl Config {
     /// Load configuration from defaults + files + environment overrides.
     pub fn load() -> Result<Self, Error> {
-        Self::load_from_sources(config_candidate_paths(), env::vars())
+        let env_pairs: Vec<(String, String)> = env::vars().collect();
+        Self::load_from_sources(config_candidate_paths(), env_pairs)
+    }
+
+    /// Load configuration along with provenance layers.
+    pub fn load_with_layers() -> Result<(Self, Vec<ConfigLayer>), Error> {
+        let env_pairs: Vec<(String, String)> = env::vars().collect();
+        Self::load_from_sources_with_layers(config_candidate_paths(), env_pairs)
     }
 
     fn load_from_sources(
         paths: Vec<PathBuf>,
-        env_pairs: impl IntoIterator<Item = (String, String)>,
+        env_pairs: Vec<(String, String)>,
     ) -> Result<Self, Error> {
+        let (config, _) = Self::load_from_sources_with_layers(paths, env_pairs)?;
+        Ok(config)
+    }
+
+    fn load_from_sources_with_layers(
+        paths: Vec<PathBuf>,
+        env_pairs: Vec<(String, String)>,
+    ) -> Result<(Self, Vec<ConfigLayer>), Error> {
         let mut base = serde_json::to_value(Config::default()).expect("serialize default config");
+        let mut layers = Vec::new();
+        layers.push(ConfigLayer {
+            source: ConfigSource::Defaults,
+            overrides: Vec::new(),
+        });
 
         for path in paths {
+            let mut layer = ConfigLayer {
+                source: ConfigSource::File {
+                    path: path.clone(),
+                    exists: path.exists(),
+                },
+                overrides: Vec::new(),
+            };
             match load_yaml_value(&path) {
                 Ok(Some(mut value)) => {
                     normalize_router_aliases(&mut value);
                     normalize_kb_aliases(&mut value);
                     warn_unknown_keys(&value, Path::new(""));
+                    let before = base.clone();
                     merge_value(&mut base, value);
+                    layer.overrides = diff_values(&before, &base);
                 }
                 Ok(None) => {}
                 Err(err) => return Err(err),
             }
+            layers.push(layer);
         }
 
         if let Some(obj) = base.as_object_mut() {
-            apply_env_overrides(obj, env_pairs);
+            let before = serde_json::Value::Object(obj.clone());
+            let mut keys = Vec::new();
+            apply_env_overrides(obj, env_pairs, Some(&mut keys));
+            let after = serde_json::Value::Object(obj.clone());
+            layers.push(ConfigLayer {
+                source: ConfigSource::Env { keys },
+                overrides: diff_values(&before, &after),
+            });
+        } else {
+            layers.push(ConfigLayer {
+                source: ConfigSource::Env { keys: Vec::new() },
+                overrides: Vec::new(),
+            });
         }
 
         normalize_router_aliases(&mut base);
@@ -102,7 +174,7 @@ impl Config {
             .map_err(|err| Error::Config(format!("config deserialization failed: {err}")))?;
         config.expand_paths();
         config.validate()?;
-        Ok(config)
+        Ok((config, layers))
     }
 
     /// Validate required invariants.
@@ -753,6 +825,7 @@ fn config_candidate_paths() -> Vec<PathBuf> {
         if let Some(home) = home_dir() {
             paths.push(home.join(".runloop").join("config.yaml"));
         }
+        paths.push(PathBuf::from("/etc/runloop/config.yaml"));
     }
     paths
 }
@@ -867,6 +940,7 @@ fn normalize_kb_aliases(value: &mut Value) {
 fn apply_env_overrides(
     root: &mut serde_json::Map<String, Value>,
     env_pairs: impl IntoIterator<Item = (String, String)>,
+    mut recorded_keys: Option<&mut Vec<String>>,
 ) {
     for (key, value) in env_pairs {
         if let Some(stripped) = key.strip_prefix("RUNLOOP__") {
@@ -890,8 +964,14 @@ fn apply_env_overrides(
                     *key = "fastpath_shell".into();
                 }
             }
+            if let Some(keys) = recorded_keys.as_mut() {
+                (**keys).push(path.join("."));
+            }
             set_path(root, &path, parse_env_value(&value));
         } else if let Some((path, parsed)) = parse_alias(&key, &value) {
+            if let Some(keys) = recorded_keys.as_mut() {
+                (**keys).push(path.join("."));
+            }
             set_path(root, &path, parsed);
         }
     }
@@ -971,6 +1051,51 @@ fn parse_alias(key: &str, value: &str) -> Option<(Vec<String>, Value)> {
         }
     }
     None
+}
+
+fn diff_values(before: &Value, after: &Value) -> Vec<ConfigOverride> {
+    let mut overrides = Vec::new();
+    diff_values_recursive("", before, after, &mut overrides);
+    overrides
+}
+
+fn diff_values_recursive(
+    prefix: &str,
+    before: &Value,
+    after: &Value,
+    overrides: &mut Vec<ConfigOverride>,
+) {
+    if before == after {
+        return;
+    }
+    match (before, after) {
+        (Value::Object(before_map), Value::Object(after_map)) => {
+            let mut keys = BTreeSet::new();
+            keys.extend(before_map.keys().cloned());
+            keys.extend(after_map.keys().cloned());
+            for key in keys {
+                let next_prefix = if prefix.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{prefix}.{key}")
+                };
+                let before_child = before_map.get(&key).unwrap_or(&Value::Null);
+                let after_child = after_map.get(&key).unwrap_or(&Value::Null);
+                diff_values_recursive(&next_prefix, before_child, after_child, overrides);
+            }
+        }
+        _ => {
+            overrides.push(ConfigOverride {
+                key: prefix.to_string(),
+                previous: value_to_option(before.clone()),
+                new_value: after.clone(),
+            });
+        }
+    }
+}
+
+fn value_to_option(value: Value) -> Option<Value> {
+    if value.is_null() { None } else { Some(value) }
 }
 
 fn expand_path(path: &str) -> String {
