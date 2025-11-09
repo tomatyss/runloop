@@ -275,23 +275,26 @@
 **I1. CLI surface**
 
 * [x] `rlp run openings/compose_email.yaml --params '{...}'`
-* [ ] `rlp why "<prompt>"`
-* [ ] `rlp replay <trace_id>`
-* [ ] `rlp kb query "<sql>"`
-* [ ] `rlp kb why <entity_id>`
-* [ ] `rlp config path` (prints active config path)
+* [ ] `rlp run` submits to `runloopd` via UDS (falls back to inline executor when the socket is unavailable) and streams `RunEvent`s.
+* [ ] `rlp why "<prompt>"` (table output by default, `--json` flag shared with other subcommands).
+* [ ] `rlp replay <trace_id>` (reads stored traces from KB; still accepts `<trace.json>` for dev).
+* [ ] `rlp kb query "<sql>"` (table default + `--json`).
+* [ ] `rlp kb why <entity_id>` (ditto formatting and provenance view).
+* [ ] `rlp config path` / `rlp config path --all` (highest-precedence file + provenance list).
 
 **DoD:** Commands print structured output (table or JSON); exit codes sensible.
 
 **Follow-ups**
 
-* [ ] `rlp run`: surface invalid agent param types (e.g., `recipient_query`) as hard errors instead of silently defaulting to an empty string.
+* [ ] `rlp run`: surface invalid agent param types (validated against agent `manifest.toml` schemas; openings may carry temporary hints).
+* [ ] `rlp run`: `--trace-out` writes the daemon-provided trace (side-effect-free replayer).
 
 **I2. TUI monitor (`agtop`)**
 
-* [ ] Status bar (mode, opening, tokens, health).
-* [ ] Panes: **Log** (streaming), **Plan** (DAG with node statuses), **agtop** (per‑agent cpu/mem/tokens), **Trace** (ladder text). Navigation keys: `Tab`, `q`, `?`.
-* [ ] Toggle confirm dialogs for external actions (mailer).
+* [ ] Status bar (mode, opening name + trace, active pane, token/health summary, confirm badge).
+* [ ] Panes: **Log** (streaming), **Plan** (DAG with node statuses), **agtop** (per-agent cpu/mem/tokens), **Trace** (ladder text). Navigation keys: `Tab`, `Shift+Tab`, `q`, `?`, `/`, `.`, `!`.
+* [ ] Subscribes to bus topics `rlp/runs/<trace_id>/{plan,log,trace,status}` plus `rlp/sys/metrics` + `rlp/agents/<agent>/metrics`.
+* [ ] Toggle confirm dialogs for external actions via bus (`action.proposal` → `action.decision`).
 
 **DoD:** While running the opening, panes update live; switching panes does not freeze updates.
 

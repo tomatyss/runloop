@@ -9,7 +9,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use thiserror::Error;
-use tokio::time;
+use tokio::{sync::mpsc::UnboundedSender, time};
 
 #[derive(Debug, Error)]
 pub enum RunnerError {
@@ -147,6 +147,27 @@ pub struct RunReport {
     pub node_records: Vec<NodeRecord>,
 }
 
+/// Streaming event emitted during a run for observability consumers.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum RunEvent {
+    NodeState {
+        node_id: String,
+        state: NodeState,
+        attempt: u32,
+    },
+    LogLine {
+        node_id: String,
+        level: String,
+        message: String,
+    },
+    TraceLine {
+        line: String,
+    },
+    Completed {
+        trace: RunTrace,
+    },
+}
+
 pub struct Runner<E>
 where
     E: Executor + 'static,
@@ -155,6 +176,7 @@ where
     executor: Arc<E>,
     trace_id: TraceId,
     opening_id: OpeningId,
+    event_tx: Option<UnboundedSender<RunEvent>>,
 }
 
 impl<E> Runner<E>
@@ -167,7 +189,14 @@ where
             executor,
             trace_id: TraceId::new(),
             opening_id: OpeningId::new(),
+            event_tx: None,
         }
+    }
+
+    /// Attach an event sender for run progress notifications.
+    pub fn with_event_tx(mut self, tx: UnboundedSender<RunEvent>) -> Self {
+        self.event_tx = Some(tx);
+        self
     }
 
     pub fn trace_id(&self) -> TraceId {
@@ -176,6 +205,12 @@ where
 
     pub fn opening_id(&self) -> OpeningId {
         self.opening_id
+    }
+
+    fn emit_event(&self, event: RunEvent) {
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.send(event);
+        }
     }
 
     pub async fn run(&self) -> Result<RunReport, RunnerError> {
@@ -275,6 +310,16 @@ where
                     opening_id: self.opening_id,
                     agent_id: AgentId::new(),
                 };
+                self.emit_event(RunEvent::NodeState {
+                    node_id: node.id.clone(),
+                    state: NodeState::Running,
+                    attempt: attempts_used,
+                });
+                self.emit_event(RunEvent::LogLine {
+                    node_id: node.id.clone(),
+                    level: "info".into(),
+                    message: format!("node '{}' attempt {} started", node.id, attempts_used),
+                });
 
                 let timeout_ms = node
                     .timeout_ms
@@ -298,6 +343,27 @@ where
                         outputs_cache.insert(node.id.clone(), outputs.clone());
                         record.state = NodeState::Succeeded;
                         node_succeeded = true;
+                        self.emit_event(RunEvent::NodeState {
+                            node_id: node.id.clone(),
+                            state: record.state.clone(),
+                            attempt: attempts_used,
+                        });
+                        self.emit_event(RunEvent::LogLine {
+                            node_id: node.id.clone(),
+                            level: "info".into(),
+                            message: format!(
+                                "node '{}' succeeded on attempt {}",
+                                node.id, attempts_used
+                            ),
+                        });
+                        self.emit_event(RunEvent::TraceLine {
+                            line: format!(
+                                "{} -> succeeded (attempt {}, outputs={})",
+                                node.id,
+                                attempts_used,
+                                outputs.ports.keys().cloned().collect::<Vec<_>>().join(", ")
+                            ),
+                        });
 
                         if let Some(edges) = outgoing.get(&node.id) {
                             for edge in edges {
@@ -355,12 +421,25 @@ where
                             output: None,
                             error: Some(reason.clone()),
                         });
+                        self.emit_event(RunEvent::LogLine {
+                            node_id: node.id.clone(),
+                            level: "warn".into(),
+                            message: format!(
+                                "node '{}' failed on attempt {} ({})",
+                                node.id, attempts_used, reason
+                            ),
+                        });
                         if retryable && attempts_used < max_attempts {
                             let delay_ms = compute_backoff_ms(&node.retry, attempts_used, &mut rng);
                             time::sleep(Duration::from_millis(delay_ms)).await;
                             continue;
                         } else {
                             record.state = NodeState::Failed { reason };
+                            self.emit_event(RunEvent::NodeState {
+                                node_id: node.id.clone(),
+                                state: record.state.clone(),
+                                attempt: attempts_used,
+                            });
                             run_failed = true;
                             break;
                         }
@@ -378,6 +457,19 @@ where
                         record.state = NodeState::Failed {
                             reason: err.to_string(),
                         };
+                        self.emit_event(RunEvent::LogLine {
+                            node_id: node.id.clone(),
+                            level: "error".into(),
+                            message: format!(
+                                "node '{}' error on attempt {}: {err}",
+                                node.id, attempts_used
+                            ),
+                        });
+                        self.emit_event(RunEvent::NodeState {
+                            node_id: node.id.clone(),
+                            state: record.state.clone(),
+                            attempt: attempts_used,
+                        });
                         run_failed = true;
                         break;
                     }
@@ -392,6 +484,14 @@ where
                             output: None,
                             error: Some(reason.clone()),
                         });
+                        self.emit_event(RunEvent::LogLine {
+                            node_id: node.id.clone(),
+                            level: "warn".into(),
+                            message: format!(
+                                "node '{}' timed out on attempt {} after {} ms",
+                                node.id, attempts_used, timeout_ms
+                            ),
+                        });
                         if attempts_used < max_attempts {
                             let delay_ms = compute_backoff_ms(&node.retry, attempts_used, &mut rng);
                             time::sleep(Duration::from_millis(delay_ms)).await;
@@ -400,6 +500,11 @@ where
                             record.state = NodeState::Failed {
                                 reason: reason.clone(),
                             };
+                            self.emit_event(RunEvent::NodeState {
+                                node_id: node.id.clone(),
+                                state: record.state.clone(),
+                                attempt: attempts_used,
+                            });
                             run_failed = true;
                             break;
                         }
@@ -419,6 +524,11 @@ where
                     NodeState::Succeeded | NodeState::Failed { .. }
                 ) {
                     record.state = NodeState::Skipped;
+                    self.emit_event(RunEvent::NodeState {
+                        node_id: record.node_id.clone(),
+                        state: record.state.clone(),
+                        attempt: 0,
+                    });
                 }
             }
         } else {
@@ -433,6 +543,11 @@ where
                     } else {
                         record.state = NodeState::Skipped;
                     }
+                    self.emit_event(RunEvent::NodeState {
+                        node_id: record.node_id.clone(),
+                        state: record.state.clone(),
+                        attempt: 0,
+                    });
                 }
             }
         }
@@ -478,6 +593,10 @@ where
             final_hash,
             success: final_success,
         };
+
+        self.emit_event(RunEvent::Completed {
+            trace: trace.clone(),
+        });
 
         Ok(RunReport {
             trace,

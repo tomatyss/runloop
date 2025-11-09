@@ -2829,13 +2829,9 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "clap",
- "runloop-agent-contact-resolver",
- "runloop-agent-context-gatherer",
- "runloop-agent-critic",
- "runloop-agent-mailer",
- "runloop-agent-writer",
  "runloop-agents-common",
  "runloop-core",
+ "runloop-executor-local",
  "runloop-kb",
  "runloop-model-broker",
  "runloop-openings",
@@ -2981,6 +2977,27 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "runloop-executor-local"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "runloop-agent-contact-resolver",
+ "runloop-agent-context-gatherer",
+ "runloop-agent-critic",
+ "runloop-agent-mailer",
+ "runloop-agent-writer",
+ "runloop-agents-common",
+ "runloop-core",
+ "runloop-kb",
+ "runloop-model-broker",
+ "runloop-openings",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]

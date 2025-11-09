@@ -9,12 +9,8 @@ runloop-router = { path = "../router" }
 runloop-kb = { path = "../kb" }
 runloop-openings = { path = "../openings" }
 runloop-model-broker = { path = "../model-broker" }
+runloop-executor-local = { path = "../executor-local" }
 runloop-agents-common = { path = "../agents/common" }
-runloop-agent-contact-resolver = { path = "../agents/contact_resolver" }
-runloop-agent-context-gatherer = { path = "../agents/context_gatherer" }
-runloop-agent-writer = { path = "../agents/writer" }
-runloop-agent-critic = { path = "../agents/critic" }
-runloop-agent-mailer = { path = "../agents/mailer" }
 clap = { version = "4.5", features = ["derive"] }
 tokio = { version = "1.38", features = ["rt-multi-thread", "macros"] }
 serde = { version = "1.0", features = ["derive"] }

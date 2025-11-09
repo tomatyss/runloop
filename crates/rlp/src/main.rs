@@ -1,29 +1,19 @@
 use async_trait::async_trait;
 use clap::{Args, Parser, Subcommand};
-use runloop_agent_contact_resolver as contact_agent;
-use runloop_agent_contact_resolver::ContactIntent;
-use runloop_agent_context_gatherer as context_agent;
-use runloop_agent_context_gatherer::ContextRequest;
-use runloop_agent_critic as critic_agent;
-use runloop_agent_critic::ReviewRequest;
-use runloop_agent_mailer as mailer_agent;
-use runloop_agent_mailer::{DraftData, MailRequest};
-use runloop_agent_writer as writer_agent;
-use runloop_agent_writer::DraftRequest;
 use runloop_agents_common::{
-    ActionDecision, ActionProposal, AgentContext, AgentError, AgentResult, ConfirmationProvider,
-    ContextBundle, DraftArtifact, ResolvedContact, Review,
+    ActionDecision, ActionProposal, AgentError, AgentResult, ConfirmationProvider,
 };
 use runloop_core::{Config, TraceId};
-use runloop_kb::{KnowledgeBase, Materializer, Provenance, StateDelta};
-use runloop_model_broker::{Broker, BrokerInitError, SecretResolver};
+use runloop_executor_local::{
+    ExecutorInitError, LocalExecutor, build_executor as build_local_executor, catch_up_views,
+};
+use runloop_kb::{KnowledgeBase, Materializer};
+use runloop_model_broker::SecretResolver;
 use runloop_openings::{
-    Executor, NodeExecution, NodeExecutionRequest, NodeKind, NodeOutputs, NodeState,
-    ReplayMismatch, RunReport, RunTrace, Runner, RunnerError, parse_opening_str, replay,
+    NodeState, ReplayMismatch, RunReport, RunTrace, Runner, RunnerError, parse_opening_str, replay,
 };
 use runloop_router::{Classification, Router};
-use serde::de::DeserializeOwned;
-use serde_json::{Value as JsonValue, json, to_string_pretty, to_writer_pretty};
+use serde_json::{Value as JsonValue, to_string_pretty, to_writer_pretty};
 use serde_yaml::{self, Mapping as YamlMapping, Value as YamlValue};
 use std::env;
 use std::io::{self, Write};
@@ -125,7 +115,7 @@ enum CliError {
     #[error(transparent)]
     Runner(#[from] RunnerError),
     #[error(transparent)]
-    Broker(#[from] BrokerInitError),
+    ExecutorInit(#[from] ExecutorInitError),
     #[error("invalid parameters: {0}")]
     InvalidParams(String),
     #[error("invalid trace: {0}")]
@@ -134,260 +124,6 @@ enum CliError {
     RunFailure(TraceId),
     #[error("replay detected mismatches")]
     ReplayFailure(Vec<ReplayMismatch>),
-}
-
-struct LocalExecutor {
-    config: Config,
-    kb: KnowledgeBase,
-    broker: Arc<Broker>,
-    confirmation: Arc<dyn ConfirmationProvider>,
-}
-
-impl LocalExecutor {
-    fn new(
-        config: Config,
-        kb: KnowledgeBase,
-        broker: Arc<Broker>,
-        confirmation: Arc<dyn ConfirmationProvider>,
-    ) -> Self {
-        Self {
-            config,
-            kb,
-            broker,
-            confirmation,
-        }
-    }
-
-    fn workdir(&self) -> PathBuf {
-        PathBuf::from(&self.config.runtime.workdir)
-    }
-
-    async fn exec_agent(
-        &self,
-        name: &str,
-        request: NodeExecutionRequest<'_>,
-    ) -> Result<NodeExecution, RunnerError> {
-        match name {
-            "contact_resolver" => self.exec_contact(request).await,
-            "context_gatherer" => self.exec_context(request).await,
-            "writer" => self.exec_writer(request).await,
-            "critic" => self.exec_critic(request).await,
-            "mailer" => self.exec_mailer(request).await,
-            other => Err(RunnerError::Executor(format!("unknown agent '{other}'"))),
-        }
-    }
-
-    fn ctx(&self, request: &NodeExecutionRequest<'_>) -> AgentContext {
-        AgentContext::new(
-            self.kb.clone(),
-            Some(self.broker.clone()),
-            self.workdir(),
-            request.trace_id,
-            request.opening_id,
-            request.agent_id,
-            Some(self.confirmation.clone()),
-        )
-    }
-
-    fn node_param<T: DeserializeOwned>(
-        &self,
-        node: &runloop_openings::Node,
-        key: &str,
-    ) -> Result<Option<T>, RunnerError> {
-        node.with
-            .get(key)
-            .map(|value| {
-                serde_json::from_value(value.clone())
-                    .map_err(|err| RunnerError::Executor(format!("invalid '{key}' param: {err}")))
-            })
-            .transpose()
-    }
-
-    fn read_port<T: DeserializeOwned>(
-        &self,
-        request: &NodeExecutionRequest<'_>,
-        port: &str,
-    ) -> Result<Option<T>, RunnerError> {
-        if let Some(values) = request.inputs.ports.get(port)
-            && let Some(value) = values.first()
-        {
-            return serde_json::from_value(value.clone())
-                .map(Some)
-                .map_err(|err| {
-                    RunnerError::Executor(format!(
-                        "failed to decode port '{}' on node '{}': {err}",
-                        port, request.node.id
-                    ))
-                });
-        }
-        Ok(None)
-    }
-
-    fn push_port<T: serde::Serialize>(
-        &self,
-        outputs: &mut NodeOutputs,
-        port: &str,
-        value: &T,
-    ) -> Result<(), RunnerError> {
-        let json = serde_json::to_value(value).map_err(|err| {
-            RunnerError::Executor(format!("failed to encode output '{port}': {err}"))
-        })?;
-        outputs.push(port, json);
-        Ok(())
-    }
-
-    async fn exec_contact(
-        &self,
-        request: NodeExecutionRequest<'_>,
-    ) -> Result<NodeExecution, RunnerError> {
-        let query: String = self
-            .node_param(request.node, "query")?
-            .or_else(|| {
-                self.node_param(request.node, "recipient_query")
-                    .unwrap_or(None)
-            })
-            .unwrap_or_default();
-        if query.trim().is_empty() {
-            return Err(RunnerError::Executor(
-                "contact_resolver requires 'query' in node config".into(),
-            ));
-        }
-        let ctx = self.ctx(&request);
-        let contact = contact_agent::resolve(
-            &ctx,
-            ContactIntent {
-                recipient_query: query,
-            },
-        )
-        .await
-        .map_err(map_agent_error)?;
-        let mut outputs = NodeOutputs::default();
-        self.push_port(&mut outputs, "out", &contact)?;
-        Ok(NodeExecution::Completed(outputs))
-    }
-
-    async fn exec_context(
-        &self,
-        request: NodeExecutionRequest<'_>,
-    ) -> Result<NodeExecution, RunnerError> {
-        let topic: String = self
-            .node_param(request.node, "topic")?
-            .unwrap_or_else(|| "general update".into());
-        let contact: Option<ResolvedContact> = self.read_port(&request, "contact")?;
-        let ctx = self.ctx(&request);
-        let bundle = context_agent::gather(&ctx, ContextRequest { topic, contact })
-            .await
-            .map_err(map_agent_error)?;
-        let mut outputs = NodeOutputs::default();
-        self.push_port(&mut outputs, "out", &bundle)?;
-        Ok(NodeExecution::Completed(outputs))
-    }
-
-    async fn exec_writer(
-        &self,
-        request: NodeExecutionRequest<'_>,
-    ) -> Result<NodeExecution, RunnerError> {
-        let recipient: ResolvedContact = self
-            .read_port(&request, "recipients")?
-            .ok_or_else(|| RunnerError::Executor("writer missing recipients input".into()))?;
-        let context: ContextBundle = self
-            .read_port(&request, "context")?
-            .ok_or_else(|| RunnerError::Executor("writer missing context input".into()))?;
-        let topic: String = self
-            .node_param(request.node, "topic")?
-            .unwrap_or_else(|| "update".into());
-        let tone = self.node_param(request.node, "tone")?;
-        let model = self
-            .node_param(request.node, "model")?
-            .or_else(|| Some(self.config.models.default.clone()));
-        let ctx = self.ctx(&request);
-        let draft = writer_agent::draft(
-            &ctx,
-            DraftRequest {
-                recipient,
-                topic,
-                context,
-                tone,
-                length_hint: None,
-                model,
-                max_words: Some(180),
-            },
-        )
-        .await
-        .map_err(map_agent_error)?;
-        let mut outputs = NodeOutputs::default();
-        self.push_port(&mut outputs, "out", &draft)?;
-        Ok(NodeExecution::Completed(outputs))
-    }
-
-    async fn exec_critic(
-        &self,
-        request: NodeExecutionRequest<'_>,
-    ) -> Result<NodeExecution, RunnerError> {
-        let draft: DraftArtifact = self
-            .read_port(&request, "in")?
-            .ok_or_else(|| RunnerError::Executor("critic missing draft input".into()))?;
-        let review = critic_agent::critique(ReviewRequest { draft })
-            .await
-            .map_err(map_agent_error)?;
-        let mut outputs = NodeOutputs::default();
-        self.push_port(&mut outputs, "ok", &review.ok)?;
-        self.push_port(&mut outputs, "review", &review)?;
-        Ok(NodeExecution::Completed(outputs))
-    }
-
-    async fn exec_mailer(
-        &self,
-        request: NodeExecutionRequest<'_>,
-    ) -> Result<NodeExecution, RunnerError> {
-        let draft: DraftArtifact = self
-            .read_port(&request, "draft")?
-            .ok_or_else(|| RunnerError::Executor("mailer missing draft input".into()))?;
-        let contact: ResolvedContact = self
-            .read_port(&request, "contact")?
-            .ok_or_else(|| RunnerError::Executor("mailer missing contact input".into()))?;
-        let review: Review = self
-            .read_port(&request, "review")?
-            .ok_or_else(|| RunnerError::Executor("mailer missing review input".into()))?;
-        let topic: String = self
-            .node_param(request.node, "topic")?
-            .unwrap_or_else(|| "update".into());
-        let ctx = self.ctx(&request);
-        let mail = mailer_agent::send(
-            &ctx,
-            MailRequest {
-                draft: DraftData {
-                    artifact_id: draft.artifact_id,
-                    path: draft.path.to_string_lossy().into_owned(),
-                    body_preview: draft.body_md.clone(),
-                },
-                contact,
-                review,
-                topic,
-            },
-        )
-        .await
-        .map_err(map_agent_error)?;
-        let mut outputs = NodeOutputs::default();
-        self.push_port(&mut outputs, "out", &mail)?;
-        self.push_port(&mut outputs, "ok", &true)?;
-        Ok(NodeExecution::Completed(outputs))
-    }
-}
-
-#[async_trait]
-impl Executor for LocalExecutor {
-    async fn execute(
-        &self,
-        request: NodeExecutionRequest<'_>,
-    ) -> Result<NodeExecution, RunnerError> {
-        match &request.node.kind {
-            NodeKind::Agent { name } => self.exec_agent(name, request).await,
-            NodeKind::Opening { name } => Err(RunnerError::Executor(format!(
-                "nested opening '{name}' unsupported in CLI executor"
-            ))),
-        }
-    }
 }
 
 #[tokio::main]
@@ -592,65 +328,12 @@ fn print_classification(classification: &Classification) {
 
 fn build_executor() -> Result<Arc<LocalExecutor>, CliError> {
     let config = Config::load()?;
-    let kb = KnowledgeBase::open(&config.kb)?;
-    kb.migrate()?;
-    catch_up_views(&kb)?;
-    seed_contact(&kb)?;
-    let broker = Arc::new(Broker::new(
-        config.models.broker.clone(),
-        Arc::new(CliSecretResolver),
-    )?);
     let confirmation = Arc::new(CliConfirmationProvider::new(
         config.security.confirm_external_actions,
     ));
-    Ok(Arc::new(LocalExecutor::new(
-        config,
-        kb,
-        broker,
-        confirmation,
-    )))
-}
-
-fn catch_up_views(kb: &KnowledgeBase) -> Result<(), runloop_kb::Error> {
-    let materializer = Materializer::new(kb.clone());
-    while materializer.sync()? {}
-    Ok(())
-}
-
-fn seed_contact(kb: &KnowledgeBase) -> Result<(), runloop_kb::Error> {
-    let result =
-        kb.query("SELECT contact_key FROM contacts WHERE email = 'john@acme.com' LIMIT 1")?;
-    if !result.rows.is_empty() {
-        return Ok(());
-    }
-    let payload = json!({
-        "name": "John Smith",
-        "email": "john@acme.com",
-        "org": "Acme",
-        "trust": 0.9,
-        "evidence": []
-    });
-    let provenance = Provenance {
-        trace_id: "trace:seed".into(),
-        opening_id: "opening:seed".into(),
-        agent_id: "agent:seed-contact".into(),
-        inputs_hash: None,
-        rationale: Some("seed contact for compose_email".into()),
-    };
-    kb.propose(StateDelta::new(
-        "contact.upserted",
-        "agent:seed",
-        Some("system".to_string()),
-        payload,
-        provenance,
-    ))?;
-    let materializer = Materializer::new(kb.clone());
-    while materializer.sync()? {}
-    Ok(())
-}
-
-fn map_agent_error(err: AgentError) -> RunnerError {
-    RunnerError::Executor(format!("{err}"))
+    let secrets = Arc::new(CliSecretResolver);
+    let executor = build_local_executor(config, confirmation, secrets)?;
+    Ok(executor)
 }
 
 struct CliSecretResolver;
@@ -701,41 +384,5 @@ impl ConfirmationProvider for CliConfirmationProvider {
         } else {
             Ok(ActionDecision::rejected(Some("declined via CLI".into())))
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn catch_up_views_is_noop_for_empty_kb() {
-        let kb = KnowledgeBase::new();
-        catch_up_views(&kb).expect("catch up succeeds");
-    }
-
-    #[test]
-    fn seed_contact_inserts_expected_record() {
-        let kb = KnowledgeBase::new();
-        seed_contact(&kb).expect("seed contact succeeds");
-        assert_eq!(seeded_count(&kb), 1, "contact should be inserted once");
-    }
-
-    #[test]
-    fn seed_contact_is_idempotent() {
-        let kb = KnowledgeBase::new();
-        seed_contact(&kb).expect("first seed succeeds");
-        seed_contact(&kb).expect("second seed is a no-op");
-        assert_eq!(seeded_count(&kb), 1, "contact remains unique");
-    }
-
-    fn seeded_count(kb: &KnowledgeBase) -> i64 {
-        kb.query("SELECT COUNT(*) AS count FROM contacts WHERE email = 'john@acme.com'")
-            .expect("query contacts")
-            .rows
-            .first()
-            .and_then(|row| row.get("count"))
-            .and_then(JsonValue::as_i64)
-            .unwrap_or(0)
     }
 }
