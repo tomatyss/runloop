@@ -356,7 +356,19 @@ fn map_agent_error(err: AgentError) -> RunnerError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use runloop_agents_common::{
+        ActionDecision, ActionProposal, AgentResult, ConfirmationProvider,
+    };
+    use runloop_core::config::{ModelProvider, ModelRoute, ProviderKind};
+    use runloop_openings::{NodeState, Runner, parse_opening_str};
+    use rusqlite::Connection;
     use serde_json::Value as JsonValue;
+    use std::collections::BTreeMap;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use tempfile::tempdir;
 
     #[test]
     fn catch_up_views_is_noop_for_empty_kb() {
@@ -387,5 +399,117 @@ mod tests {
             .and_then(|row| row.get("count"))
             .and_then(JsonValue::as_i64)
             .unwrap_or(0)
+    }
+
+    #[tokio::test]
+    async fn executor_runs_compose_email_opening() {
+        let tmp = tempdir().expect("tmpdir");
+        let workdir = tmp.path().join("workdir");
+        let sockets_dir = tmp.path().join("run");
+        let kb_root = tmp.path().join("kb");
+        let secrets_dir = tmp.path().join("secrets");
+        fs::create_dir_all(&workdir).expect("workdir");
+        fs::create_dir_all(&sockets_dir).expect("sockets dir");
+        fs::create_dir_all(&kb_root).expect("kb dir");
+        fs::create_dir_all(&secrets_dir).expect("secrets dir");
+
+        let mut config = Config::default();
+        config.runtime.workdir = workdir.to_string_lossy().into_owned();
+        config.runtime.sockets_dir = sockets_dir.to_string_lossy().into_owned();
+        config.runtime.socket_path = Some(
+            sockets_dir
+                .join("runloop.sock")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        config.kb.root_dir = kb_root.to_string_lossy().into_owned();
+        config.security.secrets.root = Some(secrets_dir.to_string_lossy().into_owned());
+        config.models.default = "null:compose".into();
+        config.models.broker.providers = vec![ModelProvider {
+            id: "local".into(),
+            kind: ProviderKind::Local,
+            model_dir: None,
+            base_url: None,
+            secret_id: None,
+            headers: BTreeMap::new(),
+            schema: None,
+        }];
+        config.models.broker.route = vec![ModelRoute {
+            pattern: "*".into(),
+            provider: "local".into(),
+            target_model: None,
+        }];
+
+        let view_db_path = PathBuf::from(&config.kb.root_dir).join(&config.kb.view_db);
+        let view_conn = Connection::open(&view_db_path).expect("open view db");
+        view_conn
+            .execute_batch(
+                "
+                CREATE TABLE IF NOT EXISTS events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts_ms INTEGER NOT NULL,
+                    actor TEXT,
+                    kind TEXT NOT NULL,
+                    scope TEXT,
+                    payload_json TEXT NOT NULL,
+                    provenance_json TEXT,
+                    hash_blake3 BLOB
+                );
+                ",
+            )
+            .expect("create events table snapshot");
+
+        let confirmation = Arc::new(TestConfirmationProvider);
+        let secrets = Arc::new(TestSecretResolver);
+        let executor = build_executor(config, confirmation, secrets).expect("build executor");
+
+        let yaml = fs::read_to_string(compose_email_fixture()).expect("read compose_email");
+        let opening = parse_opening_str(&yaml).expect("parse compose_email");
+        let runner = Runner::new(opening, executor);
+        let report = runner.run().await.expect("run opening");
+        if !report.trace.success {
+            let states = report
+                .node_records
+                .iter()
+                .map(|record| format!("{}: {:?}", record.node_id, record.state))
+                .collect::<Vec<_>>()
+                .join(", ");
+            panic!("compose_email opening should succeed: states={states}");
+        }
+        assert!(
+            report
+                .node_records
+                .iter()
+                .all(|record| matches!(record.state, NodeState::Succeeded)),
+            "all nodes should succeed in happy-path integration"
+        );
+    }
+
+    fn compose_email_fixture() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("examples")
+            .join("openings")
+            .join("compose_email.yaml")
+    }
+
+    struct TestConfirmationProvider;
+
+    #[async_trait]
+    impl ConfirmationProvider for TestConfirmationProvider {
+        async fn confirm(&self, _proposal: ActionProposal) -> AgentResult<ActionDecision> {
+            Ok(ActionDecision::approved(Some(
+                "auto-approved in test".into(),
+            )))
+        }
+    }
+
+    struct TestSecretResolver;
+
+    impl SecretResolver for TestSecretResolver {
+        fn resolve(&self, _secret_id: &str) -> Option<String> {
+            None
+        }
     }
 }

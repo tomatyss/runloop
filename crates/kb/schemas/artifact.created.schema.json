@@ -20,6 +20,12 @@
     },
     "summary": {
       "type": "string"
+    },
+    "citations": {
+      "type": "array",
+      "items": {
+        "type": "integer"
+      }
     }
   }
 }
