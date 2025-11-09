@@ -8,7 +8,7 @@ pub mod error;
 pub mod ids;
 pub mod trace;
 
-pub use config::Config;
+pub use config::{Config, ConfigLayer, ConfigOverride, ConfigSource};
 pub use content::{
     CT_ACTION_DECISION, CT_ACTION_REQUEST, CT_AGENT_HELLO, CT_AGENT_LOG_LINE, CT_ARTIFACT,
     CT_BUS_DROP_NOTICE, CT_CONTACTS_RESOLVED, CT_CONTEXT_BUNDLE, CT_CONTROL, CT_CRITIQUE,

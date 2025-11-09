@@ -52,12 +52,20 @@ Run the daemon and CLI locally (user mode uses `~/.runloop` for config/artifacts
 # daemon (user mode)
 cargo run -p runloopd
 
-# CLI
+# CLI (daemon-first)
 cargo run -p rlp -- help
+
+# Run an opening locally (daemon offline)
+cargo run -p rlp -- run examples/openings/compose_email.yaml --local --params '{"recipient":"john"}'
 
 # monitor (agent-top)
 cargo run -p agtop
+
+# inspect resolved config layers
+cargo run -p rlp -- config path --all
 ```
+
+> **Note:** `rlp run` now probes the daemon socket before doing any local work. Provide `--local` explicitly when you want inline execution; both modes stream NDJSON `RunEvent` records so monitors such as `agtop` can consume the same schema.
 
 ### Packages & images (daemon / system mode)
 

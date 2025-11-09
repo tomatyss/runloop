@@ -275,19 +275,19 @@
 **I1. CLI surface**
 
 * [x] `rlp run openings/compose_email.yaml --params '{...}'`
-* [ ] `rlp run` submits to `runloopd` via UDS (falls back to inline executor when the socket is unavailable) and streams `RunEvent`s.
-* [ ] `rlp why "<prompt>"` (table output by default, `--json` flag shared with other subcommands).
-* [ ] `rlp replay <trace_id>` (reads stored traces from KB; still accepts `<trace.json>` for dev).
-* [ ] `rlp kb query "<sql>"` (table default + `--json`).
-* [ ] `rlp kb why <entity_id>` (ditto formatting and provenance view).
-* [ ] `rlp config path` / `rlp config path --all` (highest-precedence file + provenance list).
+* [ ] `rlp run` submits to `runloopd` via UDS (falls back to inline executor when the socket is unavailable) and streams `RunEvent`s. _CLI now probes sockets in priority order, emits NDJSON RunEvent v1 when running `--local`, and refuses to silently fall back; real daemon submission/control wiring still TODO (currently errors with a hint if the socket isn't serving)._ 
+* [x] `rlp why "<prompt>"` (table output by default, `--json` flag shared with other subcommands). _Shared renderer now enforces table-by-default when TTY; honors `--json/--table`/`--max-*`._
+* [ ] `rlp replay <trace_id>` (reads stored traces from KB; still accepts `<trace.json>` for dev). _CLI replay still operates on explicit trace files + `--opening`; KB lookups remain to do._
+* [x] `rlp kb query "<sql>"` (table default + `--json`).
+* [x] `rlp kb why <entity_id>` (ditto formatting and provenance view). _Outputs ladder table with `--resolve` stub TBD._
+* [x] `rlp config path` / `rlp config path --all` (highest-precedence file + provenance list). _Command implemented with layered table + JSON export._
 
 **DoD:** Commands print structured output (table or JSON); exit codes sensible.
 
 **Follow-ups**
 
 * [ ] `rlp run`: surface invalid agent param types (validated against agent `manifest.toml` schemas; openings may carry temporary hints).
-* [ ] `rlp run`: `--trace-out` writes the daemon-provided trace (side-effect-free replayer).
+* [ ] `rlp run`: `--trace-out` writes the daemon-provided trace (side-effect-free replayer). _Flag currently dumps the inline runner’s trace when using `--local`; needs daemon plumbing once UDS flow lands._
 
 **I2. TUI monitor (`agtop`)**
 
