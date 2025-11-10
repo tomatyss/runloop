@@ -38,7 +38,7 @@ RUNLOOP_CONFIG=/custom/path/config.yaml
 
 ### 1.3 Model broker configuration _(MVP)_
 
-- `models.broker.providers` lists named backends. HTTP providers accept `base_url`, `secret_id`, optional static headers, and a `schema` (MVP supports `openai-completions`).
+- `models.broker.providers` lists named backends. `kind` may be `local`, `http` (OpenAI-compatible schemas such as `openai-completions`), or `http_gemini` (Google Gemini `generateContent`). Both HTTP kinds accept `base_url`, `secret_id`, and optional static headers.
 - `models.broker.route` is an ordered array of `{ pattern, provider, target_model? }` entries; the first matching pattern wins. Legacy map syntax like `{ "*": "local" }` (or the legacy key `routing`) still deserialises into the same shape.
 - `models.broker.cache` exposes `ttl_ms` and `capacity` for the in-memory LRU. Requests may override TTL via `cache_ttl_ms`; `0` disables caching for that call.
 - `models.broker.budgets` retains `default_tokens`, `per_request_tokens_cap`, and `hard_cap_usd`. Per-request budgets clamp to the stricter of the request and config-provided values.

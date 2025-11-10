@@ -27,12 +27,14 @@ pub async fn draft(ctx: &AgentContext, req: DraftRequest) -> AgentResult<DraftAr
         trace_id: ctx.trace_id(),
         model: req.model.clone().unwrap_or_else(|| "null:compose".into()),
         prompt,
+        role_system: None,
         params: None,
         budget_tokens: Some(4_000),
         timeout_ms: Some(10_000),
         cache_ttl_ms: Some(60_000),
         cache_key: None,
         stream: false,
+        extras: None,
     };
 
     let completion = match ctx.complete_model(model_request).await {

@@ -878,6 +878,7 @@ mod tests {
             trace_id: TraceId::new(),
             model: "local:echo".into(),
             prompt: "hello world".into(),
+            role_system: Some("Be crisp.".into()),
             params: Some(ModelParams {
                 temperature: Some(0.1),
                 max_tokens: Some(32),
@@ -888,6 +889,7 @@ mod tests {
             cache_ttl_ms: Some(10_000),
             cache_key: Some("smoke".into()),
             stream: false,
+            extras: Some(serde_json::json!({"gemini": {"safety": null}})),
         };
 
         let request_bytes = rmp_to_vec(&request).expect("encode request");

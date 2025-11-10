@@ -10,6 +10,7 @@ use reqwest::{
 use runloop_core::config::{BrokerConfig, ModelBudgets, ModelProvider, ProviderKind};
 use runloop_core::ids::TraceId;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -38,6 +39,8 @@ pub struct ModelRequest {
     pub model: String,
     pub prompt: String,
     #[serde(default)]
+    pub role_system: Option<String>,
+    #[serde(default)]
     pub params: Option<ModelParams>,
     #[serde(default)]
     pub budget_tokens: Option<u32>,
@@ -49,6 +52,8 @@ pub struct ModelRequest {
     pub cache_key: Option<String>,
     #[serde(default)]
     pub stream: bool,
+    #[serde(default)]
+    pub extras: Option<Value>,
 }
 
 /// Optional model parameters forwarded to providers.
@@ -340,7 +345,8 @@ impl Broker {
             metrics::counter!(METRIC_CACHE_HITS, "provider" => provider.id().to_owned())
                 .increment(1);
             let mut output = hit;
-            let (tokens_in, tokens_out, total_tokens) = usage_profile(&output, &request.prompt);
+            let (tokens_in, tokens_out, total_tokens) =
+                usage_profile(&output, &request.prompt, request.role_system.as_deref());
             if let Err(err) = inner.budgets.enforce(request, total_tokens) {
                 record_error(&err);
                 return Err(err);
@@ -409,7 +415,8 @@ impl Broker {
             finish_reason,
         };
 
-        let (tokens_in, tokens_out, total_tokens) = usage_profile(&output, &request.prompt);
+        let (tokens_in, tokens_out, total_tokens) =
+            usage_profile(&output, &request.prompt, request.role_system.as_deref());
         if let Err(err) = inner.budgets.enforce(request, total_tokens) {
             record_error(&err);
             return Err(err);
@@ -513,8 +520,16 @@ fn compose_cache_key(
     hasher.update(provider_id.as_bytes());
     hasher.update(provider_model.as_bytes());
     hasher.update(request.prompt.as_bytes());
+    if let Some(system) = &request.role_system {
+        hasher.update(system.as_bytes());
+    }
     if let Some(params) = &request.params
         && let Ok(encoded) = serde_json::to_vec(params)
+    {
+        hasher.update(&encoded);
+    }
+    if let Some(extras) = &request.extras
+        && let Ok(encoded) = serde_json::to_vec(extras)
     {
         hasher.update(&encoded);
     }
@@ -525,12 +540,23 @@ fn compose_cache_key(
 }
 
 fn estimate_tokens(text: &str) -> u32 {
-    // Simple heuristic: 4 characters ≈ 1 token.
-    text.len().div_ceil(4) as u32
+    estimate_tokens_from_len(text.len())
 }
 
-fn usage_profile(output: &ModelOutput, prompt: &str) -> (Option<u32>, Option<u32>, u32) {
-    let tokens_in = output.tokens_in.or_else(|| Some(estimate_tokens(prompt)));
+fn estimate_tokens_from_len(len: usize) -> u32 {
+    // Simple heuristic: 4 characters ≈ 1 token.
+    len.div_ceil(4) as u32
+}
+
+fn usage_profile(
+    output: &ModelOutput,
+    prompt: &str,
+    system_instruction: Option<&str>,
+) -> (Option<u32>, Option<u32>, u32) {
+    let prompt_len = prompt.len() + system_instruction.map_or(0, |text| text.len());
+    let tokens_in = output
+        .tokens_in
+        .or_else(|| Some(estimate_tokens_from_len(prompt_len)));
     let tokens_out = output
         .tokens_out
         .or_else(|| Some(estimate_tokens(&output.text)));
@@ -571,6 +597,7 @@ trait Provider: Send + Sync {
     ) -> Result<ProviderCompletion, BrokerError>;
 }
 
+#[derive(Debug)]
 struct ProviderCompletion {
     text: String,
     tokens_in: Option<u32>,
@@ -786,6 +813,427 @@ impl Provider for HttpProvider {
     }
 }
 
+struct GeminiProvider {
+    id: String,
+    client: Client,
+    base_url: String,
+    secret_id: Option<String>,
+    headers: HeaderMap,
+    secrets: Arc<dyn SecretResolver>,
+}
+
+impl GeminiProvider {
+    fn new(cfg: ModelProvider, secrets: Arc<dyn SecretResolver>) -> Result<Self, BrokerInitError> {
+        let base_url = cfg
+            .base_url
+            .ok_or_else(|| BrokerInitError::MissingBaseUrl { id: cfg.id.clone() })?;
+
+        let mut headers = HeaderMap::new();
+        for (key, value) in cfg.headers {
+            let name = HeaderName::try_from(key.as_str()).map_err(|source| {
+                BrokerInitError::InvalidHeaderName {
+                    id: cfg.id.clone(),
+                    header: key.clone(),
+                    source,
+                }
+            })?;
+            let header_value = HeaderValue::try_from(value.as_str()).map_err(|source| {
+                BrokerInitError::InvalidHeaderValue {
+                    id: cfg.id.clone(),
+                    header: key.clone(),
+                    source,
+                }
+            })?;
+            headers.append(name, header_value);
+        }
+
+        let client = Client::builder()
+            .build()
+            .map_err(|source| BrokerInitError::HttpClient {
+                id: cfg.id.clone(),
+                source,
+            })?;
+
+        Ok(Self {
+            id: cfg.id,
+            client,
+            base_url,
+            secret_id: cfg.secret_id,
+            headers,
+            secrets,
+        })
+    }
+}
+
+#[async_trait]
+impl Provider for GeminiProvider {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    async fn complete(
+        &self,
+        request: &ModelRequest,
+        provider_model: &str,
+        timeout: Option<Duration>,
+    ) -> Result<ProviderCompletion, BrokerError> {
+        let api_key = match self.secret_id.as_ref() {
+            Some(id) => self
+                .secrets
+                .resolve(id)
+                .ok_or_else(|| BrokerError::ProviderFault {
+                    code: "secret_missing".into(),
+                    message: format!("secret '{id}' not found"),
+                })?,
+            None => String::new(),
+        };
+
+        let hints = parse_gemini_hints(&request.extras)?;
+        let generation_config = build_gemini_generation_config(request, &hints);
+        let system_instruction = request.role_system.as_ref().map(|text| GeminiContent {
+            role: Some("system".into()),
+            parts: vec![GeminiPart {
+                text: Some(text.clone()),
+            }],
+        });
+        let payload = GeminiRequestPayload {
+            contents: vec![GeminiContent {
+                role: Some("user".into()),
+                parts: vec![GeminiPart {
+                    text: Some(request.prompt.clone()),
+                }],
+            }],
+            system_instruction,
+            generation_config,
+            safety_settings: hints.safety_settings.clone(),
+        };
+
+        let model_path = gemini_model_path(provider_model);
+        let url = format!(
+            "{}/v1beta/{}:generateContent",
+            self.base_url.trim_end_matches('/'),
+            model_path
+        );
+
+        let mut builder = self.client.post(url).json(&payload);
+        if let Some(duration) = timeout {
+            builder = builder.timeout(duration);
+        }
+        if !api_key.is_empty() {
+            builder = builder.header("X-Goog-Api-Key", api_key);
+        }
+        for (key, value) in self.headers.iter() {
+            builder = builder.header(key, value);
+        }
+        builder = builder.header("X-Runloop-Trace-Id", request.trace_id.to_string());
+
+        let response = builder
+            .send()
+            .await
+            .map_err(|err| BrokerError::ProviderFault {
+                code: "http_send".into(),
+                message: err.to_string(),
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let message = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "no body".to_string());
+            return Err(BrokerError::ProviderFault {
+                code: format!("http_{}", status.as_u16()),
+                message,
+            });
+        }
+
+        let payload: GeminiResponse =
+            response
+                .json()
+                .await
+                .map_err(|err| BrokerError::ProviderFault {
+                    code: "decode".into(),
+                    message: err.to_string(),
+                })?;
+
+        let GeminiResponse {
+            candidates,
+            usage_metadata,
+            model_version,
+            prompt_feedback,
+        } = payload;
+
+        if let Some(reason) = prompt_block_reason(&prompt_feedback) {
+            return Err(BrokerError::ProviderFault {
+                code: "safety_blocked".into(),
+                message: format!("Gemini blocked the prompt ({reason})"),
+            });
+        }
+
+        let mut text_candidate: Option<(Option<String>, String)> = None;
+        let mut safety_reason: Option<String> = None;
+        for candidate in candidates {
+            if text_candidate.is_some() {
+                break;
+            }
+            if safety_reason.is_none()
+                && candidate
+                    .finish_reason
+                    .as_deref()
+                    .is_some_and(is_safety_finish_reason)
+            {
+                safety_reason = candidate.finish_reason.clone();
+            }
+            if let Some(content) = candidate.content
+                && let Some(text) = collect_text_parts(content.parts)
+            {
+                text_candidate = Some((candidate.finish_reason.clone(), text));
+                break;
+            }
+        }
+
+        let (finish_reason_raw, text) = match text_candidate {
+            Some(value) => value,
+            None => {
+                if let Some(reason) = safety_reason {
+                    return Err(BrokerError::ProviderFault {
+                        code: "safety_blocked".into(),
+                        message: format!("Gemini blocked the completion (finish_reason={reason})"),
+                    });
+                }
+                return Err(BrokerError::ProviderFault {
+                    code: "empty_response".into(),
+                    message: "no completion candidates returned".into(),
+                });
+            }
+        };
+
+        let finish_reason = finish_reason_raw
+            .as_deref()
+            .map(|value| value.to_ascii_lowercase());
+        let tokens_in = usage_metadata
+            .as_ref()
+            .and_then(|usage| usage.prompt_token_count);
+        let tokens_out = usage_metadata
+            .as_ref()
+            .and_then(|usage| usage.candidates_token_count);
+        let resolved_model = model_version.unwrap_or(model_path);
+
+        Ok(ProviderCompletion {
+            text,
+            tokens_in,
+            tokens_out,
+            finish_reason,
+            provider_model: resolved_model,
+        })
+    }
+}
+
+fn build_gemini_generation_config(
+    request: &ModelRequest,
+    hints: &GeminiHints,
+) -> Option<GeminiGenerationConfig> {
+    let mut cfg = GeminiGenerationConfig::default();
+    if let Some(params) = &request.params {
+        cfg.temperature = params.temperature;
+        cfg.top_p = params.top_p;
+        cfg.max_output_tokens = params.max_tokens;
+        if let Some(stop) = &params.stop {
+            cfg.stop_sequences = stop.clone();
+        }
+    }
+    cfg.response_mime_type = hints.response_mime_type.clone();
+    if cfg.is_empty() { None } else { Some(cfg) }
+}
+
+#[derive(Default)]
+struct GeminiHints {
+    safety_settings: Option<Vec<GeminiSafetySetting>>,
+    response_mime_type: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+struct GeminiRequestPayload {
+    contents: Vec<GeminiContent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system_instruction: Option<GeminiContent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    generation_config: Option<GeminiGenerationConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    safety_settings: Option<Vec<GeminiSafetySetting>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct GeminiContent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    role: Option<String>,
+    parts: Vec<GeminiPart>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct GeminiPart {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+struct GeminiGenerationConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_output_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    stop_sequences: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_mime_type: Option<String>,
+}
+
+impl GeminiGenerationConfig {
+    fn is_empty(&self) -> bool {
+        self.temperature.is_none()
+            && self.top_p.is_none()
+            && self.max_output_tokens.is_none()
+            && self.stop_sequences.is_empty()
+            && self.response_mime_type.is_none()
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct GeminiSafetySetting {
+    category: String,
+    threshold: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiResponse {
+    #[serde(default)]
+    candidates: Vec<GeminiCandidate>,
+    #[serde(default)]
+    usage_metadata: Option<GeminiUsageMetadata>,
+    #[serde(default)]
+    model_version: Option<String>,
+    #[serde(default)]
+    prompt_feedback: Option<GeminiPromptFeedback>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiCandidate {
+    #[serde(default)]
+    content: Option<GeminiContent>,
+    #[serde(default)]
+    finish_reason: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct GeminiUsageMetadata {
+    #[serde(default)]
+    prompt_token_count: Option<u32>,
+    #[serde(default)]
+    candidates_token_count: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiPromptFeedback {
+    #[serde(default)]
+    block_reason: Option<String>,
+}
+
+fn prompt_block_reason(feedback: &Option<GeminiPromptFeedback>) -> Option<String> {
+    feedback
+        .as_ref()
+        .and_then(|fb| fb.block_reason.as_deref())
+        .and_then(|reason| {
+            if reason.eq_ignore_ascii_case("BLOCK_REASON_UNSPECIFIED") {
+                None
+            } else {
+                Some(reason.to_string())
+            }
+        })
+}
+
+fn parse_gemini_hints(extras: &Option<Value>) -> Result<GeminiHints, BrokerError> {
+    let Some(value) = extras else {
+        return Ok(GeminiHints::default());
+    };
+    match value {
+        Value::Null => Ok(GeminiHints::default()),
+        Value::Object(map) => {
+            let Some(gemini) = map.get("gemini") else {
+                return Ok(GeminiHints::default());
+            };
+            if gemini.is_null() {
+                return Ok(GeminiHints::default());
+            }
+            let payload: GeminiExtrasPayload =
+                serde_json::from_value(gemini.clone()).map_err(|err| {
+                    BrokerError::InvalidRequest {
+                        reason: format!("extras.gemini invalid: {err}"),
+                    }
+                })?;
+            Ok(payload.into())
+        }
+        _ => Err(BrokerError::InvalidRequest {
+            reason: "extras must be a JSON object".into(),
+        }),
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct GeminiExtrasPayload {
+    #[serde(default)]
+    safety: Option<Vec<GeminiSafetySetting>>,
+    #[serde(default)]
+    mime_type: Option<String>,
+    #[serde(default)]
+    response_mime_type: Option<String>,
+}
+
+impl From<GeminiExtrasPayload> for GeminiHints {
+    fn from(value: GeminiExtrasPayload) -> Self {
+        Self {
+            safety_settings: value.safety,
+            response_mime_type: value.response_mime_type.or(value.mime_type),
+        }
+    }
+}
+
+fn gemini_model_path(model: &str) -> String {
+    if model.starts_with("models/") {
+        model.to_string()
+    } else {
+        format!("models/{model}")
+    }
+}
+
+fn is_safety_finish_reason(reason: &str) -> bool {
+    matches!(
+        reason.to_ascii_uppercase().as_str(),
+        "SAFETY" | "BLOCKLIST" | "PROHIBITED_CONTENT"
+    )
+}
+
+fn collect_text_parts(parts: Vec<GeminiPart>) -> Option<String> {
+    let mut buffer = String::new();
+    for part in parts {
+        if let Some(text) = part.text {
+            buffer.push_str(&text);
+        }
+    }
+    if buffer.is_empty() {
+        None
+    } else {
+        Some(buffer)
+    }
+}
+
 fn build_provider(
     cfg: ModelProvider,
     secrets: Arc<dyn SecretResolver>,
@@ -793,6 +1241,7 @@ fn build_provider(
     match cfg.kind {
         ProviderKind::Local => Ok(Arc::new(NullProvider::new(cfg.id))),
         ProviderKind::Http => Ok(Arc::new(HttpProvider::new(cfg, secrets)?)),
+        ProviderKind::HttpGemini => Ok(Arc::new(GeminiProvider::new(cfg, secrets)?)),
     }
 }
 
@@ -847,15 +1296,35 @@ impl SecretResolver for NoopSecretResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use httpmock::prelude::*;
     use runloop_core::config::{
         BrokerCacheConfig, BrokerConfig, ModelBudgets, ModelProvider, ModelRoute,
     };
+    use serde_json::json;
+    use std::collections::HashMap;
+    use std::sync::Arc;
 
     struct TestSecrets;
 
     impl SecretResolver for TestSecrets {
         fn resolve(&self, _secret_id: &str) -> Option<String> {
             None
+        }
+    }
+
+    struct MapSecrets(HashMap<String, String>);
+
+    impl MapSecrets {
+        fn with_secret(id: &str, value: &str) -> Self {
+            let mut map = HashMap::new();
+            map.insert(id.to_string(), value.to_string());
+            Self(map)
+        }
+    }
+
+    impl SecretResolver for MapSecrets {
+        fn resolve(&self, secret_id: &str) -> Option<String> {
+            self.0.get(secret_id).cloned()
         }
     }
 
@@ -880,12 +1349,14 @@ mod tests {
             trace_id: TraceId::default(),
             model: "local:echo".into(),
             prompt: "hello".into(),
+            role_system: None,
             params: None,
             budget_tokens: None,
             timeout_ms: None,
             cache_ttl_ms: None,
             cache_key: None,
             stream: false,
+            extras: None,
         }
     }
 
@@ -953,6 +1424,242 @@ mod tests {
             .await
             .expect_err("budget enforcement");
         assert!(matches!(err, BrokerError::BudgetExceeded { .. }));
+    }
+
+    #[tokio::test]
+    async fn gemini_provider_maps_requests_and_responses() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST).header("x-goog-api-key", "test-key");
+                then.status(200).json_body(json!({
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {"text": "hi"},
+                                    {"text": " there"}
+                                ]
+                            },
+                            "finishReason": "STOP"
+                        }
+                    ],
+                    "usageMetadata": {
+                        "promptTokenCount": 12,
+                        "candidatesTokenCount": 24
+                    },
+                    "modelVersion": "models/gemini-1.5-flash"
+                }));
+            })
+            .await;
+
+        let cfg = ModelProvider {
+            id: "gemini".into(),
+            kind: ProviderKind::HttpGemini,
+            model_dir: None,
+            base_url: Some(server.base_url()),
+            secret_id: Some("gemini_api".into()),
+            headers: Default::default(),
+            schema: None,
+        };
+        let provider = GeminiProvider::new(
+            cfg,
+            Arc::new(MapSecrets::with_secret("gemini_api", "test-key")),
+        )
+        .expect("provider init");
+
+        let request = ModelRequest {
+            trace_id: TraceId::new(),
+            model: "gemini-1.5-flash".into(),
+            prompt: "hello".into(),
+            role_system: Some("be concise".into()),
+            params: Some(ModelParams {
+                temperature: Some(0.2),
+                top_p: Some(0.9),
+                max_tokens: Some(64),
+                stop: Some(vec!["STOP".into()]),
+            }),
+            budget_tokens: Some(8000),
+            timeout_ms: Some(1_000),
+            cache_ttl_ms: None,
+            cache_key: None,
+            stream: false,
+            extras: Some(json!({
+                "gemini": {
+                    "safety": [{
+                        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                        "threshold": "BLOCK_NONE"
+                    }],
+                    "response_mime_type": "text/plain"
+                }
+            })),
+        };
+
+        let completion = provider
+            .complete(&request, "gemini-1.5-flash", None)
+            .await
+            .expect("completion");
+        assert_eq!(completion.text, "hi there");
+        assert_eq!(completion.tokens_in, Some(12));
+        assert_eq!(completion.tokens_out, Some(24));
+        assert_eq!(completion.finish_reason.as_deref(), Some("stop"));
+        assert_eq!(completion.provider_model, "models/gemini-1.5-flash");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn gemini_provider_surfaces_safety_blocks() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST).header("x-goog-api-key", "test-key");
+                then.status(200).json_body(json!({
+                    "candidates": [
+                        {
+                            "finishReason": "SAFETY"
+                        }
+                    ],
+                    "promptFeedback": {
+                        "blockReason": "SAFETY"
+                    }
+                }));
+            })
+            .await;
+
+        let cfg = ModelProvider {
+            id: "gemini".into(),
+            kind: ProviderKind::HttpGemini,
+            model_dir: None,
+            base_url: Some(server.base_url()),
+            secret_id: Some("gemini_api".into()),
+            headers: Default::default(),
+            schema: None,
+        };
+        let provider = GeminiProvider::new(
+            cfg,
+            Arc::new(MapSecrets::with_secret("gemini_api", "test-key")),
+        )
+        .expect("provider init");
+
+        let request = ModelRequest {
+            trace_id: TraceId::new(),
+            model: "gemini-pro".into(),
+            prompt: "hello".into(),
+            role_system: None,
+            params: None,
+            budget_tokens: None,
+            timeout_ms: None,
+            cache_ttl_ms: None,
+            cache_key: None,
+            stream: false,
+            extras: None,
+        };
+
+        let err = provider
+            .complete(&request, "gemini-pro", None)
+            .await
+            .expect_err("should be blocked");
+        match err {
+            BrokerError::ProviderFault { code, message } => {
+                assert_eq!(code, "safety_blocked");
+                assert!(message.contains("Gemini"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        mock.assert_async().await;
+    }
+
+    #[test]
+    fn usage_profile_counts_system_instruction_text() {
+        let mut output = ModelOutput {
+            text: "done".into(),
+            tokens_in: None,
+            tokens_out: None,
+            cached: false,
+            provider: "null".into(),
+            provider_model: "null".into(),
+            latency_ms: 0,
+            finish_reason: None,
+        };
+        let (tokens_in, tokens_out, total) =
+            usage_profile(&output, "prompt", Some("system instruction"));
+        assert_eq!(tokens_out, Some(estimate_tokens("done")));
+        let expected_in = estimate_tokens_from_len("prompt".len() + "system instruction".len());
+        assert_eq!(tokens_in, Some(expected_in));
+        assert_eq!(total, expected_in + tokens_out.unwrap());
+
+        // Ensure explicit tokens override heuristic.
+        output.tokens_in = Some(42);
+        let (tokens_in, _, _) = usage_profile(&output, "prompt", Some("system instruction"));
+        assert_eq!(tokens_in, Some(42));
+    }
+
+    #[tokio::test]
+    async fn broker_routes_requests_to_gemini_provider() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1beta/models/gemini-1.5-flash:generateContent")
+                    .header("x-goog-api-key", "test-key");
+                then.status(200).json_body(json!({
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {"text": "r1"},
+                                    {"text": " r2"}
+                                ]
+                            },
+                            "finishReason": "STOP"
+                        }
+                    ]
+                }));
+            })
+            .await;
+
+        let cfg = BrokerConfig {
+            providers: vec![ModelProvider {
+                id: "gemini".into(),
+                kind: ProviderKind::HttpGemini,
+                model_dir: None,
+                base_url: Some(server.base_url()),
+                secret_id: Some("gemini_api".into()),
+                headers: Default::default(),
+                schema: None,
+            }],
+            route: vec![ModelRoute {
+                pattern: "gemini-*".into(),
+                provider: "gemini".into(),
+                target_model: None,
+            }],
+            cache: BrokerCacheConfig::default(),
+            budgets: ModelBudgets::default(),
+        };
+        let broker = Broker::new(
+            cfg,
+            Arc::new(MapSecrets::with_secret("gemini_api", "test-key")),
+        )
+        .expect("broker init");
+
+        let request = ModelRequest {
+            trace_id: TraceId::new(),
+            model: "gemini-1.5-flash".into(),
+            prompt: "hello".into(),
+            role_system: Some("stay concise".into()),
+            params: None,
+            budget_tokens: Some(2_000),
+            timeout_ms: Some(500),
+            cache_ttl_ms: None,
+            cache_key: None,
+            stream: false,
+            extras: None,
+        };
+
+        let output = broker.complete(&request).await.expect("completion");
+        assert_eq!(output.text, "r1 r2");
+        assert_eq!(output.provider, "gemini");
+        mock.assert_async().await;
     }
 
     #[tokio::test]

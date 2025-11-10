@@ -92,6 +92,11 @@ models:
         kind: "http"
         base_url: "https://api.openai.com"
         secret_id: "runloop/models/openai"
+      # Gemini (text-only) example:
+      # - id: "gemini"
+      #   kind: "http_gemini"
+      #   base_url: "https://generativelanguage.googleapis.com"
+      #   secret_id: "runloop/models/gemini"
     route:
       - pattern: "*"
         provider: "openai"
