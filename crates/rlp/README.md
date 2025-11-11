@@ -8,7 +8,7 @@ router, knowledge base, and configuration layers.
 
 ### `rlp run`
 
-```
+```bash
 rlp run <opening.yaml> [--params '{"key":"value"}'] [--trace-out trace.json] [--local]
 ```
 
@@ -45,7 +45,7 @@ TTY, otherwise JSON. Override with `--json` / `--table` and tune `--max-cols`,
 
 ### `rlp kb query`
 
-```
+```bash
 rlp kb query <SQL...> [--json|--table]
 ```
 
@@ -63,7 +63,7 @@ artifacts/contacts inline.
 
 ### `rlp config path`
 
-```
+```bash
 rlp config path [--all] [--json]
 ```
 

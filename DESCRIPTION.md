@@ -43,7 +43,7 @@ Base (KB) → Observability/TUI**
   self‑improvement.
 - Example (sketch):
 
-```
+```text
 
 opening "compose_email" {
 goals: ["email to john about q4 plan"]

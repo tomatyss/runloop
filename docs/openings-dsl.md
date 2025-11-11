@@ -24,14 +24,14 @@ used throughout examples. The canonical YAML lives at
 
 ## 2) Goals & non‑goals
 
-**Goals**
+### Goals
 
 - Human‑readable spec for orchestrating agents.
 - Deterministic **IR** (intermediate representation) suitable for validation,
   execution, and replay.
 - Minimal templating; no Turing‑complete logic.
 
-**Non‑goals (v0)**
+### Non‑goals (v0)
 
 - Distributed execution (single machine only).
 - Rich conditionals/loops; stick to edge predicates and retries.
@@ -376,7 +376,7 @@ success:
 > YAML is the source of truth; this EBNF describes the **IR** structure after
 > parsing.
 
-```
+```ebnf
 Opening        := { version: Int, name: Ident, goals?: [Str], params?: Map,
                     policy?: Policy, nodes: [Node], edges: [Edge],
                     success?: Success, artifacts?: Artifacts }
@@ -444,7 +444,7 @@ these when authoring schemas and mapping ports.
 
 ---
 
-**References**
+### References
 
 - README (concepts, sample opening), Roadmap (acceptance criteria), TODO (epics
   for RMP/Bus/Openings), Protocol/Runtime design notes (RMP headers, capability

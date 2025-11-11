@@ -36,7 +36,7 @@ descriptive error.
 
 Environment variables mirror YAML paths (upper case, underscores). Examples:
 
-```
+```bash
 RUNLOOP_MODELS_DEFAULT=local:llama3.1-8b
 RUNLOOP_MODELS_BUDGETS_SYSTEM_TOKENS_HARD=750000
 RUNLOOP_SECURITY_CONFIRM_EXTERNAL_ACTIONS=true
@@ -45,9 +45,10 @@ RUNLOOP_CONFIG=/custom/path/config.yaml
 
 ### 1.3 Model broker configuration _(MVP)_
 
-- `models.broker.providers` lists named backends. HTTP providers accept
-  `base_url`, `secret_id`, optional static headers, and a `schema` (MVP supports
-  `openai-completions`).
+- `models.broker.providers` lists named backends. `kind` may be `local`, `http`
+  (OpenAI-compatible schemas such as `openai-completions`), or `http_gemini`
+  (Google Gemini `generateContent`). Both HTTP kinds accept `base_url`,
+  `secret_id`, and optional static headers.
 - `models.broker.route` is an ordered array of
   `{ pattern, provider, target_model? }` entries; the first matching pattern
   wins. Legacy map syntax like `{ "*": "local" }` (or the legacy key `routing`)
@@ -168,7 +169,7 @@ Runloop enforces signatures on agent bundles before install/launch.
   and referenced files.
 - **Bundle layout:**
 
-```
+```text
 agent.bundle/
 ├─ manifest.toml       # includes digests of contents
 ├─ policy.caps

@@ -442,6 +442,8 @@ impl Default for BrokerCacheConfig {
 pub enum ProviderKind {
     Local,
     Http,
+    #[serde(rename = "http_gemini")]
+    HttpGemini,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -17,3 +17,6 @@ lru = "0.16"
 async-trait = "0.1"
 metrics = "0.24"
 blake3 = "1.5"
+
+[dev-dependencies]
+httpmock = "0.7"
