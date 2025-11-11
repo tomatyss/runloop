@@ -51,17 +51,22 @@ pub struct Broker {
 
 - `local:llama.cpp` (bindings)
 - `http:openai` (OpenAI-compatible; also covers Anthropic/others via adapters)
-- `http_gemini` (Google Gemini `generateContent`, non-streaming text completions)
+- `http_gemini` (Google Gemini `generateContent`, non-streaming text
+  completions)
 
 ### Request shape (MVP)
 
-`ModelRequest` carries a single `prompt: String`, optional `ModelParams`, and additive fields used by specific providers:
+`ModelRequest` carries a single `prompt: String`, optional `ModelParams`, and
+additive fields used by specific providers:
 
-- `role_system: Option<String>` — forwarded as a system instruction for providers that support it (e.g., Gemini).
-- `extras: Option<serde_json::Value>` — provider hints; the Gemini adapter reads `{"gemini": {"safety": [...], "response_mime_type": "text/plain"}}`.
+- `role_system: Option<String>` — forwarded as a system instruction for
+  providers that support it (e.g., Gemini).
+- `extras: Option<serde_json::Value>` — provider hints; the Gemini adapter reads
+  `{"gemini": {"safety": [...], "response_mime_type": "text/plain"}}`.
 - Existing knobs (`budget_tokens`, `timeout_ms`, `cache_*`) remain unchanged.
 
-The broker still rejects streaming requests; when a provider adds streaming we will gate it behind a new request/response surface.
+The broker still rejects streaming requests; when a provider adds streaming we
+will gate it behind a new request/response surface.
 
 ### Policy
 
