@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://runloop.local/schemas/artifact.created.schema.json#v1",
+  "$id": "https://runloop.local/schemas/artifact.created.schema.json",
+  "$anchor": "v1",
   "title": "artifact.created v1",
   "type": "object",
   "additionalProperties": false,

@@ -3,7 +3,7 @@
 **Input (Artifact):**
 
 ```json
-{ "type":"draft_email.md", "body_md":"..." }
+{ "type": "draft_email.md", "body_md": "..." }
 ```
 
 **Output (Critique):**

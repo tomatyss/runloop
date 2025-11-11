@@ -26,8 +26,11 @@ test:
 pre-commit:
 	@scripts/pre-commit.sh
 
-markdownlint:
-	@npx markdownlint-cli2 "**/*.md"
+markdownfmt:
+	@npx prettier --write '**/*.md'
+
+markdownlint: markdownfmt
+	@npx markdownlint-cli2 '**/*.md'
 
 doc:
 	@cargo doc --workspace --no-deps
