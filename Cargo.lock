@@ -2760,7 +2760,7 @@ dependencies = [
  "serde_yaml",
  "terminal_size",
  "textwrap",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tokio",
  "tracing",
  "unicode-width 0.1.14",
@@ -2861,7 +2861,7 @@ dependencies = [
  "runloop-model-broker",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -2879,7 +2879,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tokio",
  "tracing",
 ]
@@ -2895,7 +2895,7 @@ dependencies = [
  "serde_yaml",
  "shellexpand",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -2920,7 +2920,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tokio",
 ]
 
@@ -2937,7 +2937,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -2952,7 +2952,7 @@ dependencies = [
  "runloop-core",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tokio",
 ]
 
@@ -2969,7 +2969,7 @@ dependencies = [
  "serde_json",
  "serde_spanned 1.0.3",
  "serde_yaml",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tokio",
 ]
 
@@ -2981,7 +2981,7 @@ dependencies = [
  "rmp-serde",
  "runloop-core",
  "serde",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tokio",
 ]
 
@@ -2994,7 +2994,7 @@ dependencies = [
  "runloop-core",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -3026,7 +3026,7 @@ dependencies = [
  "serde_json",
  "sysinfo",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tokio",
  "toml",
  "tracing",
@@ -3049,7 +3049,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tokio",
  "uuid",
 ]
