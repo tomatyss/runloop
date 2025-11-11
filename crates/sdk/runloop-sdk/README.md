@@ -20,14 +20,15 @@ same capability envelope the WASM runtime enforces.
 `agent-shim` (and native agents launched through it) expect the runtime to
 provide these environment variables:
 
-| Variable             | Meaning                                       |
-| -------------------- | --------------------------------------------- |
-| `RUNLOOP_SOCKET`     | Path/key of the in-process bus binding        |
-| `RUNLOOP_AGENT_ID`   | UUID of the logical agent instance            |
-| `RUNLOOP_CAPS_JSON`  | JSON blob describing the effective caps set   |
-| `RUNLOOP_SHIM_VERSION` | Optional override for the shim version tag |
+| Variable               | Meaning                                     |
+| ---------------------- | ------------------------------------------- |
+| `RUNLOOP_SOCKET`       | Path/key of the in-process bus binding      |
+| `RUNLOOP_AGENT_ID`     | UUID of the logical agent instance          |
+| `RUNLOOP_CAPS_JSON`    | JSON blob describing the effective caps set |
+| `RUNLOOP_SHIM_VERSION` | Optional override for the shim version tag  |
 
-The JSON schema for `RUNLOOP_CAPS_JSON` matches `runloop_sdk::caps::EffectiveCaps`.
+The JSON schema for `RUNLOOP_CAPS_JSON` matches
+`runloop_sdk::caps::EffectiveCaps`.
 
 ## CLI usage
 

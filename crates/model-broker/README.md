@@ -32,7 +32,8 @@ pub struct Broker {
 
 ### Caching & invalidation
 
-- Cache key = hash(model, provider_id, kind, normalized_prompt_or_input, policy_params, tools_sig).
+- Cache key = hash(model, provider_id, kind, normalized_prompt_or_input,
+  policy_params, tools_sig).
 - Invalidate on:
   - provider version change
   - model name/version change

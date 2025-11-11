@@ -3,7 +3,7 @@
 **Input (Intent):**
 
 ```json
-{ "type":"gather_context", "topic":"Q4 plan", "recipient_id":"uuid" }
+{ "type": "gather_context", "topic": "Q4 plan", "recipient_id": "uuid" }
 ```
 
 **Output (Artifact):**

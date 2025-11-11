@@ -18,22 +18,22 @@ Custom hostcalls live under the `"runloop"` namespace. Each one checks the
 agent's `Caps` before executing and records a `cap.audit` KB event when a
 decision is denied.
 
-| Hostcall           | Behaviour                                                         |
-| ------------------ | ----------------------------------------------------------------- |
-| `time_now`         | Returns wall-clock microseconds; denied if `Caps::time` is false. |
-| `http_request`     | Allows HTTP(S) only to domains in `Caps::net_hosts`; HTTPS unless `allow_http`. |
-| `kb_read` / `kb_write` | Verifies namespace access using `CapabilitySet`.             |
-| `model_complete`   | Invokes the model broker (`ModelRequest` in msgpack form) and writes UTF-8 output into the provided buffer, returning the byte count or a negative error (`MODEL_E*`). When a metadata buffer is supplied the host prefixes a little-endian `u32` length followed by msgpack-encoded `ModelOutputMeta`. |
-| `resolve_secret`   | Returns opaque secret identifiers when permitted.                 |
-| `exec_spawn`       | Stubbed until exec caps are enabled; guard rail in place.         |
-| `mailbox_peek_meta`| Returns the next message header as JSON (`trace_id`, `msg_id`, `created_at_ms`, `ttl_ms`, `schema_id`) without consuming the mailbox. |
-| `mailbox_recv`     | Pulls pending bus messages for the agent.                         |
+| Hostcall               | Behaviour                                                                                                                                                                                                                                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `time_now`             | Returns wall-clock microseconds; denied if `Caps::time` is false.                                                                                                                                                                                                                                       |
+| `http_request`         | Allows HTTP(S) only to domains in `Caps::net_hosts`; HTTPS unless `allow_http`.                                                                                                                                                                                                                         |
+| `kb_read` / `kb_write` | Verifies namespace access using `CapabilitySet`.                                                                                                                                                                                                                                                        |
+| `model_complete`       | Invokes the model broker (`ModelRequest` in msgpack form) and writes UTF-8 output into the provided buffer, returning the byte count or a negative error (`MODEL_E*`). When a metadata buffer is supplied the host prefixes a little-endian `u32` length followed by msgpack-encoded `ModelOutputMeta`. |
+| `resolve_secret`       | Returns opaque secret identifiers when permitted.                                                                                                                                                                                                                                                       |
+| `exec_spawn`           | Stubbed until exec caps are enabled; guard rail in place.                                                                                                                                                                                                                                               |
+| `mailbox_peek_meta`    | Returns the next message header as JSON (`trace_id`, `msg_id`, `created_at_ms`, `ttl_ms`, `schema_id`) without consuming the mailbox.                                                                                                                                                                   |
+| `mailbox_recv`         | Pulls pending bus messages for the agent.                                                                                                                                                                                                                                                               |
 
 Filesystem access is mediated by `WasiCtxBuilder::preopened_dir`. The runtime
-only preopens directories that appear in the agent's filesystem capabilities
-and chooses `DirPerms`/`FilePerms` (read-only vs read/write) based on each
-entry's `write` flag. Guests therefore see just the permitted roots and cannot
-traverse outside them.
+only preopens directories that appear in the agent's filesystem capabilities and
+chooses `DirPerms`/`FilePerms` (read-only vs read/write) based on each entry's
+`write` flag. Guests therefore see just the permitted roots and cannot traverse
+outside them.
 
 For test and troubleshooting purposes `Caps::debug_preopens()` exposes the
 derived permission plan, while `tests/preopen_harness.rs` exercises the same
@@ -59,6 +59,7 @@ server, TTL rejection) propagate back to the caller.
 ## Statistics
 
 `AgentStats` reports RSS and accumulated CPU time. Linux builds enable the
-`procfs` feature by default (opt-out via `--no-default-features --features no-procfs`) and
-sample `/proc` for per-thread CPU. Other platforms fall back to `sysinfo` and
-omit CPU totals when fine-grained data is unavailable.
+`procfs` feature by default (opt-out via
+`--no-default-features --features no-procfs`) and sample `/proc` for per-thread
+CPU. Other platforms fall back to `sysinfo` and omit CPU totals when
+fine-grained data is unavailable.

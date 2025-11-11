@@ -1,11 +1,14 @@
 # Getting Started (Draft)
 
-> **Doc status:** Informative — links to normative specs. Last updated: 2025-11-02.
+> **Doc status:** Informative — links to normative specs. Last updated:
+> 2025-11-02.
 
 ## Prerequisites
 
-- Debian/Ubuntu host (or container/VM) with Rust toolchain (`rustup`, `cargo`, `clippy`, `rustfmt`).
-- Optional tooling: `just`, `sqlite3`, `cargo-deb`, `live-build`, `qemu-system-x86_64`.
+- Debian/Ubuntu host (or container/VM) with Rust toolchain (`rustup`, `cargo`,
+  `clippy`, `rustfmt`).
+- Optional tooling: `just`, `sqlite3`, `cargo-deb`, `live-build`,
+  `qemu-system-x86_64`.
 - `rlp` CLI (will be built from source once crates exist).
 
 ## Repository layout refresher
@@ -15,13 +18,15 @@ See the tree in `README.md` for directories. Key docs:
 - `docs/message-protocol.md` — wire format spec (normative)
 - `docs/rmp-registry.md` — schema IDs
 - `docs/kb-schemas.md` — ledger & materialized views (normative)
-- `docs/ops.md` — operations, config precedence, trust policy (normative sections marked)
+- `docs/ops.md` — operations, config precedence, trust policy (normative
+  sections marked)
 - `docs/security-model.md` — sandbox, secret store, threat model
 
 ## First-run checklist
 
 1. Clone repo and read `README.md` front-to-back.
-2. Configure `~/.runloop/config.yaml` (copy from `.env.example` guidance when available).
+2. Configure `~/.runloop/config.yaml` (copy from `.env.example` guidance when
+   available).
 3. Initialize secrets backend (optional):
 
    ```bash
@@ -48,7 +53,8 @@ See the tree in `README.md` for directories. Key docs:
 - `rlp trust update`
 - `rlp agent install|list|remove`
 
-Finer details appear in `docs/ops.md`. As implementation lands, these commands gain real outputs; until then they serve as interface contracts.
+Finer details appear in `docs/ops.md`. As implementation lands, these commands
+gain real outputs; until then they serve as interface contracts.
 
 ## Finding work items
 
@@ -59,7 +65,8 @@ Finer details appear in `docs/ops.md`. As implementation lands, these commands g
 ## Contributing flow (preview)
 
 1. Fork/branch following `CONTRIBUTING.md` guidance (to be fleshed out).
-2. For spec changes, open an ADR (`docs/adr/`) and mark affected docs as Draft/Normative.
+2. For spec changes, open an ADR (`docs/adr/`) and mark affected docs as
+   Draft/Normative.
 3. Ensure docs and fixtures stay in sync (e.g., schema registry, KB migrations).
 
 Questions? Open an issue or reach out via channels in `SUPPORT.md`.
