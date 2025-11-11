@@ -1,35 +1,46 @@
 # Runloop OS — DESCRIPTION
 
-Runloop is an **agent‑native, terminal‑first operating system**. Every prompt you type is routed either to the **shell** (fast path) or to a **crew of AI agents** (“openings”) that plan, act, and produce artifacts in the background. Agents are ultra‑light, capability‑scoped tasks (WASI/Wasm) orchestrated over a typed message bus, with complete provenance and deterministic replay.
+Runloop is an **agent‑native, terminal‑first operating system**. Every prompt
+you type is routed either to the **shell** (fast path) or to a **crew of AI
+agents** (“openings”) that plan, act, and produce artifacts in the background.
+Agents are ultra‑light, capability‑scoped tasks (WASI/Wasm) orchestrated over a
+typed message bus, with complete provenance and deterministic replay.
 
 ## Why Runloop
 
 - **Terminal‑first**: no windows; everything is inspectable as text.
 - **Local‑first, cloud‑optional**: runs offline; can sync/enrich when online.
-- **Composable agents**: declare a plan (“opening”), run/replay it, and audit the trace.
-- **Trustworthy memory**: an event‑sourced personal knowledge base with explainable answers.
-- **Least‑privilege by default**: capabilities gate every file, net, time, KB, secrets, and model access.
+- **Composable agents**: declare a plan (“opening”), run/replay it, and audit
+  the trace.
+- **Trustworthy memory**: an event‑sourced personal knowledge base with
+  explainable answers.
+- **Least‑privilege by default**: capabilities gate every file, net, time, KB,
+  secrets, and model access.
 
 ## Core mental model
 
 - **Trajectories** — individual agents (LLM + tools) with a goal and budget.
 - **Crossings** — typed interactions (messages, artifacts) among agents.
-- **Openings** — a declarative DAG (the crew and their crossings) that you can run, pause, step, or replay.
+- **Openings** — a declarative DAG (the crew and their crossings) that you can
+  run, pause, step, or replay.
 
 ## System overview
 
-**Router → Opening Engine → Runtime → Message Bus → Model Broker → Knowledge Base (KB) → Observability/TUI**
+**Router → Opening Engine → Runtime → Message Bus → Model Broker → Knowledge
+Base (KB) → Observability/TUI**
 
 ### 1) Router
 
 - Fast‑path executes exact shell commands (`ls | grep foo`).
 - Otherwise, classifies intent and launches a matching **opening** (crew plan).
-- Always shows *why* it routed and the proposed plan; you press `Enter` to run.
+- Always shows _why_ it routed and the proposed plan; you press `Enter` to run.
 
 ### 2) Openings (composition)
 
-- Openings are declarative DAGs with retries, timeouts, budgets, and success criteria.
-- Deterministic replay against the event log enables debugging and self‑improvement.
+- Openings are declarative DAGs with retries, timeouts, budgets, and success
+  criteria.
+- Deterministic replay against the event log enables debugging and
+  self‑improvement.
 - Example (sketch):
 
 ```
@@ -49,14 +60,17 @@ draft.out    -> review.in
 review.ok    -> send.in
 }
 
-````
+```
 
 ### 3) Runtime & agent container
 
-- **Process model**: wasm32‑WASI (Wasmtime). Cold‑start and RSS are near‑process; sandboxing is strong.
+- **Process model**: wasm32‑WASI (Wasmtime). Cold‑start and RSS are
+  near‑process; sandboxing is strong.
 - **Agent bundle**: `{ manifest.toml, wasm, tools.json, policy.caps }`.
-- **Capabilities**: filesystem (scoped), network (allow‑list), exec (off by default), time, KB read/write, secret‑ids, model access via broker.
-- **IPC**: local message bus (Unix sockets) with zero‑copy blobs and signed, typed messages.
+- **Capabilities**: filesystem (scoped), network (allow‑list), exec (off by
+  default), time, KB read/write, secret‑ids, model access via broker.
+- **IPC**: local message bus (Unix sockets) with zero‑copy blobs and signed,
+  typed messages.
 
 ### 4) Message protocol (RMP)
 
@@ -66,8 +80,10 @@ review.ok    -> send.in
 - `schema_id`, `body_len`
 - `created_at_ms` (sender clock) + `ttl_ms` (expiry)
 - `trace_id`, `opening_id`, `msg_id`
-- **Body**: `{ type, payload, meta? }` with a **JSON‑schema** (on-disk canonical) and **MsgPack** on the wire.
-- **Primitives**: `Observation`, `Intent`, `ToolCall`, `ToolResult`, `Artifact`, `Critique`, `StateDelta`.
+- **Body**: `{ type, payload, meta? }` with a **JSON‑schema** (on-disk
+  canonical) and **MsgPack** on the wire.
+- **Primitives**: `Observation`, `Intent`, `ToolCall`, `ToolResult`, `Artifact`,
+  `Critique`, `StateDelta`.
 - **Delivery**: pub/sub + RPC, idempotent handlers, backoff retries.
 - **Provenance**: every message carries `who/why/what/model@version`.
 
@@ -79,41 +95,53 @@ review.ok    -> send.in
 - **Canonical forms**:
 - JSON payloads/provenance are **JCS‑canonical** (stable hashing).
 - Content hashes use **BLAKE3**; stored as 32‑byte binary.
-- Timestamps are **integers in milliseconds** (`ts_ms`); ISO is rendered on read.
-- **Ingestion**: agents don’t mutate state directly; they **propose** `StateDelta` events which a validator stamps and applies.
-- **Retrieval**: hybrid (keyword + vector) with “only user‑confirmed sources” filter; any answer is explainable via `kb.why(<id>)`.
-- **Secrets**: only opaque `secret_id` references in KB; actual secrets live in the OS keystore or an encrypted vault.
+- Timestamps are **integers in milliseconds** (`ts_ms`); ISO is rendered on
+  read.
+- **Ingestion**: agents don’t mutate state directly; they **propose**
+  `StateDelta` events which a validator stamps and applies.
+- **Retrieval**: hybrid (keyword + vector) with “only user‑confirmed sources”
+  filter; any answer is explainable via `kb.why(<id>)`.
+- **Secrets**: only opaque `secret_id` references in KB; actual secrets live in
+  the OS keystore or an encrypted vault.
 
 ### 6) Model broker
 
-- Single service mediates all model calls (local or remote), sets budgets, caches, and meters cost.
-- **MVP guardrail**: **no streaming** responses in v0 (can be feature‑flagged later).
+- Single service mediates all model calls (local or remote), sets budgets,
+  caches, and meters cost.
+- **MVP guardrail**: **no streaming** responses in v0 (can be feature‑flagged
+  later).
 
 ### 7) Security & privacy
 
 - **Capability security** end‑to‑end.
-- **Human confirmation** required for outbound side‑effects (sending, deleting, spending).
-- **Signed bundles/SBOM**; only trusted, signed agents may run (policy‑controlled).
-- **Redaction**: agents can request redacted/embedded‑only views to avoid handling raw PII.
+- **Human confirmation** required for outbound side‑effects (sending, deleting,
+  spending).
+- **Signed bundles/SBOM**; only trusted, signed agents may run
+  (policy‑controlled).
+- **Redaction**: agents can request redacted/embedded‑only views to avoid
+  handling raw PII.
 
 ### 8) Observability & debugging
 
 - **agtop** shows per‑agent CPU/RSS/tokens/errors.
-- **runloop trace** prints a ladder diagram of a full opening (spans across retries).
+- **runloop trace** prints a ladder diagram of a full opening (spans across
+  retries).
 - Crash quarantine + minimal repro capture.
 
 ## Packaging & run modes
 
-Runloop supports **user** and **system** modes with explicit, non‑overlapping paths.
+Runloop supports **user** and **system** modes with explicit, non‑overlapping
+paths.
 
-- **User mode (single user / dev)**  
-- State: `~/.runloop/`  
-- Socket: `$XDG_RUNTIME_DIR/runloop/runloopd.sock` (fallback `~/.runloop/run/runloopd.sock`)  
+- **User mode (single user / dev)**
+- State: `~/.runloop/`
+- Socket: `$XDG_RUNTIME_DIR/runloop/runloopd.sock` (fallback
+  `~/.runloop/run/runloopd.sock`)
 - Logs: `~/.runloop/logs` (or `stderr` when attached)
-- **System mode (daemon)**  
-- Service user: `runloop`  
-- State: `/var/lib/runloop/`  
-- Socket: `/run/runloop/runloopd.sock`  
+- **System mode (daemon)**
+- Service user: `runloop`
+- State: `/var/lib/runloop/`
+- Socket: `/run/runloop/runloopd.sock`
 - Logs: journald or `/var/log/runloop/`
 
 ## Configuration (v1 schema sketch)
@@ -132,7 +160,7 @@ models:
     budgets:
       default_tokens: 8000
       hard_cap_usd: 0.50
-    streaming: false   # MVP: off; may be enabled via feature flag later
+    streaming: false # MVP: off; may be enabled via feature flag later
 
 kb:
   root_dir: "~/.runloop/pog"
@@ -157,11 +185,13 @@ router:
 
 ui:
   theme: mono
-````
+```
 
 ## TUI
 
-Single status bar (mode, opening, token burn, health) and toggleable panes: **plan**, **log**, **artifacts**, **agtop**, **trace**. Keybinds: `space` (run/pause), `.` (step), `?` (why), `!` (escalate to human).
+Single status bar (mode, opening, token burn, health) and toggleable panes:
+**plan**, **log**, **artifacts**, **agtop**, **trace**. Keybinds: `space`
+(run/pause), `.` (step), `?` (why), `!` (escalate to human).
 
 ## Non‑goals for v1
 
@@ -172,9 +202,12 @@ Single status bar (mode, opening, token burn, health) and toggleable panes: **pl
 
 ## Performance intent
 
-Cold start near process‑launch; low RSS per agent; ≥1k msgs/s bus on a developer laptop (post‑beta tuning).
+Cold start near process‑launch; low RSS per agent; ≥1k msgs/s bus on a developer
+laptop (post‑beta tuning).
 
 ## Documentation & decisions
 
-- Docs follow **Diátaxis**, diagrams use **C4 + Mermaid**, and architectural decisions are captured as **MADR ADRs**.
-- Two baseline ADRs: **0001 Debian + WASM/WASI + SQLite**, **0002 RMP v0 (header, framing, compatibility)**.
+- Docs follow **Diátaxis**, diagrams use **C4 + Mermaid**, and architectural
+  decisions are captured as **MADR ADRs**.
+- Two baseline ADRs: **0001 Debian + WASM/WASI + SQLite**, **0002 RMP v0
+  (header, framing, compatibility)**.

@@ -3,7 +3,12 @@
 **Input (Intent):**
 
 ```json
-{ "type":"resolve_contact", "name_or_hint":"John", "email_hint":null, "context_tags":["q4"] }
+{
+  "type": "resolve_contact",
+  "name_or_hint": "John",
+  "email_hint": null,
+  "context_tags": ["q4"]
+}
 ```
 
 **Output (Artifact):**
@@ -15,5 +20,6 @@
 }
 ```
 
-**Capabilities:** kb.read.contacts, kb.search, kb.write.contacts? (for confirmed upsert), model (optional for disambiguation)  
+**Capabilities:** kb.read.contacts, kb.search, kb.write.contacts? (for confirmed
+upsert), model (optional for disambiguation)  
 **Timeout/budget:** 2s / 500 tokens

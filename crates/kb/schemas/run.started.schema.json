@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://runloop.local/schemas/run.started.schema.json#v1",
+  "$id": "https://runloop.local/schemas/run.started.schema.json",
+  "$anchor": "v1",
   "title": "run.started v1",
   "type": "object",
   "additionalProperties": false,

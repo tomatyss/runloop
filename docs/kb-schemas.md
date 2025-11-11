@@ -1,8 +1,10 @@
 # Knowledge Base Schemas (Draft)
 
-> **Doc status:** Draft — schema tables and migration rules are normative for v0.1. Last updated: 2025-11-02.
+> **Doc status:** Draft — schema tables and migration rules are normative for
+> v0.1. Last updated: 2025-11-02.
 
-The Personal Operations Graph (POG) comprises two SQLite databases plus derived vector artifacts.
+The Personal Operations Graph (POG) comprises two SQLite databases plus derived
+vector artifacts.
 
 ## 1. Ledger (`events.sqlite`)
 
@@ -30,27 +32,33 @@ CREATE INDEX IF NOT EXISTS idx_events_actor_ts
   ON events(actor, ts_ms);
 ```
 
-`meta(schema_version TEXT, dirty INTEGER, ts DATETIME)` tracks migrations. `schema_version` uses SemVer.
+`meta(schema_version TEXT, dirty INTEGER, ts DATETIME)` tracks migrations.
+`schema_version` uses SemVer.
 
 ### 1.2 Constraints
 
-- `payload_json` and `provenance_json` MUST be [JCS](https://www.rfc-editor.org/rfc/rfc8785) canonical JSON strings.
+- `payload_json` and `provenance_json` MUST be
+  [JCS](https://www.rfc-editor.org/rfc/rfc8785) canonical JSON strings.
 - Insertions must occur within transactions; never update/delete existing rows.
-- `hash_blake3` validation occurs during `rlp kb verify`; the digest is stored as raw BLOB(32) and rendered in hex only for logs/UIs.
+- `hash_blake3` validation occurs during `rlp kb verify`; the digest is stored
+  as raw BLOB(32) and rendered in hex only for logs/UIs.
 
 ### 1.3 Seed JSON schemas
 
-Normative JSON Schemas for the initial event kinds live under [`crates/kb/schemas/`](../crates/kb/schemas/):
+Normative JSON Schemas for the initial event kinds live under
+[`crates/kb/schemas/`](../crates/kb/schemas/):
 
-| Kind | Schema |
-| ---- | ------ |
+| Kind               | Schema                                                                              |
+| ------------------ | ----------------------------------------------------------------------------------- |
 | `contact.upserted` | [`contact.upserted.schema.json`](../crates/kb/schemas/contact.upserted.schema.json) |
 | `artifact.created` | [`artifact.created.schema.json`](../crates/kb/schemas/artifact.created.schema.json) |
-| `email.sent` | [`email.sent.schema.json`](../crates/kb/schemas/email.sent.schema.json) |
-| `run.started` | [`run.started.schema.json`](../crates/kb/schemas/run.started.schema.json) |
-| `run.finished` | [`run.finished.schema.json`](../crates/kb/schemas/run.finished.schema.json) |
+| `email.sent`       | [`email.sent.schema.json`](../crates/kb/schemas/email.sent.schema.json)             |
+| `run.started`      | [`run.started.schema.json`](../crates/kb/schemas/run.started.schema.json)           |
+| `run.finished`     | [`run.finished.schema.json`](../crates/kb/schemas/run.finished.schema.json)         |
 
-Validators MUST embed these schemas and enforce them at `StateDelta` ingestion time. `$id` versions bump on breaking changes; implementations SHOULD accept the latest compatible revision.
+Validators MUST embed these schemas and enforce them at `StateDelta` ingestion
+time. `$id` versions bump on breaking changes; implementations SHOULD accept the
+latest compatible revision.
 
 ## 2. Materialized views (`pog.sqlite`)
 
@@ -111,7 +119,8 @@ Supplemental tables:
 
 ### 2.2 Rebuild process
 
-Rebuilds iterate over the ledger and repopulate tables; embeddings drive the vector store rebuild. Existing rows are truncated before replay.
+Rebuilds iterate over the ledger and repopulate tables; embeddings drive the
+vector store rebuild. Existing rows are truncated before replay.
 
 ## 3. Vector index artifacts
 
@@ -124,22 +133,27 @@ Rebuilds iterate over the ledger and repopulate tables; embeddings drive the vec
 
 ## 4. Migration commands
 
-| Command | Purpose |
-| ------- | ------- |
+| Command                      | Purpose                                                |
+| ---------------------------- | ------------------------------------------------------ |
 | `rlp kb migrate [--inplace]` | Backup, migrate schema, replay views, rebuild vectors. |
-| `rlp kb verify` | Hash, referential integrity, schema version checks. |
-| `rlp kb backup` | Consistent backup of both DBs. |
-| `rlp kb vacuum` | Vacuum/ANALYZE databases (requires exclusive access). |
+| `rlp kb verify`              | Hash, referential integrity, schema version checks.    |
+| `rlp kb backup`              | Consistent backup of both DBs.                         |
+| `rlp kb vacuum`              | Vacuum/ANALYZE databases (requires exclusive access).  |
 
-Migration sets `meta.dirty = 1` during execution; resets to `0` after a successful run.
+Migration sets `meta.dirty = 1` during execution; resets to `0` after a
+successful run.
 
 ## 5. Retention & archival
 
-- Default policy retains ledger indefinitely; configure archival via automation (copy rows older than N days to external storage).
-- Materialized views follow logical retention (inactive flags) rather than deletions.
+- Default policy retains ledger indefinitely; configure archival via automation
+  (copy rows older than N days to external storage).
+- Materialized views follow logical retention (inactive flags) rather than
+  deletions.
 - Vector index rebuilds drop entries whose source events are archived.
 
 ## 6. Future extensions (informative)
 
-- Additional views (`policies`, `runs`, `cost_usage`) after the model broker lands.
-- Alternate backends (e.g., `redb`) behind feature flags without changing the logical schema.
+- Additional views (`policies`, `runs`, `cost_usage`) after the model broker
+  lands.
+- Alternate backends (e.g., `redb`) behind feature flags without changing the
+  logical schema.

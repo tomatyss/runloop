@@ -1,6 +1,8 @@
 # Runloop OS Documentation
 
-Runloop OS combines agent runtimes, tooling, and policy controls to help operators deploy dependable autonomous services. This landing page gathers the most relevant guides and specs from this workspace.
+Runloop OS combines agent runtimes, tooling, and policy controls to help
+operators deploy dependable autonomous services. This landing page gathers the
+most relevant guides and specs from this workspace.
 
 ## Start Here
 
@@ -26,4 +28,5 @@ Runloop OS combines agent runtimes, tooling, and policy controls to help operato
 - [Examples and scenarios](../examples/)
 - [Roadmap](roadmap.md)
 
-Check back after each release—updates to this directory automatically publish to GitHub Pages once the site is enabled under repository settings.
+Check back after each release—updates to this directory automatically publish to
+GitHub Pages once the site is enabled under repository settings.
