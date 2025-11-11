@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use blake3::Hasher;
 use json_canon::to_string as jcs_to_string;
-use jsonschema::{JSONSchema, error::ValidationError};
+use jsonschema::{Validator, error::ValidationError};
 use parking_lot::Mutex;
 use runloop_core::config::KbConfig;
 use runloop_core::ids::{AgentId, EventId, TraceId};
@@ -125,12 +125,12 @@ impl KnowledgeBase {
             .get(&delta.kind)
             .ok_or_else(|| Error::UnknownSchema(delta.kind.clone()))?;
 
-        if let Err(errors) = schema.validate(&delta.payload) {
-            let message = errors
-                .map(render_schema_error)
-                .collect::<Vec<_>>()
-                .join("; ");
-            return Err(Error::Schema(message));
+        let schema_errors = schema
+            .iter_errors(&delta.payload)
+            .map(render_schema_error)
+            .collect::<Vec<_>>();
+        if !schema_errors.is_empty() {
+            return Err(Error::Schema(schema_errors.join("; ")));
         }
         validate_referential_integrity(&self.events.lock(), &delta)?;
 
@@ -345,7 +345,7 @@ fn resolve_paths(config: &KbConfig) -> Result<(PathBuf, PathBuf, PathBuf), Error
 
 /// Validator wrapper around embedded JSON Schemas.
 struct SchemaRegistry {
-    schemas: HashMap<String, Arc<JSONSchema>>,
+    schemas: HashMap<String, Arc<Validator>>,
 }
 
 impl SchemaRegistry {
@@ -354,14 +354,13 @@ impl SchemaRegistry {
         for (kind, raw) in EMBEDDED_SCHEMAS.iter() {
             let value: Value =
                 serde_json::from_str(raw).map_err(|err| Error::Config(err.to_string()))?;
-            let compiled =
-                JSONSchema::compile(&value).map_err(|err| Error::Config(err.to_string()))?;
+            let compiled = Validator::new(&value).map_err(|err| Error::Config(err.to_string()))?;
             schemas.insert(kind.to_string(), Arc::new(compiled));
         }
         Ok(Self { schemas })
     }
 
-    fn get(&self, kind: &str) -> Option<Arc<JSONSchema>> {
+    fn get(&self, kind: &str) -> Option<Arc<Validator>> {
         self.schemas.get(kind).cloned()
     }
 }
