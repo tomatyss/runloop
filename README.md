@@ -281,7 +281,7 @@ Local‑first storage with:
 
 ## Repository layout
 
-```
+```text
 crates/
   runloopd/      # daemon
   rlp/           # CLI

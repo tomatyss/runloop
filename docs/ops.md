@@ -36,7 +36,7 @@ descriptive error.
 
 Environment variables mirror YAML paths (upper case, underscores). Examples:
 
-```
+```bash
 RUNLOOP_MODELS_DEFAULT=local:llama3.1-8b
 RUNLOOP_MODELS_BUDGETS_SYSTEM_TOKENS_HARD=750000
 RUNLOOP_SECURITY_CONFIRM_EXTERNAL_ACTIONS=true
@@ -169,7 +169,7 @@ Runloop enforces signatures on agent bundles before install/launch.
   and referenced files.
 - **Bundle layout:**
 
-```
+```text
 agent.bundle/
 ├─ manifest.toml       # includes digests of contents
 ├─ policy.caps
