@@ -5,17 +5,14 @@
 [advisories]
 version = 2
 ignore = []
-# Treat vulnerabilities as deny, informational as warnings
-vulnerability = "deny"
-unmaintained = "warn"
-unsound = "warn"
+# Treat all crates (workspace + transitive) as in-scope for unmaintained advisories.
+unmaintained = "all"
+# Severity for yanked crates; other informational levels handled via CLI flags.
 yanked = "warn"
 
 [licenses]
 version = 2
 confidence-threshold = 0.8
-unlicensed = "warn"
-copyleft = "warn"
 allow = [
   "Apache-2.0",
   "MIT",

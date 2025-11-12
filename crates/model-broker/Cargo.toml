@@ -19,4 +19,4 @@ metrics = "0.24"
 blake3 = "1.5"
 
 [dev-dependencies]
-httpmock = "0.7"
+httpmock = "0.8.2"
