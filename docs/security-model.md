@@ -19,9 +19,10 @@
   - `exec` (disabled in v0.1)
 - The runtime enforces capability checks at hostcall boundaries and records
   denials in structured logs.
-- _Implementation status:_ the `runloop-runtime` crate now embeds Wasmtime and
-  parses `policy.caps`, but hostcall enforcement and KB-backed audit sinks
-  remain TODO (tracked under Epic C2/C3).
+- _Implementation status:_ the `runloop-runtime` crate embeds Wasmtime,
+  enforces capability checks for every exposed hostcall, and records denials as
+  `cap.audit` events via the knowledge base (see
+  `crates/runtime/tests/capabilities.rs`).
 
 ## Secret Handling _(normative)_
 
