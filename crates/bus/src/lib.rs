@@ -965,7 +965,6 @@ mod tests {
     async fn zero_ttl_is_rejected() {
         let path = PathBuf::from("/tmp/runloop-test-bus-ttl-zero");
         let server = Bus::bind(&path).await.unwrap();
-        let client = Bus::connect(&path).await.unwrap();
 
         let mut header = Header::default();
         header.schema_id = CT_TRACE_LINE;
