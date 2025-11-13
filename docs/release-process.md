@@ -12,8 +12,8 @@ covers semantic versioning, approvals, and the artifacts we ship for each tag.
 - Tags live on `main`. Cut a release branch only when preparing a beta/RC that
   needs additional soak; otherwise cherry-pick critical fixes directly onto the
   tag and create `v0.x.y+1`.
-- Annotate every tag (`git tag -a v0.x.y -m "Runloop v0.x.y"`) so `git
-  describe` remains meaningful for debugging.
+- Annotate every tag (`git tag -a v0.x.y -m "Runloop v0.x.y"`) so `git describe`
+  remains meaningful for debugging.
 
 ## Changelog Rules
 
@@ -30,12 +30,12 @@ covers semantic versioning, approvals, and the artifacts we ship for each tag.
 
 - Every release requires sign-off from: (1) the release manager for the phase,
   (2) a runtime or platform engineer covering `runloopd`/`runtime`, and (3) the
-  security reviewer listed in `SECURITY.md` when capabilities or signing
-  changes are included.
+  security reviewer listed in `SECURITY.md` when capabilities or signing changes
+  are included.
 - Before tagging, confirm CI is green on `main` and the following commands pass
-  locally in release mode: `cargo build --workspace --release`, `cargo test
-  --workspace`, `cargo clippy --workspace -- -D warnings`, and the perf harness
-  documented in [docs/perf.md](perf.md).
+  locally in release mode: `cargo build --workspace --release`,
+  `cargo test --workspace`, `cargo clippy --workspace -- -D warnings`, and the
+  perf harness documented in [docs/perf.md](perf.md).
 - Capture the manual verification steps (smoke tests, upgrade/downgrade, sample
   opening replay) in the release PR description; attach terminal output or TUI
   screenshots for traceability.
@@ -55,16 +55,17 @@ covers semantic versioning, approvals, and the artifacts we ship for each tag.
 
 ## Verification Checklist
 
-1. `cargo fmt --all`, `cargo clippy --workspace -- -D warnings`, `cargo test
-   --workspace`
+1. `cargo fmt --all`, `cargo clippy --workspace -- -D warnings`,
+   `cargo test --workspace`
 2. `cargo build --workspace --release`
-3. Performance harness: `cargo test -p runloop-runtime cold_start_p50_under_40ms`
-   and `cargo bench -p runloop-runtime cold_start` on the baseline hardware.
+3. Performance harness:
+   `cargo test -p runloop-runtime cold_start_p50_under_40ms` and
+   `cargo bench -p runloop-runtime cold_start` on the baseline hardware.
 4. Security review: confirm signed agent bundles install and that capability
    denials emit KB audit records.
 5. Docs: `mdbook build docs` and update `CHANGELOG.md`, `docs/index.md`, any
    relevant specs (policy, openings, perf budgets) to reflect the release.
-6. Tag and push: `git tag -a v0.x.y -m "Runloop v0.x.y" && git push origin
-   v0.x.y`.
+6. Tag and push:
+   `git tag -a v0.x.y -m "Runloop v0.x.y" && git push origin v0.x.y`.
 
 Record the completion timestamp and signer in the release issue for auditing.

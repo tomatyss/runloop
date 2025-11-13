@@ -12,14 +12,14 @@ directory and reference them from specs, code comments, and PRs.
   - `0001` — Debian base image, WASM/WASI runtime, SQLite storage.
   - `0002` — Runloop Message Protocol (RMP) v0 framing & registry policy.
   - `0003` — Personal Ops Graph (POG) event-sourcing model.
-  - `0004` — Capabilities & security enforcement model.
-  Create new ADRs starting at `0005`.
+  - `0004` — Capabilities & security enforcement model. Create new ADRs starting
+    at `0005`.
 
 ## Template
 
 Include the sections below (feel free to copy/paste when creating a new file):
 
-````markdown
+```markdown
 ---
 adr: 0005
 title: Short Title
@@ -30,17 +30,21 @@ tags: [runtime, kb]
 ---
 
 ## Context
+
 Problem being solved, constraints, prior art.
 
 ## Decision
+
 The option we picked and why.
 
 ## Consequences
+
 Positive and negative fallout, follow-up tasks.
 
 ## Alternatives Considered
+
 Bulleted list with 2–3 sentences on why each was rejected.
-````
+```
 
 ## Workflow
 
@@ -55,10 +59,10 @@ Bulleted list with 2–3 sentences on why each was rejected.
 
 ## Storage & Cross-References
 
-- Keep ADRs under version control; do not edit them retroactively after they
-  are marked `Accepted` except to fix broken links or typos.
+- Keep ADRs under version control; do not edit them retroactively after they are
+  marked `Accepted` except to fix broken links or typos.
 - Reference ADR IDs in code comments (`// ADR-0002: reason`), docs, and commit
   messages to provide traceability.
 - When adding new components or policies, check existing ADRs first to avoid
-  conflicting decisions. If a conflict is unavoidable, call it out explicitly
-  in the new ADR.
+  conflicting decisions. If a conflict is unavoidable, call it out explicitly in
+  the new ADR.

@@ -19,8 +19,8 @@
   - `exec` (disabled in v0.1)
 - The runtime enforces capability checks at hostcall boundaries and records
   denials in structured logs.
-- _Implementation status:_ the `runloop-runtime` crate embeds Wasmtime,
-  enforces capability checks for every exposed hostcall, and records denials as
+- _Implementation status:_ the `runloop-runtime` crate embeds Wasmtime, enforces
+  capability checks for every exposed hostcall, and records denials as
   `cap.audit` events via the knowledge base (see
   `crates/runtime/tests/capabilities.rs`).
 

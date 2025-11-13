@@ -10,8 +10,8 @@ single source of truth for onboarding new collaborators.
   roadmap labels (`epic`, `phase:*`) to find scoped work. Larger epics reference
   the milestones in [ROADMAP](roadmap.md).
 - Please comment `/assign` (or leave a note) before beginning work so we avoid
-  duplicate efforts. If an item touches multiple crates, outline the plan in
-  the issue or create an Architecture Decision Record (ADR) stub.
+  duplicate efforts. If an item touches multiple crates, outline the plan in the
+  issue or create an Architecture Decision Record (ADR) stub.
 - For work that spans more than a few days, draft a short proposal describing
   problem, approach, and acceptance criteria. Link it from the issue for review
   before coding.
@@ -20,8 +20,9 @@ single source of truth for onboarding new collaborators.
 
 ## Style Conventions
 
-- Rust code follows `cargo fmt --all` output and `cargo clippy --workspace -- -D
-  warnings`. CI enforces both gates before merge.
+- Rust code follows `cargo fmt --all` output and
+  `cargo clippy --workspace -- -D warnings`. CI enforces both gates before
+  merge.
 - Naming: crates/files use `snake_case`, public types use `UpperCamelCase`, and
   constants use `SCREAMING_SNAKE_CASE`. Avoid `unsafe` blocks unless the
   maintainers have signed off; `deny(unsafe_code)` is enabled in the workspace.
