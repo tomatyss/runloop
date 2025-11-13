@@ -24,7 +24,7 @@ async fn duplex_roundtrip() -> io::Result<()> {
     header.ttl_ms = 1_000;
 
     let payload = Payload { value: 123 };
-    let body = encode_payload(header.schema_id, &payload).expect("encode envelope");
+    let body = encode_payload(header.schema_id, &payload, None).expect("encode envelope");
     let frame = encode_frame(&header, &body);
 
     writer.write_all(&frame).await?;
@@ -37,9 +37,9 @@ async fn duplex_roundtrip() -> io::Result<()> {
     assert_eq!(decoded_header.schema_id, header.schema_id);
     assert_eq!(decoded_header.trace_id, header.trace_id);
     assert_eq!(decoded_header.msg_id, header.msg_id);
-    let decoded: Payload =
-        decode_payload(decoded_header.schema_id, decoded_body).expect("decode payload");
-    assert_eq!(decoded, payload);
+    let decoded =
+        decode_payload::<Payload>(decoded_header.schema_id, decoded_body).expect("decode payload");
+    assert_eq!(decoded.payload, payload);
     Ok(())
 }
 
@@ -68,10 +68,16 @@ fn decode_handles_corrupt_frames() {
     // Body length mismatch
     let mut header = Header::default();
     header.schema_id = runloop_core::content::CT_TRACE_LINE;
-    let body = encode_payload(header.schema_id, &Payload { value: 7 }).unwrap();
+    let body = encode_payload(header.schema_id, &Payload { value: 7 }, None).unwrap();
     let mut frame = encode_frame(&header, &body);
     let invalid_len = (body.len() as u32) + 1;
-    let offset = 4 + 4 + 2 + 2 + 2 + 2;
+    let offset = 4  /* frame prefix */
+        + 4        /* magic */
+        + 2        /* header_version */
+        + 2        /* header_len */
+        + 4        /* flags */
+        + 2        /* schema_id */
+        + 2; /* reserved2 */
     frame[offset..offset + 4].copy_from_slice(&invalid_len.to_be_bytes());
     let err = decode_frame(&frame, DEFAULT_MAX_FRAME_LEN).unwrap_err();
     assert!(

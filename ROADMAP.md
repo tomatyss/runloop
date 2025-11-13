@@ -38,8 +38,8 @@ Governance & repo hygiene run in parallel (see Phase G below).
 
 - **Daemons & CLIs:** `runloopd`, `rlp`, `agtop`.
 - **Agent SDK (Rust/wasm32‑wasi)** with examples & docs.
-- **RMP (Runloop Message Protocol) v1** with header table, framing example, and
-  message registry.
+- **RMP (Runloop Message Protocol) v0 (frozen)** with header table, framing
+  example, and message registry (foundation for future v1 negotiations).
 - **Openings DSL** with grammar (EBNF/ABNF), replay semantics, and examples.
 - **POG (Personal Ops Graph)**: SQLite event log + materialized views + vector
   index; `kb.query`, `kb.why`, `kb.write_event`.
@@ -66,8 +66,9 @@ Governance & repo hygiene run in parallel (see Phase G below).
 **M0.2 — Architecture & interfaces 0.1**  
 **Deliverables**
 
-- **RMP 0.1**: header/body schemas (include `created_at_ms`, header
-  version/size).
+- **RMP v0 freeze**: header/body schemas finalized (`magic="RMP0"`,
+  `header_version=0`, `header_len=64`, reserved flags/words zeroed, TTL & dedupe
+  rules, schema ↔ body kind cross-checks, MsgPack envelope).
 - **Agent packaging 0.1**: `manifest.toml`, `policy.caps`, `tools.json`, signing
   model.
 - **Openings DSL 0.1**: grammar (EBNF) + replay semantics + examples.
@@ -314,8 +315,11 @@ README.md
 
 ## 6) Interfaces & invariants (normative notes)
 
-- **RMP v0 header (M0.2):** includes `created_at_ms`, fixed header version/size;
-  TTL enforcement based on receiver clock with `created_at_ms`.
+- **RMP v0 header (M0.2):** 64-byte, big-endian header with magic `"RMP0"`,
+  `header_version=0`, `header_len=64`, zeroed flags/reserved words, `schema_id`
+  primitive selector, `body_len`, `created_at_ms`, `ttl_ms`, `trace_id`,
+  `msg_id`. TTL enforcement computes `created_at_ms + ttl_ms` in u128 and
+  rejects zero/overflow before delivery.
 - **KB storage:** canonicalize payload/provenance to **JCS JSON**, hash as
   **BLAKE3 BLOB(32)**; hex form is for logs/UI only.
 - **Action confirmation ACL:** only UI may publish `action.decision`; agents

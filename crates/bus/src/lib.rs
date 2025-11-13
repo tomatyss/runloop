@@ -8,6 +8,7 @@ use runloop_core::{
     content::{CT_ACTION_DECISION, CT_BUS_DROP_NOTICE},
     ids::AgentId,
 };
+use runloop_rmp::header::DEFAULT_TTL_MS;
 use runloop_rmp::{Error as RmpError, Header, encode_payload};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -43,13 +44,19 @@ pub enum BusError {
     #[error("message expired prior to publish")]
     MessageExpired,
     #[error("invalid ttl {0} ms")]
-    InvalidTtl(u32),
+    InvalidTtl(u64),
     #[error("body length mismatch (header {expected}, body {actual})")]
     BodyLengthMismatch { expected: u32, actual: usize },
     #[error("backpressure timeout for topic {topic}")]
     BackpressureTimeout { topic: String },
     #[error("forbidden: {0}")]
     Forbidden(String),
+    #[error("body type mismatch: expected schema {expected:#06x}, got '{actual}'")]
+    BodyTypeMismatch { expected: u16, actual: String },
+    #[error("invalid expiry (created_at_ms={created_at_ms}, ttl_ms={ttl_ms})")]
+    InvalidExpiry { created_at_ms: u64, ttl_ms: u64 },
+    #[error("unknown schema id {0:#06x}")]
+    UnknownSchema(u16),
 }
 
 impl From<BusError> for CoreError {
@@ -80,7 +87,7 @@ impl Message {
         Ok(Self { header, body })
     }
 
-    fn expires_at(&self) -> Result<Option<u64>, BusError> {
+    fn expires_at(&self) -> Result<u64, BusError> {
         self.header.expires_at_ms().map_err(map_rmp_error)
     }
 
@@ -92,6 +99,17 @@ impl Message {
 fn map_rmp_error(err: RmpError) -> BusError {
     match err {
         RmpError::InvalidTtl(ttl) => BusError::InvalidTtl(ttl),
+        RmpError::InvalidExpiry {
+            created_at_ms,
+            ttl_ms,
+        } => BusError::InvalidExpiry {
+            created_at_ms,
+            ttl_ms,
+        },
+        RmpError::BodyTypeMismatch { expected, actual } => {
+            BusError::BodyTypeMismatch { expected, actual }
+        }
+        RmpError::UnknownSchema(schema_id) => BusError::UnknownSchema(schema_id),
         _ => BusError::Closed,
     }
 }
@@ -514,7 +532,7 @@ impl Server {
         reason: DropReason,
         observed_at_ms: u64,
     ) {
-        let expires_at = message.expires_at().ok().flatten();
+        let expires_at = message.expires_at().ok();
         let notice = DropNotice {
             v: 1,
             reason,
@@ -524,7 +542,7 @@ impl Server {
             expires_at_ms: expires_at,
             observed_at_ms,
         };
-        let payload = match encode_payload(CT_BUS_DROP_NOTICE, &notice) {
+        let payload = match encode_payload(CT_BUS_DROP_NOTICE, &notice, None) {
             Ok(buf) => buf,
             Err(err) => {
                 warn!(?err, "unable to encode drop notice");
@@ -537,7 +555,6 @@ impl Server {
                 created_at_ms: observed_at_ms,
                 ttl_ms: 5_000,
                 trace_id: message.header.trace_id,
-                opening_id: message.header.opening_id,
                 msg_id: self.metrics.next_drop_msg_id(),
                 ..Header::default()
             },
@@ -619,7 +636,7 @@ impl Default for BusConfig {
             queue_capacity: 1_024,
             send_timeout: Duration::from_millis(50),
             dedupe_capacity: 65_536,
-            dedupe_max_age_ms: 120_000,
+            dedupe_max_age_ms: DEFAULT_TTL_MS,
             allow_action_decision_ui: true,
             allow_action_decision_tui: true,
         }
@@ -877,7 +894,7 @@ mod tests {
         header.ttl_ms = 1_000;
         header.trace_id = 1;
         header.msg_id = seq;
-        let payload = encode_payload(CT_TRACE_LINE, &json!({"seq": seq})).unwrap();
+        let payload = encode_payload(CT_TRACE_LINE, &json!({"seq": seq}), None).unwrap();
         Message::new(header, Bytes::from(payload)).unwrap()
     }
 
@@ -928,14 +945,15 @@ mod tests {
         header.ttl_ms = 1;
         header.trace_id = 9;
         header.msg_id = 1;
-        let payload = encode_payload(CT_TRACE_LINE, &json!({"expired": true})).unwrap();
+        let payload = encode_payload(CT_TRACE_LINE, &json!({"expired": true}), None).unwrap();
         let msg = Message::new(header, Bytes::from(payload)).unwrap();
         let res = client.publish("ttl/topic", msg).await;
         assert!(matches!(res, Err(BusError::MessageExpired)));
         let drop_notice = drops.next().await.expect("drop notice");
         assert_eq!(drop_notice.header.schema_id, CT_BUS_DROP_NOTICE);
-        let payload: DropNotice =
-            decode_payload(CT_BUS_DROP_NOTICE, drop_notice.body.as_ref()).unwrap();
+        let payload: DropNotice = decode_payload(CT_BUS_DROP_NOTICE, drop_notice.body.as_ref())
+            .unwrap()
+            .payload;
         assert_eq!(payload.v, 1);
         assert!(matches!(payload.reason, DropReason::TtlExpired));
         let stats = server.stats();
@@ -944,11 +962,9 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn zero_ttl_never_expires() {
+    async fn zero_ttl_is_rejected() {
         let path = PathBuf::from("/tmp/runloop-test-bus-ttl-zero");
         let server = Bus::bind(&path).await.unwrap();
-        let client = Bus::connect(&path).await.unwrap();
-        let mut sub = client.subscribe("ttl/zero").await.unwrap();
 
         let mut header = Header::default();
         header.schema_id = CT_TRACE_LINE;
@@ -956,15 +972,9 @@ mod tests {
         header.ttl_ms = 0;
         header.trace_id = 42;
         header.msg_id = 123;
-        let payload = encode_payload(CT_TRACE_LINE, &json!({"seq": 1})).unwrap();
-        let message = Message::new(header, Bytes::from(payload)).unwrap();
-
-        client.publish("ttl/zero", message).await.unwrap();
-
-        let received = sub.next().await.expect("message delivered");
-        assert_eq!(received.header.msg_id, 123);
-        let stats = server.stats();
-        assert_eq!(stats.drops_ttl, 0);
+        let payload = encode_payload(CT_TRACE_LINE, &json!({"seq": 1}), None).unwrap();
+        let message = Message::new(header, Bytes::from(payload)).unwrap_err();
+        assert!(matches!(message, BusError::InvalidTtl(0)));
 
         drop(server);
     }
@@ -1013,8 +1023,9 @@ mod tests {
         assert!(timed_out, "expected a backpressure timeout");
         let drop_message = drops.next().await.expect("drop message");
         assert_eq!(drop_message.header.schema_id, CT_BUS_DROP_NOTICE);
-        let notice: DropNotice =
-            decode_payload(CT_BUS_DROP_NOTICE, drop_message.body.as_ref()).unwrap();
+        let notice: DropNotice = decode_payload(CT_BUS_DROP_NOTICE, drop_message.body.as_ref())
+            .unwrap()
+            .payload;
         assert_eq!(notice.v, 1);
         assert!(matches!(notice.reason, DropReason::BackpressureTimeout));
         let stats = server.stats();

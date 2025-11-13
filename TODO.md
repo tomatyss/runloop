@@ -57,11 +57,12 @@ defaults.
 **B1. RMP header & frame codec**
 
 - [x] Path: `crates/rmp/`.
-- [x] Define fixed 68-byte header with `magic`, `header_version`, `header_len`,
-      `flags`, `schema_id`, `body_len`, `created_at_ms`, `ttl_ms`, `trace_id`,
-      `msg_id`.
+- [x] Define fixed 64-byte header with `magic="RMP0"`, `header_version=0`,
+      `header_len=64`, zeroed `flags`/reserved words, `schema_id`, `reserved2`,
+      `body_len`, `created_at_ms`, `ttl_ms`, `trace_id`, `msg_id`, `reserved4`.
 - [x] Implement `{type, payload}` MsgPack envelope helpers + encode/decode APIs.
-- [x] Parse/validate TTL, expose helpers for `expires_at_ms`, duplicate keys.
+- [x] Parse/validate TTL, expose helpers for `expires_at_ms`, duplicate keys,
+      and enforce schema ↔ body kind cross-checks.
 
 **DoD:** Round‑trip test over a `tokio::io::duplex()` stream; fuzz decoder
 (corpus with corrupt lengths).

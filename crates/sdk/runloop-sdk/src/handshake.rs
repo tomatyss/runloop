@@ -54,12 +54,12 @@ pub struct AgentHello {
 impl AgentHello {
     /// Encode the hello payload into an RMP envelope.
     pub fn encode(&self) -> Result<Vec<u8>> {
-        Ok(encode_payload(CT_AGENT_HELLO, self)?)
+        Ok(encode_payload(CT_AGENT_HELLO, self, None)?)
     }
 
     /// Decode a hello payload from the provided bytes.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        Ok(decode_payload(CT_AGENT_HELLO, bytes)?)
+        Ok(decode_payload(CT_AGENT_HELLO, bytes)?.payload)
     }
 }
 
@@ -77,12 +77,12 @@ pub struct AgentHelloAck {
 impl AgentHelloAck {
     /// Encode the ack payload into an RMP envelope.
     pub fn encode(&self) -> Result<Vec<u8>> {
-        Ok(encode_payload(CT_RUNTIME_HELLO, self)?)
+        Ok(encode_payload(CT_RUNTIME_HELLO, self, None)?)
     }
 
     /// Decode the ack payload from bytes.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        Ok(decode_payload(CT_RUNTIME_HELLO, bytes)?)
+        Ok(decode_payload(CT_RUNTIME_HELLO, bytes)?.payload)
     }
 }
 

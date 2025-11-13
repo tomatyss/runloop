@@ -19,6 +19,7 @@ use tracing::{error, warn};
 
 use crate::{BusError, Message, PublisherKind, Server};
 use runloop_rmp::Header;
+use runloop_rmp::header::{DEFAULT_MAX_FRAME_LEN as MAX_BODY_LEN, HEADER_LEN};
 
 #[derive(Debug)]
 pub(crate) struct IpcServer {
@@ -205,7 +206,7 @@ impl IpcClient {
     }
 }
 
-const MAX_FRAME_LEN: usize = 1_048_576;
+const MAX_FRAME_LEN: usize = HEADER_LEN as usize + MAX_BODY_LEN as usize + 4;
 
 async fn read_frames(
     mut reader: tokio::net::unix::OwnedReadHalf,
