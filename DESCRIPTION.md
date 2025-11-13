@@ -74,18 +74,20 @@ review.ok    -> send.in
 
 ### 4) Message protocol (RMP)
 
-- **Framing**: big-endian length prefix, fixed 68-byte header, MsgPack body.
-- **Header (v0) — key fields**:
-- `magic="RMP0"`, `header_version=1`, `header_len=68`, `flags`
-- `schema_id`, `body_len`
-- `created_at_ms` (sender clock) + `ttl_ms` (expiry)
-- `trace_id`, `opening_id`, `msg_id`
-- **Body**: `{ type, payload, meta? }` with a **JSON‑schema** (on-disk
-  canonical) and **MsgPack** on the wire.
+- **Framing**: stream transport with `u32 frame_len`, fixed 64-byte header, then
+  MsgPack body. All integers are big-endian.
+- **Header (v0)**: `magic="RMP0"`, `header_version=0`, `header_len=64`,
+  `flags=0`, `schema_id`, `body_len`, `created_at_ms`, `ttl_ms`, `trace_id`,
+  `msg_id`, reserved zeros. `opening_id` and other metadata stay in the body.
+- **Body**: `{ type, payload }` MsgPack map with JSON Schema on disk. Body
+  `type` must align with the primitive family named by `schema_id`.
 - **Primitives**: `Observation`, `Intent`, `ToolCall`, `ToolResult`, `Artifact`,
-  `Critique`, `StateDelta`.
-- **Delivery**: pub/sub + RPC, idempotent handlers, backoff retries.
-- **Provenance**: every message carries `who/why/what/model@version`.
+  `Critique`, `StateDelta`, `ErrorReport`, etc.
+- **Delivery**: TTL enforced via `created_at_ms + ttl_ms` (u128 math), dedupe on
+  `(trace_id,msg_id)` per topic/subscriber, `rlp/sys/drops` telemetry for TTL,
+  duplicate, and back-pressure drops.
+- **Provenance**: every message carries `who/why/what/model@version` in the body
+  payload for replay and audit.
 
 ### 5) Knowledge Base (KB) — “Personal Ops Graph”
 

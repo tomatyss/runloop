@@ -698,7 +698,7 @@ mod tests {
         trace_id: &'a str,
         msg_id: u64,
         created_at_ms: u64,
-        ttl_ms: u32,
+        ttl_ms: u64,
         schema_id: u16,
     }
 

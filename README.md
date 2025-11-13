@@ -228,15 +228,51 @@ normative form used by the parser.
 
 ## Message Protocol (RMP)
 
-**MVP (RMP v0)** wire format uses a fixed 68-byte header (`magic`, `version`,
-`len`, `flags`, `schema_id`, `body_len`, `created_at_ms`, `ttl_ms`, `trace_id`,
-`opening_id`, `msg_id`) followed by a MsgPack body containing typed payload +
-optional metadata (budgets, priority, capability hints). Receivers enforce TTL
-using `created_at_ms + ttl_ms`. **RMP 0.2** (later in the roadmap) adds
-signatures/acks and richer metadata; wire compatibility is preserved.
+**RMP v0 is frozen**: stream transports carry a `u32 frame_len` prefix, a fixed
+64-byte header, and a MsgPack body (`frame_len = header_len + body_len`). All
+integers are big-endian; anything else is rejected.
 
-Message bodies are schema‑tagged (JSON Schema on write; msgpack on the wire is
-allowed). Provenance is attached to each message for audit/replay.
+| Offset | Size | Field            | Notes                                                  |
+| -----: | ---: | ---------------- | ------------------------------------------------------ |
+|      0 |    4 | `magic`          | ASCII `"RMP0"`                                         |
+|      4 |    2 | `header_version` | `0` only; mismatch → `UnsupportedVersion`              |
+|      6 |    2 | `header_len`     | `64`; compare literally                                |
+|      8 |    4 | `flags`          | MUST be `0` in v0; otherwise `InvalidHeaderFlags`      |
+|     12 |    2 | `schema_id`      | Primitive family ID (see `docs/rmp-registry.md`)       |
+|     14 |    2 | `reserved2`      | MUST be `0`                                            |
+|     16 |    4 | `body_len`       | Length of MsgPack body                                 |
+|     20 |    8 | `created_at_ms`  | Sender clock (epoch ms)                                |
+|     28 |    8 | `ttl_ms`         | Relative TTL; `0` rejected, overflow → `InvalidExpiry` |
+|     36 |   16 | `trace_id`       | u128 trace for dedupe/telemetry                        |
+|     52 |    8 | `msg_id`         | u64 monotonic per publisher                            |
+|     60 |    4 | `reserved4`      | MUST be `0`                                            |
+
+**Body envelope.** MsgPack map
+`{ "type": "<family.kind.vN>", "payload": <object>, "meta"?: <map> }`.
+`schema_id` picks the primitive family (Observation, Intent, Artifact,
+ToolResult, Critique, StateDelta, ErrorReport, etc.); the body `type` string is
+the registry entry (e.g., `"error.report.v1"`). Implementations MUST cross-check
+family ↔ kind (`BodyTypeMismatch` on failure). `meta` is optional and
+forward-compatible; `opening_id`, `priority`, and diagnostics live here—not in
+the fixed header.
+
+**Framing & safety.** `frame_len` MUST equal `header_len + body_len` or the
+frame is dropped with `LengthMismatch`. TTL uses u128 math (`InvalidTtl` when 0,
+`InvalidExpiry` on overflow); receivers drop messages once `now >= expires_at`.
+Dedupe caches key `(trace_id, msg_id)` per (topic + subscriber); `Duplicate`
+drops, TTL expirations, and back-pressure timeouts increment drop counters and
+publish `rlp/sys/drops {reason, topic, trace_id, msg_id, expires_at_ms?}`
+(rate-limited).
+
+**Limits.** Default body cap is **8 MiB** (`BodyTooLarge`). Unknown `schema_id`
+is rejected; non-zero flags/reserved words throw `InvalidHeaderFlags`. MsgPack
+failures surface as `BodyDecodeError`. Implementations must treat the error
+taxonomy (`InvalidMagic`, `UnsupportedVersion`, `TruncatedHeader`,
+`InvalidHeaderFlags`, `LengthMismatch`, `UnknownSchema`, `BodyTooLarge`,
+`InvalidTtl`, `InvalidExpiry`, `Expired`, `Duplicate`, `BodyDecodeError`,
+`BodyTypeMismatch`) as normative test cases. See
+[`docs/message-protocol.md`](docs/message-protocol.md) for the frozen spec,
+hex-dump golden vector, and TTL/duplicate walkthrough.
 
 ---
 

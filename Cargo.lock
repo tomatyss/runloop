@@ -3132,6 +3132,7 @@ dependencies = [
  "rmp-serde",
  "runloop-core",
  "serde",
+ "serde_json",
  "thiserror 2.0.17",
  "tokio",
 ]

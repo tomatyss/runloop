@@ -4,7 +4,7 @@ pub mod envelope;
 pub mod header;
 pub mod registry;
 
-pub use envelope::{Envelope, decode_payload, encode_payload};
+pub use envelope::{DecodedEnvelope, EnvelopeMeta, decode_payload, encode_payload};
 pub use header::{FrameDecodeError, HEADER_LEN, HEADER_VERSION, Header};
 
 use thiserror::Error;
@@ -15,15 +15,15 @@ pub enum Error {
     /// Schema identifier missing from the registry.
     #[error("unknown schema id {0}")]
     UnknownSchema(u16),
-    /// Type name missing from the registry.
-    #[error("unknown content type '{0}'")]
-    UnknownContentType(String),
     /// Body `type` field disagrees with header schema mapping.
-    #[error("body type mismatch: expected schema id {expected:#06x}, got {actual:#06x}")]
-    BodyTypeMismatch { expected: u16, actual: u16 },
+    #[error("body type mismatch: expected schema id {expected:#06x}, got type '{actual}'")]
+    BodyTypeMismatch { expected: u16, actual: String },
     /// TTL field invalid or unsupported.
     #[error("invalid ttl {0} ms")]
-    InvalidTtl(u32),
+    InvalidTtl(u64),
+    /// Expiry calculation overflowed 64-bit range.
+    #[error("invalid expiry (created_at_ms={created_at_ms}, ttl_ms={ttl_ms})")]
+    InvalidExpiry { created_at_ms: u64, ttl_ms: u64 },
     /// MsgPack encoding failure.
     #[error("msgpack encoding failed: {0}")]
     Encode(#[from] rmp_serde::encode::Error),

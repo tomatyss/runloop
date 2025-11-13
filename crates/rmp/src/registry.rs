@@ -10,6 +10,8 @@ pub use runloop_core::content::{
     CT_RUNTIME_HELLO, CT_STATE_DELTA, CT_TOOL_CALL, CT_TOOL_RESULT, CT_TRACE_LINE,
 };
 
+pub use runloop_core::content_types::{TypeDescriptor, TypeFamily};
+
 /// Lookup the canonical type string for a schema identifier.
 pub fn type_name_for(schema_id: u16) -> Option<&'static str> {
     runloop_core::content_types::type_name_for(schema_id)
@@ -18,4 +20,9 @@ pub fn type_name_for(schema_id: u16) -> Option<&'static str> {
 /// Resolve a schema identifier given its canonical type string.
 pub fn schema_for(type_name: &str) -> Option<u16> {
     runloop_core::content_types::schema_for(type_name)
+}
+
+/// Lookup the descriptor for a schema identifier.
+pub fn descriptor_for_schema(schema_id: u16) -> Option<&'static TypeDescriptor> {
+    runloop_core::content_types::descriptor_for_schema(schema_id)
 }

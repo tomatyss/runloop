@@ -228,8 +228,9 @@ On timeout/failure with no satisfied success condition, the opening fails.
 2. **Topological scheduling.** Nodes run when all inbound dependencies are
    ready. Fan‑in edges cause waits; fan‑out clones messages/artifacts.
 3. **Runtime & bus.** Node work is enacted by sending/receiving **RMP** messages
-   over the local UDS bus. Header carries `trace_id`, `opening_id`, `ttl_ms`,
-   `msg_id`, `schema_id`; body is a MsgPack envelope `{ type, payload }`.
+   over the local UDS bus. The fixed header carries `trace_id`, `msg_id`,
+   `schema_id`, `created_at_ms`, and `ttl_ms`; `opening_id` and other metadata
+   ride in the MsgPack envelope `{ type, payload, meta? }`.
 4. **TTL & duplicates.** Receivers enforce TTL using `created_at_ms + ttl_ms`;
    duplicates are ignored using an LRU dedupe cache keyed by
    `(trace_id,msg_id)`. Drops increment counters and may be broadcast on

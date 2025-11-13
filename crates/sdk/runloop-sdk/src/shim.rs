@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use bytes::Bytes;
 use runloop_bus::{Bus, Message, PublisherKind, Subscription};
 use runloop_core::ids::{AgentId, OpeningId, TraceId};
-use runloop_rmp::Header;
+use runloop_rmp::{EnvelopeMeta, Header, encode_payload};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -153,7 +153,7 @@ pub struct PublishMeta {
     /// Opening identifier associated with the message.
     pub opening_id: Option<OpeningId>,
     /// TTL override (milliseconds). `None` keeps the default.
-    pub ttl_ms: Option<u32>,
+    pub ttl_ms: Option<u64>,
 }
 
 /// Client facade for interacting with the bus/runtime as an agent shim.
@@ -209,15 +209,23 @@ impl ShimClient {
         payload: &T,
         meta: PublishMeta,
     ) -> Result<()> {
-        let body = runloop_rmp::encode_payload(schema_id, payload)?;
+        let PublishMeta {
+            trace_id,
+            opening_id,
+            ttl_ms,
+        } = meta;
+        let envelope_meta = opening_id.map(|opening| EnvelopeMeta {
+            opening_id: Some(opening.0.as_u128()),
+            ..EnvelopeMeta::default()
+        });
+        let body = encode_payload(schema_id, payload, envelope_meta.as_ref())?;
         let defaults = Header::default();
         let header = Header {
             schema_id,
-            trace_id: meta.trace_id.unwrap_or_default().0.as_u128(),
-            opening_id: meta.opening_id.unwrap_or_default().0.as_u128(),
+            trace_id: trace_id.unwrap_or_default().0.as_u128(),
             msg_id: self.inner.next_msg_id(),
             created_at_ms: current_time_ms(),
-            ttl_ms: meta.ttl_ms.unwrap_or(defaults.ttl_ms),
+            ttl_ms: ttl_ms.unwrap_or(defaults.ttl_ms),
             ..defaults
         };
         let message = Message::new(header, Bytes::from(body))?;

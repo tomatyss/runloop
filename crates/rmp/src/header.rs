@@ -6,12 +6,14 @@ use crate::Error;
 /// Magic bytes guarding the Runloop Message Protocol frame.
 pub const MAGIC: [u8; 4] = *b"RMP0";
 /// Current protocol header version.
-pub const HEADER_VERSION: u16 = 1;
+pub const HEADER_VERSION: u16 = 0;
 /// Expected header length in bytes.
-pub const HEADER_LEN: u16 = 68;
+pub const HEADER_LEN: u16 = 64;
 
-/// Maximum frame payload supported by the decoder (1 MiB by default).
-pub const DEFAULT_MAX_FRAME_LEN: u32 = 1_048_576;
+/// Default TTL used when callers do not override it (milliseconds).
+pub const DEFAULT_TTL_MS: u64 = 30_000;
+/// Maximum MsgPack body length (8 MiB by default) enforced by the decoder.
+pub const DEFAULT_MAX_FRAME_LEN: u32 = 8 * 1024 * 1024;
 
 /// Errors produced during frame decoding.
 #[derive(Debug, ThisError)]
@@ -31,6 +33,9 @@ pub enum FrameDecodeError {
     /// Header length/version mismatch.
     #[error("unsupported header version {0} or length {1}")]
     Unsupported(u16, u16),
+    /// Header flags/reserved bits violated v0 invariants.
+    #[error("invalid header flags or reserved bits set ({0:#010x})")]
+    InvalidHeaderFlags(u32),
     /// Header body length disagrees with actual payload size.
     #[error("body length mismatch (declared {declared}, actual {actual})")]
     LengthMismatch { declared: u32, actual: u32 },
@@ -44,13 +49,12 @@ use serde::{Deserialize, Serialize};
 pub struct Header {
     pub header_version: u16,
     pub header_len: u16,
-    pub flags: u16,
+    pub flags: u32,
     pub schema_id: u16,
     pub body_len: u32,
     pub created_at_ms: u64,
-    pub ttl_ms: u32,
+    pub ttl_ms: u64,
     pub trace_id: u128,
-    pub opening_id: u128,
     pub msg_id: u64,
 }
 
@@ -63,9 +67,8 @@ impl Default for Header {
             schema_id: 0,
             body_len: 0,
             created_at_ms: 0,
-            ttl_ms: 30_000,
+            ttl_ms: DEFAULT_TTL_MS,
             trace_id: 0,
-            opening_id: 0,
             msg_id: 0,
         }
     }
@@ -77,14 +80,15 @@ impl Header {
         buf.put_slice(&MAGIC);
         buf.put_u16(self.header_version);
         buf.put_u16(self.header_len);
-        buf.put_u16(self.flags);
+        buf.put_u32(self.flags);
         buf.put_u16(self.schema_id);
+        buf.put_u16(0); // reserved2
         buf.put_u32(self.body_len);
         buf.put_u64(self.created_at_ms);
-        buf.put_u32(self.ttl_ms);
+        buf.put_u64(self.ttl_ms);
         buf.put_u128(self.trace_id);
-        buf.put_u128(self.opening_id);
         buf.put_u64(self.msg_id);
+        buf.put_u32(0); // reserved4
     }
 
     /// Decode header from buffer.
@@ -102,18 +106,34 @@ impl Header {
         if header_version != HEADER_VERSION || header_len != HEADER_LEN {
             return Err(FrameDecodeError::Unsupported(header_version, header_len));
         }
-        let flags = buf.get_u16();
+        let flags = buf.get_u32();
+        if flags != 0 {
+            return Err(FrameDecodeError::InvalidHeaderFlags(flags));
+        }
+        let schema_id = buf.get_u16();
+        let reserved2 = buf.get_u16();
+        if reserved2 != 0 {
+            return Err(FrameDecodeError::InvalidHeaderFlags(reserved2 as u32));
+        }
+        let body_len = buf.get_u32();
+        let created_at_ms = buf.get_u64();
+        let ttl_ms = buf.get_u64();
+        let trace_id = buf.get_u128();
+        let msg_id = buf.get_u64();
+        let reserved4 = buf.get_u32();
+        if reserved4 != 0 {
+            return Err(FrameDecodeError::InvalidHeaderFlags(reserved4));
+        }
         Ok(Self {
             header_version,
             header_len,
             flags,
-            schema_id: buf.get_u16(),
-            body_len: buf.get_u32(),
-            created_at_ms: buf.get_u64(),
-            ttl_ms: buf.get_u32(),
-            trace_id: buf.get_u128(),
-            opening_id: buf.get_u128(),
-            msg_id: buf.get_u64(),
+            schema_id,
+            body_len,
+            created_at_ms,
+            ttl_ms,
+            trace_id,
+            msg_id,
         })
     }
 
@@ -122,23 +142,24 @@ impl Header {
         (self.trace_id, self.msg_id)
     }
 
-    /// Returns expiration timestamp if the TTL is finite.
-    pub fn expires_at_ms(&self) -> Result<Option<u64>, Error> {
+    /// Returns expiration timestamp, validating TTL invariants.
+    pub fn expires_at_ms(&self) -> Result<u64, Error> {
         if self.ttl_ms == 0 {
-            return Ok(None);
+            return Err(Error::InvalidTtl(self.ttl_ms));
         }
-        match self.created_at_ms.checked_add(u64::from(self.ttl_ms)) {
-            Some(expires_at) => Ok(Some(expires_at)),
-            None => Err(Error::InvalidTtl(self.ttl_ms)),
+        let expires = (self.created_at_ms as u128) + (self.ttl_ms as u128);
+        if expires > u128::from(u64::MAX) {
+            return Err(Error::InvalidExpiry {
+                created_at_ms: self.created_at_ms,
+                ttl_ms: self.ttl_ms,
+            });
         }
+        Ok(expires as u64)
     }
 
     /// Returns `true` if the message has expired relative to `now_ms`.
     pub fn is_expired(&self, now_ms: u64) -> Result<bool, Error> {
-        match self.expires_at_ms()? {
-            Some(expires) => Ok(now_ms >= expires),
-            None => Ok(false),
-        }
+        Ok(now_ms >= self.expires_at_ms()?)
     }
 }
 
@@ -191,7 +212,6 @@ mod tests {
     fn encode_decode_roundtrip() {
         let mut header = Header::default();
         header.trace_id = 42;
-        header.opening_id = 1024;
         header.msg_id = 7;
         header.schema_id = 221;
         header.created_at_ms = 1_000;
@@ -201,7 +221,6 @@ mod tests {
         let (decoded, decoded_body) =
             decode_frame(&frame[..], DEFAULT_MAX_FRAME_LEN).expect("decode");
         assert_eq!(decoded.trace_id, 42);
-        assert_eq!(decoded.opening_id, 1024);
         assert_eq!(decoded.msg_id, 7);
         assert_eq!(decoded.schema_id, 221);
         assert_eq!(decoded.body_len as usize, body.len());
@@ -225,14 +244,15 @@ mod tests {
         buf.put_slice(b"RMQ0");
         buf.put_u16(HEADER_VERSION);
         buf.put_u16(HEADER_LEN);
-        buf.put_u16(0);
-        buf.put_u16(0);
-        buf.put_u32(0);
-        buf.put_u64(0);
-        buf.put_u32(1);
-        buf.put_u128(0);
-        buf.put_u64(0);
-        buf.put_u128(0);
+        buf.put_u32(0); // flags
+        buf.put_u16(0); // schema_id
+        buf.put_u16(0); // reserved2
+        buf.put_u32(0); // body_len
+        buf.put_u64(0); // created_at
+        buf.put_u64(1); // ttl_ms
+        buf.put_u128(0); // trace id
+        buf.put_u64(0); // msg id
+        buf.put_u32(0); // reserved4
         assert!(matches!(
             Header::decode_from(&buf[..]),
             Err(FrameDecodeError::InvalidMagic(_))
@@ -244,16 +264,19 @@ mod tests {
         let mut header = Header::default();
         header.created_at_ms = 1_000;
         header.ttl_ms = 2_000;
-        assert_eq!(header.expires_at_ms().unwrap(), Some(3_000));
+        assert_eq!(header.expires_at_ms().unwrap(), 3_000);
         assert!(!header.is_expired(2_500).unwrap());
         assert!(header.is_expired(3_500).unwrap());
     }
 
     #[test]
-    fn expires_at_zero_ttl_is_none() {
+    fn expires_at_zero_ttl_is_error() {
         let mut header = Header::default();
         header.ttl_ms = 0;
-        assert_eq!(header.expires_at_ms().unwrap(), None);
-        assert!(!header.is_expired(u64::MAX).unwrap());
+        assert!(matches!(header.expires_at_ms(), Err(Error::InvalidTtl(0))));
+        assert!(matches!(
+            header.is_expired(u64::MAX),
+            Err(Error::InvalidTtl(0))
+        ));
     }
 }
