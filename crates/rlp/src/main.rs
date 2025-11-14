@@ -21,7 +21,9 @@ use runloop_core::{ControlRequest, ControlResponse, RunAccepted, RunSubmitReques
 use runloop_executor_local::{
     ExecutorInitError, LocalExecutor, build_executor as build_local_executor, catch_up_views,
 };
-use runloop_kb::{EventRecord, KnowledgeBase, Materializer, Provenance, StateDelta};
+use runloop_kb::{
+    EventRecord, KbBackupReport, KnowledgeBase, Materializer, Provenance, StateDelta, VerifyReport,
+};
 use runloop_model_broker::SecretResolver;
 use runloop_openings::{
     Opening, ReplayMismatch, RunReport, RunTrace, Runner, RunnerError, parse_opening_str, replay,
@@ -34,6 +36,7 @@ use std::env;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{fs, fs::File};
 use thiserror::Error;
 use tokio::time::Duration;
@@ -100,6 +103,9 @@ enum KbCommands {
     Search(SearchArgs),
     Why(KbWhyArgs),
     Migrate,
+    Verify(KbVerifyArgs),
+    Backup(KbBackupArgs),
+    Vacuum(KbVacuumArgs),
 }
 
 #[derive(Args, Debug)]
@@ -125,6 +131,28 @@ struct KbWhyArgs {
     entity: String,
     #[command(flatten)]
     output: OutputArgs,
+}
+
+#[derive(Args, Debug)]
+struct KbVerifyArgs {
+    #[command(flatten)]
+    output: OutputArgs,
+}
+
+#[derive(Args, Debug)]
+struct KbBackupArgs {
+    /// Output directory for the backup; defaults to <kb.root_dir>/backups/<unix_ts>.
+    #[arg(long = "out-dir", value_name = "PATH")]
+    out_dir: Option<PathBuf>,
+    #[command(flatten)]
+    output: OutputArgs,
+}
+
+#[derive(Args, Debug, Default)]
+struct KbVacuumArgs {
+    /// Also run ANALYZE after VACUUM (always on for now; reserved for future flags).
+    #[arg(long)]
+    analyze: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -320,6 +348,26 @@ async fn handle_kb(cmd: KbCommands) -> Result<(), CliError> {
                 "knowledge base migrations applied; watermark={} ({} batch(es))",
                 watermark, batches
             );
+        }
+        KbCommands::Verify(args) => {
+            let kb = KnowledgeBase::open(&config.kb)?;
+            let report = kb.verify()?;
+            let settings = args.output.resolve();
+            render_verify_report(&report, &settings)?;
+        }
+        KbCommands::Backup(args) => {
+            let kb = KnowledgeBase::open(&config.kb)?;
+            let out_dir = args
+                .out_dir
+                .unwrap_or_else(|| default_backup_dir(&config.kb));
+            let report = kb.backup(&out_dir)?;
+            let settings = args.output.resolve();
+            render_backup_report(&report, &settings)?;
+        }
+        KbCommands::Vacuum(_args) => {
+            let kb = KnowledgeBase::open(&config.kb)?;
+            kb.vacuum()?;
+            println!("knowledge base vacuum + analyze completed");
         }
     }
     Ok(())
@@ -549,6 +597,99 @@ fn render_query_output(
         }
     }
     Ok(())
+}
+
+fn render_verify_report(
+    report: &VerifyReport,
+    settings: &output::OutputSettings,
+) -> Result<(), CliError> {
+    match settings.mode {
+        OutputMode::Json => {
+            let value = serde_json::to_value(report)?;
+            print_json(&value)?;
+        }
+        OutputMode::Table => {
+            let mut table = Table::new(vec!["metric".into(), "value".into()]);
+            table.add_row(vec![
+                Cell::text("events_checked"),
+                Cell::text(report.events_checked.to_string()),
+            ]);
+            table.add_row(vec![
+                Cell::text("hash_mismatches"),
+                Cell::text(report.hash_mismatches.len().to_string()),
+            ]);
+            table.add_row(vec![
+                Cell::text("non_canonical_fields"),
+                Cell::text(report.non_canonical_fields.len().to_string()),
+            ]);
+            table.add_row(vec![
+                Cell::text("parse_failures"),
+                Cell::text(report.parse_failures.len().to_string()),
+            ]);
+            print_table(&table, settings)?;
+            if !report.hash_mismatches.is_empty() {
+                println!("hash mismatches:");
+                for mismatch in &report.hash_mismatches {
+                    println!(
+                        "  event {}: stored={} computed={}",
+                        mismatch.event_id, mismatch.stored, mismatch.computed
+                    );
+                }
+            }
+            if !report.non_canonical_fields.is_empty() {
+                println!("non-canonical fields:");
+                for issue in &report.non_canonical_fields {
+                    println!("  event {} -> {}", issue.event_id, issue.field);
+                }
+            }
+            if !report.parse_failures.is_empty() {
+                println!("parse failures:");
+                for failure in &report.parse_failures {
+                    println!(
+                        "  event {} {}: {}",
+                        failure.event_id, failure.field, failure.error
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn render_backup_report(
+    report: &KbBackupReport,
+    settings: &output::OutputSettings,
+) -> Result<(), CliError> {
+    match settings.mode {
+        OutputMode::Json => {
+            let value = serde_json::to_value(report)?;
+            print_json(&value)?;
+        }
+        OutputMode::Table => {
+            let mut table = Table::new(vec!["artifact".into(), "path".into()]);
+            table.add_row(vec![
+                Cell::text("events"),
+                Cell::text(report.events_backup_path.display().to_string()),
+            ]);
+            table.add_row(vec![
+                Cell::text("views"),
+                Cell::text(report.views_backup_path.display().to_string()),
+            ]);
+            print_table(&table, settings)?;
+        }
+    }
+    Ok(())
+}
+
+fn default_backup_dir(config: &runloop_core::config::KbConfig) -> PathBuf {
+    let mut root = PathBuf::from(&config.root_dir);
+    root.push("backups");
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    root.push(format!("{ts}"));
+    root
 }
 
 fn render_why_output(

@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -12,6 +12,7 @@ use jsonschema::{Validator, error::ValidationError};
 use parking_lot::Mutex;
 use runloop_core::config::KbConfig;
 use runloop_core::ids::{AgentId, EventId, TraceId};
+use rusqlite::backup::Backup;
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags, Row, Statement, Transaction, params};
 use serde::{Deserialize, Serialize};
@@ -46,8 +47,44 @@ pub enum Error {
 pub struct KnowledgeBase {
     events: Arc<Mutex<Connection>>,
     views: Arc<Mutex<Connection>>,
+    events_path: Arc<PathBuf>,
+    views_path: Arc<PathBuf>,
     schemas: Arc<SchemaRegistry>,
     cap_audits: Arc<Mutex<Vec<CapAuditRecord>>>,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct VerifyReport {
+    pub events_checked: usize,
+    pub hash_mismatches: Vec<HashMismatch>,
+    pub non_canonical_fields: Vec<NonCanonicalField>,
+    pub parse_failures: Vec<ParseFailure>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct HashMismatch {
+    pub event_id: i64,
+    pub stored: String,
+    pub computed: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NonCanonicalField {
+    pub event_id: i64,
+    pub field: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ParseFailure {
+    pub event_id: i64,
+    pub field: &'static str,
+    pub error: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KbBackupReport {
+    pub events_backup_path: PathBuf,
+    pub views_backup_path: PathBuf,
 }
 
 impl KnowledgeBase {
@@ -68,6 +105,8 @@ impl KnowledgeBase {
         Ok(Self {
             events: Arc::new(Mutex::new(events)),
             views: Arc::new(Mutex::new(views)),
+            events_path: Arc::new(PathBuf::from(":memory:events")),
+            views_path: Arc::new(PathBuf::from(":memory:views")),
             schemas: Arc::new(SchemaRegistry::load()?),
             cap_audits: Arc::new(Mutex::new(Vec::new())),
         })
@@ -95,6 +134,8 @@ impl KnowledgeBase {
         Ok(Self {
             events: Arc::new(Mutex::new(events)),
             views: Arc::new(Mutex::new(views)),
+            events_path: Arc::new(events_path),
+            views_path: Arc::new(views_path),
             schemas: Arc::new(SchemaRegistry::load()?),
             cap_audits: Arc::new(Mutex::new(Vec::new())),
         })
@@ -111,6 +152,170 @@ impl KnowledgeBase {
             let conn = self.views.lock();
             configure_views(&conn)?;
             apply_views_migrations(&conn)?;
+        }
+        Ok(())
+    }
+
+    /// Verify canonical payloads/provenance and stored hashes.
+    pub fn verify(&self) -> Result<VerifyReport, Error> {
+        let mut report = VerifyReport::default();
+        let conn = self.events.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, actor, kind, scope, payload_json, provenance_json, hash_blake3
+             FROM events
+             ORDER BY id ASC",
+        )?;
+        let mut rows = stmt.query(params![])?;
+        while let Some(row) = rows.next()? {
+            let event_id: i64 = row.get(0)?;
+            report.events_checked += 1;
+            let actor: String = row.get(1)?;
+            let kind: String = row.get(2)?;
+            let scope: String = row.get(3)?;
+            let payload_raw: String = row.get(4)?;
+            let provenance_raw: String = row.get(5)?;
+            let stored_hash: Vec<u8> = row.get(6)?;
+
+            let payload_value: Value = match serde_json::from_str(&payload_raw) {
+                Ok(value) => value,
+                Err(err) => {
+                    report.parse_failures.push(ParseFailure {
+                        event_id,
+                        field: "payload_json",
+                        error: err.to_string(),
+                    });
+                    continue;
+                }
+            };
+            let provenance_value: Value = match serde_json::from_str(&provenance_raw) {
+                Ok(value) => value,
+                Err(err) => {
+                    report.parse_failures.push(ParseFailure {
+                        event_id,
+                        field: "provenance_json",
+                        error: err.to_string(),
+                    });
+                    continue;
+                }
+            };
+
+            let payload_canonical = match canonicalize_value(&payload_value) {
+                Ok(canonical) => canonical,
+                Err(err) => {
+                    report.parse_failures.push(ParseFailure {
+                        event_id,
+                        field: "payload_json",
+                        error: err.to_string(),
+                    });
+                    continue;
+                }
+            };
+            if payload_canonical != payload_raw {
+                report.non_canonical_fields.push(NonCanonicalField {
+                    event_id,
+                    field: "payload_json",
+                });
+            }
+
+            let provenance_canonical = match canonicalize_value(&provenance_value) {
+                Ok(canonical) => canonical,
+                Err(err) => {
+                    report.parse_failures.push(ParseFailure {
+                        event_id,
+                        field: "provenance_json",
+                        error: err.to_string(),
+                    });
+                    continue;
+                }
+            };
+            if provenance_canonical != provenance_raw {
+                report.non_canonical_fields.push(NonCanonicalField {
+                    event_id,
+                    field: "provenance_json",
+                });
+            }
+
+            let envelope_value = json!({
+                "kind": kind,
+                "actor": actor,
+                "scope": scope,
+                "payload": payload_value,
+                "provenance": provenance_value,
+            });
+            let envelope_canonical = match canonicalize_value(&envelope_value) {
+                Ok(value) => value,
+                Err(err) => {
+                    report.parse_failures.push(ParseFailure {
+                        event_id,
+                        field: "envelope",
+                        error: err.to_string(),
+                    });
+                    continue;
+                }
+            };
+            let computed = blake3::hash(envelope_canonical.as_bytes());
+            if stored_hash != computed.as_bytes() {
+                report.hash_mismatches.push(HashMismatch {
+                    event_id,
+                    stored: hex::encode(&stored_hash),
+                    computed: computed.to_hex().to_string(),
+                });
+            }
+        }
+        Ok(report)
+    }
+
+    /// Create consistent backups of the ledger and views databases.
+    pub fn backup<P: AsRef<Path>>(&self, destination_dir: P) -> Result<KbBackupReport, Error> {
+        let destination_dir = destination_dir.as_ref();
+        fs::create_dir_all(destination_dir)?;
+        let events_target = destination_dir.join(
+            self.events_path
+                .file_name()
+                .unwrap_or_else(|| std::ffi::OsStr::new("events.sqlite")),
+        );
+        let views_target = destination_dir.join(
+            self.views_path
+                .file_name()
+                .unwrap_or_else(|| std::ffi::OsStr::new("pog.sqlite")),
+        );
+        let events_source = self.events_path.as_path();
+        if events_target == events_source {
+            return Err(Error::Config(format!(
+                "backup destination '{}' overlaps the live events database",
+                events_target.display()
+            )));
+        }
+        let views_source = self.views_path.as_path();
+        if views_target == views_source {
+            return Err(Error::Config(format!(
+                "backup destination '{}' overlaps the live views database",
+                views_target.display()
+            )));
+        }
+        {
+            let conn = self.events.lock();
+            backup_connection(&conn, &events_target)?;
+        }
+        {
+            let conn = self.views.lock();
+            backup_connection(&conn, &views_target)?;
+        }
+        Ok(KbBackupReport {
+            events_backup_path: events_target,
+            views_backup_path: views_target,
+        })
+    }
+
+    /// Vacuum and analyze both databases.
+    pub fn vacuum(&self) -> Result<(), Error> {
+        {
+            let conn = self.events.lock();
+            conn.execute_batch("VACUUM; ANALYZE;")?;
+        }
+        {
+            let conn = self.views.lock();
+            conn.execute_batch("VACUUM; ANALYZE;")?;
         }
         Ok(())
     }
@@ -808,6 +1013,18 @@ fn configure_views(conn: &Connection) -> Result<(), Error> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", 1)?;
+    Ok(())
+}
+
+fn backup_connection(source: &Connection, target_path: &Path) -> Result<(), Error> {
+    if target_path.exists() {
+        fs::remove_file(target_path)?;
+    }
+    let mut target = Connection::open(target_path)?;
+    {
+        let backup = Backup::new(source, &mut target)?;
+        backup.step(-1)?;
+    }
     Ok(())
 }
 

@@ -14,7 +14,7 @@ different hardware, record the delta alongside the measurements.
   equivalent
 - 16 GB RAM, NVMe SSD
 - CPU governor set to `performance`; background services minimal
-- Wasmtime 38.0.3 (pinned via `crates/runtime/Cargo.toml`)
+- Wasmtime 38.0.4 (pinned via `crates/runtime/Cargo.toml`)
 - Build profile: `cargo test --workspace` (debug), `cargo bench` (release)
 
 ## Cold-start Integration Gate

@@ -3,7 +3,7 @@ name = "contact_resolver"
 version = "0.1.0"
 kind = "native-shim"
 
-entry_native = { path = "bin/contact_resolver", blake3 = "0000000000000000000000000000000000000000000000000000000000000000" }
+entry_native = { path = "bin/contact_resolver", blake3 = "a59161ce2b4d6d2140a1232e9ccdb2cee41b75f1c9d2a40b186a0ce7d3e99714" }
 
 [ports]
 in = ["intent.contact.lookup.v1"]
