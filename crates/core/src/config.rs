@@ -29,6 +29,8 @@ pub struct Config {
     #[serde(default)]
     pub logging: LoggingConfig,
     #[serde(default)]
+    pub observability: ObservabilityConfig,
+    #[serde(default)]
     pub openings: SearchDirsConfig,
     #[serde(default)]
     pub agents: SearchDirsConfig,
@@ -77,6 +79,7 @@ impl Default for Config {
             router: RouterConfig::default(),
             ui: UiConfig::default(),
             logging: LoggingConfig::default(),
+            observability: ObservabilityConfig::default(),
             openings: SearchDirsConfig {
                 search_dirs: vec![
                     "~/.runloop/openings".into(),
@@ -671,6 +674,32 @@ impl Default for LoggingConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct ObservabilityConfig {
+    #[serde(default)]
+    pub traces: TracesConfig,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TracesConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub otlp_endpoint: Option<String>,
+    #[serde(default = "default_trace_sampling")]
+    pub sampling: String,
+}
+
+impl Default for TracesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            otlp_endpoint: None,
+            sampling: default_trace_sampling(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct SearchDirsConfig {
     #[serde(default)]
     pub search_dirs: Vec<String>,
@@ -813,7 +842,10 @@ fn default_logging_level() -> String {
     "info".into()
 }
 fn default_logging_format() -> String {
-    "plain".into()
+    "auto".into()
+}
+fn default_trace_sampling() -> String {
+    "parent".into()
 }
 
 fn config_candidate_paths() -> Vec<PathBuf> {
@@ -1147,8 +1179,18 @@ fn warn_unknown_keys(document: &Value, path: &Path) {
 fn known_keys_for_path(path: &Path) -> BTreeSet<&'static str> {
     match path_string(path).as_str() {
         "" => BTreeSet::from([
-            "version", "runtime", "models", "kb", "security", "router", "ui", "logging",
-            "openings", "agents", "bus",
+            "version",
+            "runtime",
+            "models",
+            "kb",
+            "security",
+            "router",
+            "ui",
+            "logging",
+            "observability",
+            "openings",
+            "agents",
+            "bus",
         ]),
         "runtime" => BTreeSet::from([
             "base",
@@ -1170,6 +1212,8 @@ fn known_keys_for_path(path: &Path) -> BTreeSet<&'static str> {
             "fts",
             "redaction",
         ]),
+        "observability" => BTreeSet::from(["traces"]),
+        "observability/traces" => BTreeSet::from(["enabled", "otlp_endpoint", "sampling"]),
         "kb/redaction" => BTreeSet::from([
             "mask_email",
             "level",
