@@ -128,7 +128,7 @@ enum BusBackend {
 }
 
 /// Publisher identity kinds for ACL checks.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum PublisherKind {
     Ui,
     Tui,
@@ -264,6 +264,25 @@ impl BusServerHandle {
     pub fn stats(&self) -> BusStats {
         self.inner.metrics.snapshot()
     }
+
+    /// Configure which publisher kinds may emit `action.decision` messages.
+    pub fn configure_action_decision_acl<I>(&self, allowed: I)
+    where
+        I: IntoIterator<Item = PublisherKind>,
+    {
+        let mut allow_ui = false;
+        let mut allow_tui = false;
+        let mut allow_agent = false;
+        for kind in allowed {
+            match kind {
+                PublisherKind::Ui => allow_ui = true,
+                PublisherKind::Tui => allow_tui = true,
+                PublisherKind::Agent => allow_agent = true,
+            }
+        }
+        self.inner
+            .configure_action_decision_acl(allow_ui, allow_tui, allow_agent);
+    }
 }
 
 impl Drop for BusServerHandle {
@@ -328,6 +347,18 @@ impl Server {
             config: BusConfig::default(),
             closed: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    fn configure_action_decision_acl(&self, allow_ui: bool, allow_tui: bool, allow_agent: bool) {
+        self.config
+            .allow_action_decision_ui
+            .store(allow_ui, Ordering::Relaxed);
+        self.config
+            .allow_action_decision_tui
+            .store(allow_tui, Ordering::Relaxed);
+        self.config
+            .allow_action_decision_agent
+            .store(allow_agent, Ordering::Relaxed);
     }
 
     fn shutdown(&self) -> bool {
@@ -620,14 +651,14 @@ impl Subscriber {
     }
 }
 
-#[derive(Clone)]
 struct BusConfig {
     queue_capacity: usize,
     send_timeout: Duration,
     dedupe_capacity: usize,
     dedupe_max_age_ms: u64,
-    allow_action_decision_ui: bool,
-    allow_action_decision_tui: bool,
+    allow_action_decision_ui: AtomicBool,
+    allow_action_decision_tui: AtomicBool,
+    allow_action_decision_agent: AtomicBool,
 }
 
 impl Default for BusConfig {
@@ -637,8 +668,29 @@ impl Default for BusConfig {
             send_timeout: Duration::from_millis(50),
             dedupe_capacity: 65_536,
             dedupe_max_age_ms: DEFAULT_TTL_MS,
-            allow_action_decision_ui: true,
-            allow_action_decision_tui: true,
+            allow_action_decision_ui: AtomicBool::new(true),
+            allow_action_decision_tui: AtomicBool::new(true),
+            allow_action_decision_agent: AtomicBool::new(false),
+        }
+    }
+}
+
+impl Clone for BusConfig {
+    fn clone(&self) -> Self {
+        Self {
+            queue_capacity: self.queue_capacity,
+            send_timeout: self.send_timeout,
+            dedupe_capacity: self.dedupe_capacity,
+            dedupe_max_age_ms: self.dedupe_max_age_ms,
+            allow_action_decision_ui: AtomicBool::new(
+                self.allow_action_decision_ui.load(Ordering::Relaxed),
+            ),
+            allow_action_decision_tui: AtomicBool::new(
+                self.allow_action_decision_tui.load(Ordering::Relaxed),
+            ),
+            allow_action_decision_agent: AtomicBool::new(
+                self.allow_action_decision_agent.load(Ordering::Relaxed),
+            ),
         }
     }
 }
@@ -646,9 +698,15 @@ impl Default for BusConfig {
 impl Server {
     fn allowed_action_decision_publisher(&self, kind: PublisherKind) -> bool {
         match kind {
-            PublisherKind::Ui => self.config.allow_action_decision_ui,
-            PublisherKind::Tui => self.config.allow_action_decision_tui,
-            _ => false,
+            PublisherKind::Ui => self.config.allow_action_decision_ui.load(Ordering::Relaxed),
+            PublisherKind::Tui => self
+                .config
+                .allow_action_decision_tui
+                .load(Ordering::Relaxed),
+            PublisherKind::Agent => self
+                .config
+                .allow_action_decision_agent
+                .load(Ordering::Relaxed),
         }
     }
 }
@@ -881,7 +939,10 @@ mod tests {
     #[cfg(unix)]
     use crate::ipc;
     use futures_util::StreamExt;
-    use runloop_core::{content::CT_TRACE_LINE, ids::AgentId};
+    use runloop_core::{
+        content::{CT_ACTION_DECISION, CT_TRACE_LINE},
+        ids::AgentId,
+    };
     use runloop_rmp::decode_payload;
     use serde_json::json;
     use std::time::Duration;
@@ -958,6 +1019,57 @@ mod tests {
         assert!(matches!(payload.reason, DropReason::TtlExpired));
         let stats = server.stats();
         assert_eq!(stats.drops_ttl, 1);
+        drop(server);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn action_decision_acl_tracks_config() {
+        let path = PathBuf::from("/tmp/runloop-test-bus-acl");
+        let server = Bus::bind(&path).await.unwrap();
+        server.configure_action_decision_acl([PublisherKind::Ui]);
+
+        let ui = Bus::connect_as(&path, PublisherKind::Ui).await.unwrap();
+        let tui = Bus::connect_as(&path, PublisherKind::Tui).await.unwrap();
+        let agent = Bus::connect_as(&path, PublisherKind::Agent).await.unwrap();
+
+        let mut header = Header::default();
+        header.schema_id = CT_ACTION_DECISION;
+        header.created_at_ms = current_millis();
+        header.ttl_ms = 1_000;
+        header.trace_id = 7;
+        header.msg_id = 1;
+        let payload = encode_payload(CT_ACTION_DECISION, &json!({"ok": true}), None)
+            .expect("encode action decision");
+        let message = Message::new(header, Bytes::from(payload)).unwrap();
+
+        ui.publish("acl/topic", message.clone())
+            .await
+            .expect("ui allowed");
+        let err = tui.publish("acl/topic", message.clone()).await.unwrap_err();
+        assert!(
+            matches!(err, BusError::Forbidden(_)),
+            "tui should be blocked"
+        );
+        let err = agent.publish("acl/topic", message).await.unwrap_err();
+        assert!(
+            matches!(err, BusError::Forbidden(_)),
+            "agent should be blocked"
+        );
+
+        server.configure_action_decision_acl([PublisherKind::Agent]);
+        let mut header2 = Header::default();
+        header2.schema_id = CT_ACTION_DECISION;
+        header2.created_at_ms = current_millis();
+        header2.ttl_ms = 1_000;
+        header2.trace_id = 8;
+        header2.msg_id = 2;
+        let payload2 = encode_payload(CT_ACTION_DECISION, &json!({"seq": 2}), None).unwrap();
+        let msg2 = Message::new(header2, Bytes::from(payload2)).unwrap();
+        agent
+            .publish("acl/topic", msg2)
+            .await
+            .expect("agent allowed after update");
+
         drop(server);
     }
 

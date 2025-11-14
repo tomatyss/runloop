@@ -251,7 +251,8 @@ bus:
 ```
 
 Defaults permit only `ui` and `tui`. Publishers establish identity at connect
-time (`connect_as`).
+time (`connect_as`). `runloopd` validates the list at startup; unknown strings or
+empty entries cause the daemon to fail fast so operators notice misconfigurations.
 
 ## Appendix A. Repo admin checklist
 

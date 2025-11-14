@@ -81,7 +81,7 @@ defaults.
 - [x] Surface drop counters and broadcast notifications on `rlp/sys/drops`.
 - [x] ACL: only UI/TUI may publish `action.decision`; bus rejects other
       publishers (Forbidden) and tests cover both reject/allow paths.
-- [ ] Wire ACL to config (`bus.auth.publishers.action_decision.allowed_kinds`)
+- [x] Wire ACL to config (`bus.auth.publishers.action_decision.allowed_kinds`)
       in daemon initialization.
 
 **DoD:** Throughput test ≥ **600 msgs/s** loopback; TTL respected; duplicate
