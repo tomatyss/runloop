@@ -9,3 +9,15 @@ runloop-kb = { path = "../kb" }
 tokio = { version = "1.38", features = ["rt-multi-thread", "macros", "signal", "time", "net"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+runloop-bus = { path = "../bus" }
+runloop-rmp = { path = "../rmp" }
+runloop-openings = { path = "../openings" }
+runloop-executor-local = { path = "../executor-local" }
+runloop-agents-common = { path = "../agents/common" }
+runloop-model-broker = { path = "../model-broker" }
+bytes = "1.7"
+futures-util = "0.3"
+async-trait = "0.1"
+tempfile = "3.10"
+serde_json = { version = "1.0", features = ["preserve_order"] }
+uuid = { version = "1", features = ["v4"] }

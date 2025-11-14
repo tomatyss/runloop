@@ -43,6 +43,29 @@ RUNLOOP_SECURITY_CONFIRM_EXTERNAL_ACTIONS=true
 RUNLOOP_CONFIG=/custom/path/config.yaml
 ```
 
+### 1.5 Runtime socket & discovery (MVP, normative)
+
+- Runloop uses a single Unix domain socket for both the bus and control plane.
+- Default naming and discovery precedence:
+  1. If `runtime.socket_path` is non-empty, use it and error immediately if
+     unreachable (no probing).
+  2. Else if `runtime.sockets_dir` is set, use
+     `${runtime.sockets_dir}/rmp.sock`.
+  3. Else `~/.runloop/sock/rmp.sock`.
+  4. Else `/run/runloop/rmp.sock`.
+
+Examples:
+
+```yaml
+runtime:
+  socket_path: "/run/runloop/rmp.sock" # overrides discovery; short-circuits probing
+  sockets_dir: "/var/run/runloop" # used only when socket_path is empty
+```
+
+The CLI refuses to silently fall back to local execution when the daemon is
+unavailable. It fails fast with guidance to start the daemon (or re-run with
+`--local`).
+
 ### 1.3 Model broker configuration _(MVP)_
 
 - `models.broker.providers` lists named backends. `kind` may be `local`, `http`
@@ -230,6 +253,14 @@ See `docs/security-model.md` for secret-store details. Ops tasks:
 - The runtime publishes drop notices (`DropNotice`) on `rlp/sys/drops` whenever
   TTL expiry or duplicate suppression occurs. Operators should scrape this topic
   for reliability dashboards.
+
+### 8.0 Control plane
+
+- `rlp/ctrl` carries `CT_CTRL_REQ` and `CT_CTRL_RESP`. Submit requests use a 30s
+  TTL; the CLI waits up to 2s for acceptance.
+- After acceptance, the daemon publishes `CT_RUN_EVENT` to
+  `rlp/runs/<trace_id>/events`. This is a live-only stream; historical events
+  are persisted in the KB.
 
 ### 8.1 Bus publisher ACL (configuration)
 

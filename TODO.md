@@ -351,12 +351,13 @@ draft artifact.
 **I1. CLI surface**
 
 - [x] `rlp run openings/compose_email.yaml --params '{...}'`
-- [ ] `rlp run` submits to `runloopd` via UDS (falls back to inline executor
-      when the socket is unavailable) and streams `RunEvent`s. _CLI now probes
-      sockets in priority order, emits NDJSON RunEvent v1 when running
-      `--local`, and refuses to silently fall back; real daemon
-      submission/control wiring still TODO (currently errors with a hint if the
-      socket isn't serving)._
+- [x] `rlp run` submits to `runloopd` via UDS and streams `RunEvent`s. _CLI now
+      implements control-plane submission over `rlp/ctrl` (30s TTL, idempotent
+      by `trace_id == request_id`), waits up to 2s for `RunAccepted`, then
+      subscribes to `rlp/runs/<trace_id>/events` and renders NDJSON. No
+      auto‑fallback; when unreachable it fails with guidance to start the daemon
+      or use `--local`. Daemon must handle `CT_CTRL_REQ` and publish
+      `CT_RUN_EVENT`; KB persistence of run/node events is owned by the daemon._
 - [x] `rlp why "<prompt>"` (table output by default, `--json` flag shared with
       other subcommands). _Shared renderer now enforces table-by-default when
       TTY; honors `--json/--table`/`--max-_`.\*
@@ -386,8 +387,8 @@ draft artifact.
 - [ ] Panes: **Log** (streaming), **Plan** (DAG with node statuses), **agtop**
       (per-agent cpu/mem/tokens), **Trace** (ladder text). Navigation keys:
       `Tab`, `Shift+Tab`, `q`, `?`, `/`, `.`, `!`.
-- [ ] Subscribes to bus topics `rlp/runs/<trace_id>/{plan,log,trace,status}`
-      plus `rlp/sys/metrics` + `rlp/agents/<agent>/metrics`.
+- [ ] Subscribes to `rlp/runs/<trace_id>/events` (unified stream) plus
+      `rlp/sys/metrics` + `rlp/agents/<agent>/metrics`.
 - [ ] Toggle confirm dialogs for external actions via bus (`action.proposal` →
       `action.decision`).
 

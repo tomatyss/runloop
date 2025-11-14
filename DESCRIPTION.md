@@ -137,13 +137,12 @@ paths.
 
 - **User mode (single user / dev)**
 - State: `~/.runloop/`
-- Socket: `$XDG_RUNTIME_DIR/runloop/runloopd.sock` (fallback
-  `~/.runloop/run/runloopd.sock`)
+- Socket: `~/.runloop/sock/rmp.sock` (user default; see discovery precedence)
 - Logs: `~/.runloop/logs` (or `stderr` when attached)
 - **System mode (daemon)**
 - Service user: `runloop`
 - State: `/var/lib/runloop/`
-- Socket: `/run/runloop/runloopd.sock`
+- Socket: `/run/runloop/rmp.sock`
 - Logs: journald or `/var/log/runloop/`
 
 ## Configuration (v1 schema sketch)

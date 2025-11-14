@@ -1,6 +1,7 @@
 use runloop_core::{OpeningId, TraceId};
 use runloop_openings::{NodeState, RunEvent, RunTrace};
 use serde::Serialize;
+use serde_json::Value as JsonValue;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{self, Write};
@@ -300,6 +301,85 @@ fn status_for(state: &NodeState) -> String {
     }
 }
 
+/// Emit a single NDJSON line from a daemon-provided CT_RUN_EVENT payload.
+/// Payload shape (MVP): { kind, level?, message, meta{ ts_ms, run_id, node_id?, ... } }
+pub fn emit_ndjson_from_run_event_env(
+    trace_id: TraceId,
+    opening_id: &OpeningId,
+    opening_name: &str,
+    payload: &JsonValue,
+) -> io::Result<()> {
+    let line = render_ndjson_from_run_event_env(trace_id, opening_id, opening_name, payload)
+        .map_err(io::Error::other)?;
+    let mut stdout = io::stdout();
+    stdout.write_all(&line.into_bytes())?;
+    stdout.write_all(b"\n")?;
+    stdout.flush()
+}
+
+/// Build a JSON line (without trailing newline) for a daemon event payload.
+pub fn render_ndjson_from_run_event_env(
+    trace_id: TraceId,
+    opening_id: &OpeningId,
+    opening_name: &str,
+    payload: &JsonValue,
+) -> Result<String, serde_json::Error> {
+    let kind = payload
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .unwrap_or("event");
+    let level = payload
+        .get("level")
+        .and_then(|v| v.as_str())
+        .unwrap_or("info");
+    let message = payload
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let meta = payload.get("meta").and_then(|v| v.as_object());
+    let ts_ms = meta
+        .and_then(|m| m.get("ts_ms"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or_else(timestamp_ms);
+    let run_id = meta
+        .and_then(|m| m.get("run_id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("trace:{}", trace_id));
+
+    #[derive(Serialize)]
+    struct Out<'a> {
+        ts_ms: u64,
+        trace_id: String,
+        run_id: String,
+        opening_id: String,
+        kind: &'a str,
+        level: &'a str,
+        message: String,
+        #[serde(flatten)]
+        rest: std::collections::BTreeMap<&'a str, JsonValue>,
+    }
+
+    let mut rest = std::collections::BTreeMap::new();
+    if let Some(m) = meta {
+        rest.insert("meta", JsonValue::Object(m.clone()));
+    }
+    rest.insert("opening_name", JsonValue::String(opening_name.to_string()));
+
+    let out = Out {
+        ts_ms,
+        trace_id: trace_id.to_string(),
+        run_id,
+        opening_id: opening_id.to_string(),
+        kind,
+        level,
+        message,
+        rest,
+    };
+    serde_json::to_string(&out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,5 +396,40 @@ mod tests {
         let truncated = truncate_chunk(&value);
         assert!(truncated.ends_with('…'));
         assert_eq!(truncated.chars().count(), 4097); // 4096 chars + ellipsis
+    }
+
+    #[test]
+    fn render_ndjson_maps_daemon_payload() {
+        let payload = serde_json::json!({
+            "kind": "log",
+            "level": "info",
+            "message": "planning step 1",
+            "meta": {
+                "ts_ms": 1731510000000u64,
+                "run_id": "trace:abc",
+                "node_id": "planner",
+                "span_id": "s1"
+            }
+        });
+        let trace_id = TraceId::new();
+        let opening_id = OpeningId::new();
+        let line =
+            render_ndjson_from_run_event_env(trace_id, &opening_id, "compose_email", &payload)
+                .expect("json line");
+        let value: serde_json::Value = serde_json::from_str(&line).expect("parse");
+        assert_eq!(value.get("kind").unwrap(), "log");
+        assert_eq!(value.get("level").unwrap(), "info");
+        assert_eq!(value.get("message").unwrap(), "planning step 1");
+        assert_eq!(
+            value.get("trace_id").unwrap(),
+            &serde_json::Value::String(trace_id.to_string())
+        );
+        assert_eq!(
+            value.get("opening_id").unwrap(),
+            &serde_json::Value::String(opening_id.to_string())
+        );
+        assert_eq!(value.get("run_id").unwrap(), "trace:abc");
+        assert!(value.get("meta").is_some());
+        assert_eq!(value.get("opening_name").unwrap(), "compose_email");
     }
 }

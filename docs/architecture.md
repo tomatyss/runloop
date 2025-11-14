@@ -73,3 +73,21 @@
 
 For deeper details, consult `README.md`, `docs/message-protocol.md`,
 `docs/kb-schemas.md`, and `docs/ops.md`.
+
+## Control & Transport (MVP)
+
+- A single Unix domain socket serves both the message bus and control plane.
+- The CLI submits openings by publishing `CT_CTRL_REQ` on `rlp/ctrl`. The daemon
+  responds with `CT_CTRL_RESP::RunAccepted` and streams `CT_RUN_EVENT` to
+  `rlp/runs/<trace_id>/events`.
+- Socket discovery precedence: `runtime.socket_path` (short‑circuit), then
+  `${runtime.sockets_dir}/rmp.sock`, then `~/.runloop/sock/rmp.sock`, then
+  `/run/runloop/rmp.sock`.
+- Only UI/TUI publishers may emit `action.decision` on the bus; CLI does not
+  prompt when connected to the daemon.
+
+## KB Ownership (MVP)
+
+- For daemon-backed runs, `runloopd` records `run.started` and `run.finished` in
+  the KB. Node-level persistence is planned; the CLI records both start and
+  finish only in `--local` mode today.

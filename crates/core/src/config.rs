@@ -204,20 +204,20 @@ impl Config {
     fn expand_paths(&mut self) {
         self.runtime.workdir = expand_path(&self.runtime.workdir);
         self.runtime.sockets_dir = expand_path(&self.runtime.sockets_dir);
-        // Deprecation rewrite: only rewrite exact '~/.runloop/sock' (post expansion), not any substring.
+        // Deprecation rewrite (MVP): prefer '~/.runloop/sock' over legacy '~/.runloop/run'.
         {
             let p = std::path::Path::new(&self.runtime.sockets_dir);
-            let last = p.file_name().and_then(|s| s.to_str()) == Some("sock");
+            let last = p.file_name().and_then(|s| s.to_str()) == Some("run");
             let parent_is_runloop = p
                 .parent()
                 .and_then(|pp| pp.file_name().and_then(|s| s.to_str()))
                 == Some(".runloop");
             if last && parent_is_runloop {
                 warn!(
-                    "runtime.sockets_dir '~/.runloop/sock' is deprecated; using '~/.runloop/run' instead"
+                    "runtime.sockets_dir '~/.runloop/run' is deprecated; using '~/.runloop/sock' instead"
                 );
                 if let Some(parent) = p.parent() {
-                    self.runtime.sockets_dir = parent.join("run").to_string_lossy().into_owned();
+                    self.runtime.sockets_dir = parent.join("sock").to_string_lossy().into_owned();
                 }
             }
         }
@@ -730,7 +730,7 @@ fn default_runtime_workdir() -> String {
     "~/.runloop".into()
 }
 fn default_runtime_sockets_dir() -> String {
-    // Prefer XDG_RUNTIME_DIR for per-user runtime sockets; fallback to ~/.runloop/run
+    // Prefer XDG_RUNTIME_DIR for per-user runtime sockets; fallback to ~/.runloop/sock
     let xdg = std::env::var("XDG_RUNTIME_DIR").ok();
     default_runtime_sockets_dir_with(xdg.as_deref())
 }
@@ -741,7 +741,7 @@ fn default_runtime_sockets_dir_with(xdg: Option<&str>) -> String {
     {
         return format!("{}/runloop", xdg.trim_end_matches('/'));
     }
-    "~/.runloop/run".into()
+    "~/.runloop/sock".into()
 }
 fn default_cpu_pct() -> u8 {
     90
@@ -1316,13 +1316,13 @@ kb:
 version: 1
 runtime:
   agent_container: "wasm32-wasi"
-  sockets_dir: "~/.runloop/sock"
+  sockets_dir: "~/.runloop/run"
 "#
         )
         .expect("write config");
         let config = Config::load_from_sources(vec![config_path], Vec::new()).expect("load");
         assert!(
-            config.runtime.sockets_dir.ends_with("/.runloop/run"),
+            config.runtime.sockets_dir.ends_with("/.runloop/sock"),
             "sockets_dir rewrite failed: {}",
             config.runtime.sockets_dir
         );

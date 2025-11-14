@@ -2895,15 +2895,20 @@ name = "rlp"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "clap",
  "dirs 5.0.1",
+ "fastrand",
+ "futures-util",
  "is-terminal",
  "runloop-agents-common",
+ "runloop-bus",
  "runloop-core",
  "runloop-executor-local",
  "runloop-kb",
  "runloop-model-broker",
  "runloop-openings",
+ "runloop-rmp",
  "runloop-router",
  "serde",
  "serde_json",
@@ -2914,6 +2919,7 @@ dependencies = [
  "tokio",
  "tracing",
  "unicode-width 0.1.14",
+ "uuid",
 ]
 
 [[package]]
@@ -3210,11 +3216,23 @@ dependencies = [
 name = "runloopd"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "bytes",
+ "futures-util",
+ "runloop-agents-common",
+ "runloop-bus",
  "runloop-core",
+ "runloop-executor-local",
  "runloop-kb",
+ "runloop-model-broker",
+ "runloop-openings",
+ "runloop-rmp",
+ "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
