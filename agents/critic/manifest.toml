@@ -3,7 +3,7 @@ name = "critic"
 version = "0.1.0"
 kind = "native-shim"
 
-entry_native = { path = "bin/critic", blake3 = "0000000000000000000000000000000000000000000000000000000000000000" }
+entry_native = { path = "bin/critic", blake3 = "b1b7e1e6820d5117dd41d3287013aa9e4539c89eebc4644d6fdd435ae4103887" }
 
 [ports]
 in = ["artifact.draft.email.v1"]

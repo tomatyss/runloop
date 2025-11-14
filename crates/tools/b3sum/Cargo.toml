@@ -1,0 +1,11 @@
+[package]
+name = "b3sum"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+blake3 = "1.8"
+
+[lints]
+workspace = true

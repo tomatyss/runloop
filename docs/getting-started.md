@@ -46,12 +46,13 @@ See the tree in `README.md` for directories. Key docs:
    cat ~/.runloop/trust-policy.toml
    ```
 
-## Common operational commands (planned)
+## Common operational commands
 
 - `rlp kb migrate|verify|backup|vacuum`
-- `rlp secrets put|get|list|delete`
-- `rlp trust update`
-- `rlp agent install|list|remove`
+
+> Secrets/trust/agent CLIs are still planned: `rlp secrets put|get|list|delete`,
+> `rlp trust update`, and `rlp agent install|list|remove` remain interface
+> contracts until their implementations land with the packaging milestone.
 
 Finer details appear in `docs/ops.md`. As implementation lands, these commands
 gain real outputs; until then they serve as interface contracts.
