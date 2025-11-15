@@ -42,8 +42,8 @@ crates.
 - [x] Implement: `Config::load()` (env var override path), `Config::validate()`
       (required fields, sane ranges).
 - [x] Add `runtime.socket_path` (wins over `sockets_dir`); user-mode defaults to
-      `$XDG_RUNTIME_DIR/runloop/runloopd.sock` (fallback
-      `~/.runloop/run/runloopd.sock`); deprecate `~/.runloop/sock` with warning.
+      `$XDG_RUNTIME_DIR/runloop/rmp.sock` (fallback
+      `~/.runloop/sock/rmp.sock`); deprecate `~/.runloop/run` with warning.
 - [x] Long-lived KB aliases: `kb.ledger` → `kb.events_db`, `kb.materialized` →
       `kb.view_db` (warn on use).
 
@@ -462,7 +462,7 @@ ids.
 - [ ] Install `runloopd.service` (enable but **do not start automatically** in
       dev package).
 - [ ] Postinst: create system user `runloop:runloop`, own `/var/lib/runloop`,
-      and place the bus socket under `/run/runloop/runloopd.sock`.
+      and place the bus socket under `/run/runloop/rmp.sock`.
 
 **DoD:** `dpkg -i` installs binaries; `systemctl enable --now runloopd` starts
 cleanly.

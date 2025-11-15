@@ -54,16 +54,31 @@ async fn main() -> Result<(), Error> {
         .map_err(|e| Error::Bus(e.to_string()))?;
 
     // Spawn control-plane loop
-    let ctrl_task = tokio::spawn(run_control_plane(config.clone(), kb.clone(), bus.clone()));
+    let (ctrl_shutdown_tx, ctrl_shutdown_rx) = oneshot::channel();
+    let ctrl_task = tokio::spawn(run_control_plane_with_ready(
+        config.clone(),
+        kb.clone(),
+        bus.clone(),
+        ctrl_shutdown_rx,
+        None,
+    ));
 
     wait_for_shutdown().await;
     tracing::info!("shutdown signal received; stopping services");
     let _ = shutdown_tx.send(());
+    let _ = ctrl_shutdown_tx.send(());
     if let Err(err) = mat_worker.await {
         tracing::warn!("materializer task ended unexpectedly: {err}");
     }
-    if let Err(err) = ctrl_task.await {
-        tracing::warn!("control plane task ended unexpectedly: {err}");
+    match ctrl_task.await {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => {
+            tracing::error!("control plane task returned error: {err}");
+            return Err(err);
+        }
+        Err(join_err) => {
+            tracing::warn!("control plane task join error: {join_err}");
+        }
     }
     drop(bus);
     bus_server.close();
@@ -135,7 +150,7 @@ fn bus_socket_path(config: &Config) -> Result<PathBuf, Error> {
             "runtime.sockets_dir cannot be empty when runtime.socket_path is unset".into(),
         ));
     }
-    Ok(PathBuf::from(dir).join("runloopd.sock"))
+    Ok(PathBuf::from(dir).join("rmp.sock"))
 }
 
 async fn start_bus(socket_path: &Path, config: &Config) -> Result<BusServerHandle, Error> {
@@ -199,14 +214,11 @@ fn publisher_kind_label(kind: &PublisherKind) -> &'static str {
     }
 }
 
-async fn run_control_plane(config: Config, kb: KnowledgeBase, bus: Bus) -> Result<(), Error> {
-    run_control_plane_with_ready(config, kb, bus, None).await
-}
-
 async fn run_control_plane_with_ready(
     config: Config,
     kb: KnowledgeBase,
     bus: Bus,
+    mut shutdown: oneshot::Receiver<()>,
     ready: Option<oneshot::Sender<()>>,
 ) -> Result<(), Error> {
     let mut inbox = bus
@@ -218,73 +230,84 @@ async fn run_control_plane_with_ready(
     }
     use std::collections::HashMap;
     let accepted: Arc<Mutex<HashMap<u128, RunAccepted>>> = Arc::new(Mutex::new(HashMap::new()));
-    while let Some(msg) = inbox.next().await {
-        if msg.header.schema_id != CT_CTRL_REQ {
-            continue;
-        }
-        let trace_key = msg.header.trace_id;
-        match decode_payload::<ControlRequest>(CT_CTRL_REQ, &msg.body) {
-            Ok(env) => {
-                match env.payload {
-                    ControlRequest::RunSubmit(RunSubmitRequest {
-                        request_id,
-                        opening_yaml,
-                    }) => {
-                        let req_id = request_id;
-                        let req_key = uuid_to_u128(req_id.0);
-                        let existing_accept = {
-                            let guard = accepted.lock().unwrap();
-                            guard.get(&req_key).cloned()
-                        };
-                        if let Some(acc) = existing_accept {
-                            // Re-send acceptance (idempotent)
-                            let header = build_header(CT_CTRL_RESP, trace_key, next_msg_id());
-                            let body = encode_payload(
-                                CT_CTRL_RESP,
-                                &ControlResponse::RunAccepted(acc.clone()),
-                                None,
-                            )?;
-                            let frame = Message::new(header, Bytes::from(body))
-                                .map_err(|e| Error::Bus(e.to_string()))?;
-                            let _ = bus.publish("rlp/ctrl", frame).await;
-                            continue;
-                        }
-                        // Start the run
-                        match handle_run_submit(
-                            &config,
-                            &kb,
-                            &bus,
-                            req_id,
-                            &opening_yaml,
-                            accepted.clone(),
-                            req_key,
-                        )
-                        .await
-                        {
-                            Ok(acc) => {
-                                accepted.lock().unwrap().insert(req_key, acc);
-                            }
-                            Err(err) => {
-                                let reason = format!("{err}");
-                                let resp = ControlResponse::RunRejected {
-                                    request_id: req_id,
-                                    reason,
+    loop {
+        tokio::select! {
+            _ = &mut shutdown => {
+                tracing::info!("control plane shutdown signal received");
+                break;
+            }
+            maybe_msg = inbox.next() => {
+                let Some(msg) = maybe_msg else {
+                    break;
+                };
+                if msg.header.schema_id != CT_CTRL_REQ {
+                    continue;
+                }
+                let trace_key = msg.header.trace_id;
+                match decode_payload::<ControlRequest>(CT_CTRL_REQ, &msg.body) {
+                    Ok(env) => {
+                        match env.payload {
+                            ControlRequest::RunSubmit(RunSubmitRequest {
+                                request_id,
+                                opening_yaml,
+                            }) => {
+                                let req_id = request_id;
+                                let req_key = uuid_to_u128(req_id.0);
+                                let existing_accept = {
+                                    let guard = accepted.lock().unwrap();
+                                    guard.get(&req_key).cloned()
                                 };
-                                let header = build_header(CT_CTRL_RESP, trace_key, next_msg_id());
-                                let body = encode_payload(CT_CTRL_RESP, &resp, None)?;
-                                let frame = Message::new(header, Bytes::from(body))
-                                    .map_err(|e| Error::Bus(e.to_string()))?;
-                                let _ = bus.publish("rlp/ctrl", frame).await;
+                                if let Some(acc) = existing_accept {
+                                    // Re-send acceptance (idempotent)
+                                    let header = build_header(CT_CTRL_RESP, trace_key, next_msg_id());
+                                    let body = encode_payload(
+                                        CT_CTRL_RESP,
+                                        &ControlResponse::RunAccepted(acc.clone()),
+                                        None,
+                                    )?;
+                                    let frame = Message::new(header, Bytes::from(body))
+                                        .map_err(|e| Error::Bus(e.to_string()))?;
+                                    let _ = bus.publish("rlp/ctrl", frame).await;
+                                    continue;
+                                }
+                                // Start the run
+                                match handle_run_submit(
+                                    &config,
+                                    &kb,
+                                    &bus,
+                                    req_id,
+                                    &opening_yaml,
+                                    accepted.clone(),
+                                    req_key,
+                                )
+                                .await
+                                {
+                                    Ok(acc) => {
+                                        accepted.lock().unwrap().insert(req_key, acc);
+                                    }
+                                    Err(err) => {
+                                        let reason = format!("{err}");
+                                        let resp = ControlResponse::RunRejected {
+                                            request_id: req_id,
+                                            reason,
+                                        };
+                                        let header = build_header(CT_CTRL_RESP, trace_key, next_msg_id());
+                                        let body = encode_payload(CT_CTRL_RESP, &resp, None)?;
+                                        let frame = Message::new(header, Bytes::from(body))
+                                            .map_err(|e| Error::Bus(e.to_string()))?;
+                                        let _ = bus.publish("rlp/ctrl", frame).await;
+                                    }
+                                }
+                            }
+                            ControlRequest::RunCancel(_cancel) => {
+                                // MVP: cancellation not implemented
+                                tracing::warn!("run cancel requested but not implemented in MVP");
                             }
                         }
                     }
-                    ControlRequest::RunCancel(_cancel) => {
-                        // MVP: cancellation not implemented
-                        tracing::warn!("run cancel requested but not implemented in MVP");
-                    }
+                    Err(err) => tracing::warn!("failed to decode ctrl request: {}", err),
                 }
             }
-            Err(err) => tracing::warn!("failed to decode ctrl request: {}", err),
         }
     }
     Ok(())
@@ -584,10 +607,12 @@ mod tests {
         let kb = KnowledgeBase::open(&config.kb).expect("open kb");
         kb.migrate().expect("migrate");
         let (ready_tx, ready_rx) = oneshot::channel();
+        let (ctrl_shutdown_tx, ctrl_shutdown_rx) = oneshot::channel();
         let ctrl = tokio::spawn(run_control_plane_with_ready(
             config.clone(),
             kb.clone(),
             bus.clone(),
+            ctrl_shutdown_rx,
             Some(ready_tx),
         ));
         ready_rx.await.expect("control plane ready");
@@ -660,9 +685,10 @@ success:
             Some("status")
         );
 
-        drop(ctrl);
-
-        // dropping the bus closes loop
+        let _ = ctrl_shutdown_tx.send(());
+        ctrl.await
+            .expect("ctrl task join")
+            .expect("control plane finished cleanly");
     }
 
     #[test]

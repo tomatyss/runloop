@@ -967,13 +967,14 @@ fn next_msg_id() -> u64 {
 async fn resolve_socket_path(config: &Config) -> Result<PathBuf, CliError> {
     let mut tried = Vec::new();
     // 1) Explicit runtime.socket_path: short-circuit; error if unreachable
-    if let Some(path) = config
-        .runtime
-        .socket_path
-        .as_ref()
-        .filter(|p| !p.is_empty())
-    {
-        let p = PathBuf::from(path);
+    if let Some(path) = config.runtime.socket_path.as_deref() {
+        let trimmed = path.trim();
+        if trimmed.is_empty() {
+            return Err(CliError::DaemonUnavailable(
+                "runtime.socket_path is set but empty".into(),
+            ));
+        }
+        let p = PathBuf::from(trimmed);
         tried.push(p.clone());
         // Probe via a simple UnixStream connect (even though Bus::connect will as well)
         match UnixStream::connect(&p).await {
@@ -983,8 +984,9 @@ async fn resolve_socket_path(config: &Config) -> Result<PathBuf, CliError> {
     }
 
     // 2) ${runtime.sockets_dir}/rmp.sock (string field, check non-empty)
-    if !config.runtime.sockets_dir.trim().is_empty() {
-        let p = PathBuf::from(&config.runtime.sockets_dir).join("rmp.sock");
+    let sockets_dir = config.runtime.sockets_dir.trim();
+    if !sockets_dir.is_empty() {
+        let p = PathBuf::from(sockets_dir).join("rmp.sock");
         tried.push(p.clone());
         if UnixStream::connect(&p).await.is_ok() {
             return Ok(p);

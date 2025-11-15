@@ -355,8 +355,9 @@ success:
 
 - **Openings** live under `examples/openings/` in‑repo; installed bundles may
   ship curated openings with their agents.
-- OS packages place state under `/var/lib/runloop` (system mode) and UDS under
-  `/run/runloop/runloopd.sock`; user mode uses `~/.runloop`.
+- OS packages place state under `/var/lib/runloop` (system mode) and the Runloop
+  Message Protocol socket under `/run/runloop/rmp.sock`; user mode uses
+  `~/.runloop/sock/rmp.sock`.
 
 ---
 
