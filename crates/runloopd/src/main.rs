@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::StreamExt;
 use runloop_agents_common::{ActionDecision, ActionProposal, AgentResult, ConfirmationProvider};
-use runloop_bus::{Bus, Message, PublisherKind};
+use runloop_bus::{Bus, BusServerHandle, Message, PublisherKind};
 use runloop_core::content::{CT_CTRL_REQ, CT_CTRL_RESP, CT_RUN_EVENT};
 use runloop_core::{Config, Error, OpeningId, TraceId};
 use runloop_core::{ControlRequest, ControlResponse, RunAccepted, RunSubmitRequest};
@@ -11,7 +11,7 @@ use runloop_kb::{KnowledgeBase, Materializer, Provenance, StateDelta};
 use runloop_model_broker::SecretResolver;
 use runloop_openings::{RunEvent, Runner, parse_opening_str};
 use runloop_rmp::{Header, decode_payload, encode_payload};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 #[cfg(test)]
 use tempfile::tempdir;
@@ -25,6 +25,9 @@ async fn main() -> Result<(), Error> {
     tracing::info!("runloopd starting");
 
     let config = Config::load()?;
+    let bus_path = bus_socket_path(&config)?;
+    let mut bus_server = start_bus(bus_path.as_path(), &config).await?;
+
     let kb = KnowledgeBase::open(&config.kb).map_err(|err| Error::Kb(err.to_string()))?;
     kb.migrate()
         .map_err(|err| Error::Kb(format!("migration failed: {err}")))?;
@@ -45,15 +48,8 @@ async fn main() -> Result<(), Error> {
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let mat_worker = tokio::spawn(run_materializer(materializer, shutdown_rx));
 
-    // Bind the bus at the configured path
-    let sock_path = resolve_socket_path(&config);
-    let mut bus_server = Bus::bind(&sock_path)
-        .await
-        .map_err(|e| Error::Bus(e.to_string()))?;
-    tracing::info!(path = %sock_path.display(), "bus bound");
-
     // Connect as daemon publisher
-    let bus = Bus::connect_as(&sock_path, PublisherKind::Agent)
+    let bus = Bus::connect_as(bus_path.as_path(), PublisherKind::Agent)
         .await
         .map_err(|e| Error::Bus(e.to_string()))?;
 
@@ -123,16 +119,84 @@ async fn run_materializer(materializer: Materializer, mut shutdown: oneshot::Rec
     }
 }
 
-fn resolve_socket_path(config: &Config) -> PathBuf {
-    if let Some(path) = config
-        .runtime
-        .socket_path
-        .as_ref()
-        .filter(|p| !p.is_empty())
-    {
-        return PathBuf::from(path);
+fn bus_socket_path(config: &Config) -> Result<PathBuf, Error> {
+    if let Some(path) = config.runtime.socket_path.as_deref() {
+        let trimmed = path.trim();
+        if trimmed.is_empty() {
+            return Err(Error::Config(
+                "runtime.socket_path cannot be empty when specified".into(),
+            ));
+        }
+        return Ok(PathBuf::from(trimmed));
     }
-    PathBuf::from(&config.runtime.sockets_dir).join("rmp.sock")
+    let dir = config.runtime.sockets_dir.trim();
+    if dir.is_empty() {
+        return Err(Error::Config(
+            "runtime.sockets_dir cannot be empty when runtime.socket_path is unset".into(),
+        ));
+    }
+    Ok(PathBuf::from(dir).join("runloopd.sock"))
+}
+
+async fn start_bus(socket_path: &Path, config: &Config) -> Result<BusServerHandle, Error> {
+    let handle = Bus::bind(socket_path).await.map_err(|err| {
+        Error::Bus(format!(
+            "failed to bind bus at {}: {err}",
+            socket_path.display()
+        ))
+    })?;
+    let allowed = action_decision_acl(&config.bus.auth.publishers.action_decision.allowed_kinds)?;
+    handle.configure_action_decision_acl(allowed.clone());
+    log_action_decision_acl(socket_path, &allowed);
+    Ok(handle)
+}
+
+fn action_decision_acl(kinds: &[String]) -> Result<Vec<PublisherKind>, Error> {
+    let mut allowed = Vec::new();
+    for raw in kinds {
+        let normalized = raw.trim();
+        if normalized.is_empty() {
+            return Err(Error::Config(
+                "empty publisher kind entry in bus.auth.publishers.action_decision.allowed_kinds"
+                    .into(),
+            ));
+        }
+        let normalized = normalized.to_ascii_lowercase();
+        let kind = match normalized.as_str() {
+            "ui" => PublisherKind::Ui,
+            "tui" => PublisherKind::Tui,
+            "agent" => PublisherKind::Agent,
+            other => {
+                return Err(Error::Config(format!(
+                    "unknown publisher kind '{other}' in bus.auth.publishers.action_decision.allowed_kinds"
+                )));
+            }
+        };
+        if !allowed.contains(&kind) {
+            allowed.push(kind);
+        }
+    }
+    Ok(allowed)
+}
+
+fn log_action_decision_acl(path: &Path, allowed: &[PublisherKind]) {
+    if allowed.is_empty() {
+        tracing::warn!(
+            path = %path.display(),
+            "bus listening; no publishers permitted to emit action.decision"
+        );
+        return;
+    }
+    let labels: Vec<&'static str> = allowed.iter().map(publisher_kind_label).collect();
+    tracing::info!(path = %path.display(), allowed = %labels.join(","), "bus listening");
+}
+
+fn publisher_kind_label(kind: &PublisherKind) -> &'static str {
+    match kind {
+        PublisherKind::Ui => "ui",
+        PublisherKind::Tui => "tui",
+        PublisherKind::Agent => "agent",
+    }
 }
 
 async fn run_control_plane(config: Config, kb: KnowledgeBase, bus: Bus) -> Result<(), Error> {
@@ -512,9 +576,9 @@ mod tests {
         config.security.confirm_external_actions = false;
 
         // Bind bus and launch control loop
-        let path = resolve_socket_path(&config);
-        let _server = Bus::bind(&path).await.expect("bind bus");
-        let bus = Bus::connect_as(&path, PublisherKind::Agent)
+        let path = bus_socket_path(&config).expect("bus path");
+        let _server = Bus::bind(path.as_path()).await.expect("bind bus");
+        let bus = Bus::connect_as(path.as_path(), PublisherKind::Agent)
             .await
             .expect("connect bus");
         let kb = KnowledgeBase::open(&config.kb).expect("open kb");
@@ -597,5 +661,33 @@ success:
         );
 
         drop(ctrl);
+
+        // dropping the bus closes loop
+    }
+
+    #[test]
+    fn action_decision_acl_parses_known_kinds() {
+        let kinds = vec!["tui".into(), "UI".into(), "agent".into(), "tui".into()];
+        let acl = action_decision_acl(&kinds).expect("parsed kinds");
+        assert_eq!(
+            acl,
+            vec![PublisherKind::Tui, PublisherKind::Ui, PublisherKind::Agent]
+        );
+    }
+
+    #[test]
+    fn action_decision_acl_rejects_blank_entries() {
+        let kinds = vec![" ".into(), "".into()];
+        let err = action_decision_acl(&kinds).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("empty publisher kind"));
+    }
+
+    #[test]
+    fn action_decision_acl_rejects_unknown_values() {
+        let kinds = vec!["foo".into()];
+        let err = action_decision_acl(&kinds).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("unknown publisher kind"));
     }
 }
