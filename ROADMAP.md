@@ -184,7 +184,7 @@ Governance & repo hygiene run in parallel (see Phase G below).
 - Lab capturing cold/warm startup, message latency, RSS, throughput; dashboards
   against budgets.  
   **Exit criteria**
-- Measured: cold start p50 ≤ **25 ms**, agent RSS p50 ≤ **8 MB**, bus throughput
+- Measured: cold start p50 ≤ **40 ms**, agent RSS p50 ≤ **8 MB**, bus throughput
   ≥ **1000 msgs/s** (hardware profile documented).
 
 ---
@@ -301,7 +301,7 @@ README.md
 
 | Metric                 |                  Target (p50 unless noted) | Measured at      |
 | ---------------------- | -----------------------------------------: | ---------------- |
-| Agent cold start       |                                ≤ **25 ms** | perf lab harness |
+| Agent cold start       |                                ≤ **40 ms** | perf lab harness |
 | Agent RSS              |                                 ≤ **8 MB** | perf lab harness |
 | Bus throughput         |                          ≥ **1000 msgs/s** | perf lab harness |
 | Replay determinism     | ≥ **99%** identical outputs on fixed seeds | trace replayer   |

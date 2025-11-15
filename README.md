@@ -69,7 +69,8 @@ cargo run -p rlp -- help
 cargo run -p rlp -- run examples/openings/compose_email.yaml --local --params '{"recipient":"john"}'
 
 # monitor (agent-top)
-cargo run -p agtop
+rlp run ... > run.ndjson
+cargo run -p agtop -- --input run.ndjson
 
 # inspect resolved config layers
 cargo run -p rlp -- config path --all
@@ -78,7 +79,7 @@ cargo run -p rlp -- config path --all
 > **Note:** `rlp run` now probes the daemon socket before doing any local work.
 > Provide `--local` explicitly when you want inline execution; both modes stream
 > NDJSON `RunEvent` records so monitors such as `agtop` can consume the same
-> schema.
+> schema (pipe `rlp run ... > run.ndjson` for live monitoring or feed stdin).
 
 ### Packages & images (daemon / system mode)
 
@@ -130,12 +131,12 @@ kb:
   # root_dir differs by mode; user mode defaults to "~/.runloop/pog",
   # system mode defaults to "/var/lib/runloop/pog"
   root_dir: "~/.runloop/pog"
-  events_db: "events.db" # append-only event log
+  events_db: "events.sqlite" # append-only event log
   view_db: "pog.sqlite" # materialized views
 
 logging:
   level: "info" # error | warn | info | debug | trace
-  format: "auto" # auto | json | text
+  format: "auto" # auto | json | text (auto picks JSON when stdout is not a TTY)
   file: "" # optional path
 
 observability:
@@ -314,7 +315,8 @@ Local‑first storage with:
   - Knowledge base helpers: `rlp kb migrate`, `rlp kb query "<SQL>"`,
     `rlp kb search <keyword>`, and `rlp kb why <entity>` all operate on the
     local POG databases.
-- **`agtop`** – per-agent CPU/RSS/token metrics, error rate.
+- **`agtop`** – live NDJSON TUI; point it at the `rlp run` stream to watch
+  per-node status.
 - **Tracing** – `runloop trace <id>` prints a ladder diagram of crossings.
 
 ---

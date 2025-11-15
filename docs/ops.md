@@ -169,6 +169,10 @@ No build scripts exist yet; add them once runtime crates compile.
 
 Runloop enforces signatures on agent bundles before install/launch.
 
+> **Status:** `rlp agent install|list|remove` and `rlp trust update` are landing
+> with the upcoming packaging milestone; until then, edit trust policy files
+> manually per the steps below.
+
 - **Algorithm:** Ed25519 detached signature over `manifest.toml` (canonicalized)
   and referenced files.
 - **Bundle layout:**
@@ -212,6 +216,9 @@ dev = { allow_caps = ["kb_read", "kb_write"], allow_net = [], allow_exec = false
 
 See `docs/security-model.md` for secret-store details. Ops tasks:
 
+> **Status:** `rlp secrets ...` tooling is being wired up; use your platform's
+> secret store CLI until the native commands ship.
+
 - `rlp secrets init --backend=secret-service|pass|age`
 - `rlp secrets put runloop/mail/smtp_api_key` (reads from stdin)
 - `rlp secrets list` and `rlp secrets delete` for maintenance
@@ -248,7 +255,8 @@ bus:
 ```
 
 Defaults permit only `ui` and `tui`. Publishers establish identity at connect
-time (`connect_as`).
+time (`connect_as`). `runloopd` validates the list at startup; unknown strings or
+empty entries cause the daemon to fail fast so operators notice misconfigurations.
 
 ## Appendix A. Repo admin checklist
 

@@ -81,7 +81,7 @@ defaults.
 - [x] Surface drop counters and broadcast notifications on `rlp/sys/drops`.
 - [x] ACL: only UI/TUI may publish `action.decision`; bus rejects other
       publishers (Forbidden) and tests cover both reject/allow paths.
-- [ ] Wire ACL to config (`bus.auth.publishers.action_decision.allowed_kinds`)
+- [x] Wire ACL to config (`bus.auth.publishers.action_decision.allowed_kinds`)
       in daemon initialization.
 
 **DoD:** Throughput test ≥ **600 msgs/s** loopback; TTL respected; duplicate
@@ -507,6 +507,7 @@ cleanly.
 ### N1. Docs that match what you built
 
 - [ ] Update `docs/architecture.md` with **current** component boundaries.
+- [ ] Add a “Prompt routing & shell integration” section (or `docs/router-shell.md`) describing how interactive prompts flow through the router, how shell hooks work, and how to disable them.
 - [ ] `docs/message-protocol.md`: fill header fields table; example frame.
 - [ ] `docs/kb-schemas.md`: list MVP event kinds with fields.
 - [ ] `docs/openings-dsl.md`: grammar + `compose_email` example.
@@ -514,6 +515,47 @@ cleanly.
 - [ ] `docs/ops.md`: how to run dev packages and ISO.
 
 **DoD:** README links render; no TODO placeholders remain for MVP sections.
+
+---
+
+## Epic O — Prompt routing & shell integration
+
+> Goal: after Runloop installation (and opt‑in), interactive terminal prompts
+> are classified by the router and either passed to the POSIX shell fast‑path
+> or routed to openings, without per‑command user wiring.
+
+**O1. Machine‑friendly router CLI**
+
+- [ ] Add `rlp route "<prompt>"` (or extend `rlp why`) that emits a minimal, stable JSON payload including at least `{route:"shell|agent", rule, blocked}` and well‑defined exit codes (`0` = ok, `10` = shell, `11` = agent, non‑zero error).
+- [ ] Ensure command is fast (no KB/model work) and side‑effect‑free so it can be called on every prompt in interactive sessions.
+
+**O2. Zsh integration (preferred path)**
+
+- [ ] Ship a `runloop.zsh` snippet (e.g. under `packaging/shell/`) that defines a ZLE widget (`runloop-accept-line`) hooking `accept-line`, inspects `$BUFFER`, and calls `rlp route` to classify.
+- [ ] If route=`shell`, delegate to the builtin `accept-line`; if route=`agent`, invoke the default opening via `rlp run ... --params '{"prompt": "..."}'` (or a future `rlp prompt`), then clear the line instead of executing it in the shell.
+- [ ] Guard with an env toggle (e.g. `RUNLOOP_ROUTER_DISABLE=1`) and a small `:runloop-off`/`:runloop-on` helper so users can temporarily bypass routing.
+
+**O3. Bash integration (best‑effort)**
+
+- [ ] Ship a `runloop.bash` snippet that wires an interactive‑only hook (e.g. `PROMPT_COMMAND` + `DEBUG` trap or a `bind -x` wrapper) to inspect the pending command line and call `rlp route`.
+- [ ] For route=`agent`, run the opening via `rlp` and prevent the original command from executing (e.g. by clearing `READLINE_LINE` / skipping execution); for route=`shell`, fall through with minimal latency.
+- [ ] Ensure non‑interactive shells (scripts, CI) never route through Runloop unless explicitly enabled.
+
+**O4. Packaging & opt‑in flow**
+
+- [ ] Install shell snippets into a well‑known location (e.g. `/usr/share/runloop/shell/`) and expose a helper (`rlp shell enable|disable`) that appends/removes `source` lines from user rc files (`~/.zshrc`, `~/.bashrc`) in a reversible way.
+- [ ] Debian `postinst` prompts the current user to opt into shell integration (default = “no” for dev package); if accepted, call `rlp shell enable` for their account.
+- [ ] Document a safe rollback path and ensure integration does not run when `$TERM=dumb` or inside restricted shells.
+
+**O5. Acceptance & regression**
+
+- [ ] Manual acceptance: after enabling integration, typing `ls -la` executes via the shell, while `draft email to John about Q4 plan` launches the configured opening; `rlp why` explains the decision for each.
+- [ ] Add a small integration test (or scripted demo) that opens an interactive shell under `script`/`expect`, feeds a few prompts, and asserts that router decisions and side effects match expectations.
+
+**DoD:** With shell integration enabled, interactive prompts in a supported shell
+are reliably classified by the router; shell‑routed commands behave like normal
+terminal usage, agent‑routed prompts launch openings, and users can disable
+integration via a documented toggle.
 
 ---
 
@@ -573,3 +615,5 @@ cleanly.
 10. Security polish (K)
 11. Packaging + ISO (L)
 12. Golden harness + docs sync (M & N)
+
+13. Prompt routing & shell integration (O)

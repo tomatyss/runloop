@@ -3,7 +3,7 @@ name = "context_gatherer"
 version = "0.1.0"
 kind = "native-shim"
 
-entry_native = { path = "bin/context_gatherer", blake3 = "0000000000000000000000000000000000000000000000000000000000000000" }
+entry_native = { path = "bin/context_gatherer", blake3 = "37d8aa588eba69aa84d1cb6437b9f232564f2e1f023a4d5a5725308860d9f133" }
 
 [ports]
 in = ["intent.context.gather.v1"]
