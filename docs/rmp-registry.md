@@ -9,6 +9,8 @@ vendor-defined payloads.
 > Runtime constants live in `crates/core::content` (re-exported by
 > `crates/rmp::registry`); update both locations together.
 
+<!-- markdownlint-disable MD013 -->
+
 | Range           | Ownership               | Notes                                                                 |
 | --------------- | ----------------------- | --------------------------------------------------------------------- |
 | `0x0000`        | Reserved                | Never used; helps catch default/zero bugs.                            |
@@ -34,6 +36,8 @@ vendor-defined payloads.
 | `0x000A`        | `Error.Report`   | `v` (u16)     | Structured error diagnostics for operators/UI.              |
 | `0x0BBF`        | `Bus.DropNotice` | `v` (u16)     | Delivery failure telemetry published on `rlp/sys/drops`.    |
 | `0x000B–0x000F` | Reserved         | —             | Future core payloads.                                       |
+
+<!-- markdownlint-enable MD013 -->
 
 Each payload MUST include a version field named `v` (u16). Additive changes stay
 within the same `schema_id`; breaking changes require a new `schema_id` or a

@@ -23,6 +23,8 @@ The protocol is **frozen for v0** under the rules below.
 
 ### 1.1 Fixed header (big-endian, 64 bytes)
 
+<!-- markdownlint-disable MD013 -->
+
 | Offset | Size | Field            | Notes                                                       |
 | -----: | ---: | ---------------- | ----------------------------------------------------------- |
 |      0 |    4 | `magic`          | ASCII **`"RMP0"`** (`0x52 0x4D 0x50 0x30`)                  |
@@ -37,6 +39,8 @@ The protocol is **frozen for v0** under the rules below.
 |     36 |   16 | `trace_id`       | u128 routed end-to-end                                      |
 |     52 |    8 | `msg_id`         | u64 monotonic per publisher                                 |
 |     60 |    4 | `reserved4`      | **0**; non-zero reject                                      |
+
+<!-- markdownlint-enable MD013 -->
 
 **Reserved fields** (`reserved2`, `reserved4`) and **all flag bits** MUST be
 zero until RMP v1 negotiates new semantics.
@@ -113,6 +117,8 @@ Body bytes are encoded as a MsgPack map of the form:
 
 ## 7. Error taxonomy (test oracle)
 
+<!-- markdownlint-disable MD013 -->
+
 | Error                | One-liner                                                             |
 | -------------------- | --------------------------------------------------------------------- |
 | `InvalidMagic`       | `magic` bytes were not `"RMP0"`.                                      |
@@ -129,6 +135,8 @@ Body bytes are encoded as a MsgPack map of the form:
 | `BodyDecodeError`    | MsgPack body failed to parse according to the schema.                 |
 | `BodyTypeMismatch`   | Body `"type"` string did not match the family implied by `schema_id`. |
 
+<!-- markdownlint-enable MD013 -->
+
 Test suites MUST pin at least one fixture for each entry above.
 
 ## 8. Example: frame hex dump
@@ -136,7 +144,7 @@ Test suites MUST pin at least one fixture for each entry above.
 A minimal `ErrorReport` frame with `schema_id = 0x000A` and body
 `{"type":"error.report.v1","payload":{"code":"tool.unavailable","message":"mailer offline"},"meta":{"opening_id":1234}}`:
 
-```
+```text
 0000: 00 00 00 a0 52 4d 50 30 00 00 00 40 00 00 00 00
 0010: 00 0a 00 00 00 00 00 60 00 00 01 93 23 64 5c 7b
 0020: 00 00 00 00 00 00 ea 60 11 22 33 44 55 66 77 88

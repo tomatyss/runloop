@@ -21,7 +21,7 @@
 
 ## Epic A — Core types, config, errors
 
-**A1. Core crate for shared types**
+### A1. Core crate for shared types
 
 - [x] Path: `crates/core/` (add to workspace).
 - [x] Define error enum (thin, `thiserror`):
@@ -34,7 +34,7 @@
 **DoD:** All types compile; docs comment each type’s purpose; used by other
 crates.
 
-**A2. Config loader**
+### A2. Config loader
 
 - [x] Path: `crates/core/src/config.rs`.
 - [x] Structure mirrors `~/.runloop/config.yaml` (runtime, models, kb, security,
@@ -54,7 +54,7 @@ defaults.
 
 ## Epic B — RMP protocol & local bus
 
-**B1. RMP header & frame codec**
+### B1. RMP header & frame codec
 
 - [x] Path: `crates/rmp/`.
 - [x] Define fixed 64-byte header with `magic="RMP0"`, `header_version=0`,
@@ -67,7 +67,7 @@ defaults.
 **DoD:** Round‑trip test over a `tokio::io::duplex()` stream; fuzz decoder
 (corpus with corrupt lengths).
 
-**B2. Bus abstraction (UDS)**
+### B2. Bus abstraction (UDS)
 
 - [x] Path: `crates/bus/`.
 - [x] Public API: `Bus::bind(path)`, `Bus::connect(path)`,
@@ -87,7 +87,7 @@ defaults.
 **DoD:** Throughput test ≥ **600 msgs/s** loopback; TTL respected; duplicate
 injection ignored; drop counters observable via API/topic.
 
-**B3. Trace propagation**
+### B3. Trace propagation
 
 - [x] Ensure `trace_id` persists end-to-end; add helper to spawn child spans
       with same id.
@@ -99,7 +99,7 @@ integration test.
 
 ## Epic C — WASM runtime & agent container
 
-**C1. Wasmtime integration**
+### C1. Wasmtime integration
 
 - [x] Path: `crates/runtime/`.
 - [x] Initialize `Engine`, `Store`, `Linker`.
@@ -108,7 +108,7 @@ integration test.
 **DoD:** Load a trivial WASM and call `_start` without panic; process exits
 cleanly. _(Met via `tests/smoke.rs`.)_
 
-**C2. Capabilities model**
+### C2. Capabilities model
 
 - [x] Define `Caps` struct (fs allowlist, net allowlist, time, kb_read/write,
       model, secrets, exec).
@@ -134,7 +134,7 @@ cleanly. _(Met via `tests/smoke.rs`.)_
 **DoD:** Attempting a forbidden operation yields `CapDenied` and writes an audit
 event to KB.
 
-**C3. Agent lifecycle**
+### C3. Agent lifecycle
 
 - [x] API: `spawn(AgentSpec) -> AgentHandle`, `send(AgentId, Message)`,
       `stats(AgentId)`, `kill(AgentId)`.
@@ -153,7 +153,7 @@ RSS.
 
 ## Epic D — Router v0 (shell vs agent)
 
-**D1. Shell fast‑path**
+### D1. Shell fast‑path
 
 - [x] Path: `crates/rlp/` (CLI) + `crates/router/` (logic).
 - [x] Implement simple classifier: if input parses as POSIX pipeline/redirection
@@ -165,7 +165,7 @@ RSS.
 (See `crates/router/tests/corpus/router_prompts.csv` + `classifier_corpus`
 test.)
 
-**D2. Explainability**
+### D2. Explainability
 
 - [x] `rlp why "<prompt>"` prints features used and matched rule.
 
@@ -176,7 +176,7 @@ test.)
 
 ## Epic E — Knowledge Base (Pog) v0
 
-**E1. Event log schema**
+### E1. Event log schema
 
 - [x] Path: `crates/kb/`.
 - [x] SQLite file `events.sqlite` (+ WAL): table
@@ -188,7 +188,7 @@ test.)
 **DoD:** Insert/read event; duplicate hash rejected; migrations apply
 idempotently. ✅
 
-**E2. Materialized views**
+### E2. Materialized views
 
 - [x] Separate `pog.sqlite`: tables `contacts`, `accounts`, `artifacts`, `runs`.
 - [x] Materializer service reads new events and updates views (+ indexes).
@@ -197,7 +197,7 @@ idempotently. ✅
 **DoD:** `contact.upserted` creates/updates a row; `why` returns the upserting
 event id. ✅
 
-**E3. API layer**
+### E3. API layer
 
 - [x] `propose(StateDelta) -> EventId` (validator checks schema & caps).
 - [x] `query(sql) -> rows` (read‑only).
@@ -207,7 +207,7 @@ event id. ✅
 
 **DoD:** Invalid deltas rejected with reason; tests for each rule. ✅
 
-**E4. Seed schemas**
+### E4. Seed schemas
 
 - [x] `contact.upserted {name,email,org,trust,evidence[]}`
 - [x] `artifact.created {kind,path,sha256,summary}`
@@ -220,7 +220,7 @@ event id. ✅
 
 ## Epic F — Model Broker v0
 
-**F1. Broker interface**
+### F1. Broker interface
 
 - [x] Path: `crates/model-broker/`.
 - [x] `complete(ModelRequest) -> ModelOutput` with `budget_tokens`, `timeout`,
@@ -232,7 +232,7 @@ event id. ✅
 `stream=true` returns a deterministic `StreamingUnsupported` error until the
 Phase-3 feature flag lands. ✅
 
-**F2. Simple cache**
+### F2. Simple cache
 
 - [x] LRU in‑memory keyed by `(model,prompt,params)`; TTL configurable.
 
@@ -242,7 +242,7 @@ Phase-3 feature flag lands. ✅
 
 ## Epic G — Opening engine v0
 
-**G1. DSL parser**
+### G1. DSL parser
 
 - [x] Path: `crates/openings/`.
 - [x] YAML→IR: nodes (name,use,with), edges (from,to), policy
@@ -252,7 +252,7 @@ Phase-3 feature flag lands. ✅
 **DoD:** Parse `examples/openings/compose_email.yaml` into IR; validation errors
 include line/col. ✅
 
-**G2. Runner & scheduler**
+### G2. Runner & scheduler
 
 - [x] Topological execution; fan‑in waits; fan‑out sends clones of artifacts.
 - [x] Retries with backoff from policy; per‑node timeout; propagate failure with
@@ -261,7 +261,7 @@ include line/col. ✅
 
 **DoD:** End‑to‑end run with recorded per‑node status. ✅
 
-**G3. Replay**
+### G3. Replay
 
 - [x] Record inputs/outputs per node and output hashes; `rlp replay` re‑feeds
       inputs to produce same outputs (when providers deterministic).
@@ -269,7 +269,7 @@ include line/col. ✅
 
 **DoD:** Replay of a deterministic run matches outputs hash. ✅
 
-**Follow-ups**
+### Follow-ups (Epic G)
 
 - [ ] Integrate Runner with `runloopd`/bus executor so node work goes through
       real agents instead of the local stub.
@@ -285,7 +285,7 @@ include line/col. ✅
 > “shim”) to validate flow, then convert to WASM—**but** the runtime and caps
 > checks must be in place.
 
-**H0. native_agent_shim**
+### H0. native_agent_shim
 
 - [x] `runloop-sdk` crate exposes capability parser, handshake payloads, and bus
       helpers.
@@ -294,7 +294,7 @@ include line/col. ✅
 - [x] Add README/docs so agents know the env contract; add publish/subscribe
       integration test in `runloop-sdk`.
 
-**H1. contact_resolver**
+### H1. contact_resolver
 
 - [x] Inputs: `recipient_query` (string).
 - [x] Action: `kb.query` for contact; if none, create stub with low trust and
@@ -304,7 +304,7 @@ include line/col. ✅
 **DoD:** Given seeded KB with “John [john@acme.com](mailto:john@acme.com)”,
 returns correct email, confidence ≥ 0.8.
 
-**H2. context_gatherer**
+### H2. context_gatherer
 
 - [x] Inputs: `topic`, `contact_id`.
 - [x] Action: fetch recent artifacts tagged with contact/topic; summarize via
@@ -317,7 +317,7 @@ returns correct email, confidence ≥ 0.8.
       topic/contact filters behave case-insensitively without accidental
       wildcard injection.
 
-**H3. writer**
+### H3. writer
 
 - [x] Inputs: `recipient, topic, context`.
 - [x] Action: prompt template; call broker; generate `Artifact(draft_email.md)`.
@@ -325,7 +325,7 @@ returns correct email, confidence ≥ 0.8.
 
 **DoD:** Draft ≤ 180 words; artifact recorded; rationale present.
 
-**H4. critic**
+### H4. critic
 
 - [x] Inputs: `Draft`.
 - [x] Action: check for tone/length; if failing, propose edits; set
@@ -334,7 +334,7 @@ returns correct email, confidence ≥ 0.8.
 
 **DoD:** For a too‑long draft, sets `ok=false` and suggests trimming.
 
-**H5. mailer (dry-run)**
+### H5. mailer (dry-run)
 
 - [x] Inputs: `Draft`, `ResolvedContact`, `Review`.
 - [x] Action: if `review.ok` → **require human confirm**; on confirm, record
@@ -348,7 +348,7 @@ draft artifact.
 
 ## Epic I — CLI (`rlp`) & TUI (`agtop`)
 
-**I1. CLI surface**
+### I1. CLI surface
 
 - [x] `rlp run openings/compose_email.yaml --params '{...}'`
 - [x] `rlp run` submits to `runloopd` via UDS and streams `RunEvent`s. _CLI now
@@ -372,7 +372,7 @@ draft artifact.
 
 **DoD:** Commands print structured output (table or JSON); exit codes sensible.
 
-**Follow-ups**
+### Follow-ups (Epic I)
 
 - [ ] `rlp run`: surface invalid agent param types (validated against agent
       `manifest.toml` schemas; openings may carry temporary hints).
@@ -380,7 +380,7 @@ draft artifact.
       (side-effect-free replayer). _Flag currently dumps the inline runner’s
       trace when using `--local`; needs daemon plumbing once UDS flow lands._
 
-**I2. TUI monitor (`agtop`)**
+### I2. TUI monitor (`agtop`)
 
 - [ ] Status bar (mode, opening name + trace, active pane, token/health summary,
       confirm badge).
@@ -399,7 +399,7 @@ freeze updates.
 
 ## Epic J — Observability, audit, metrics
 
-**J1. Tracing**
+### J1. Tracing
 
 - [ ] Use `tracing` crate; span per crossing; include `trace_id`, `opening_id`,
       `agent_id`.
@@ -408,14 +408,14 @@ freeze updates.
 
 **DoD:** Run a composed opening and print its ladder with ≥5 steps.
 
-**J2. Metrics**
+### J2. Metrics
 
 - [ ] Counters: msgs sent/received, drops, cap_denied, broker_calls, cache_hits.
 - [ ] Gauges: agents_running, rss_total, bus_queue_depth.
 
 **DoD:** `agtop` shows these metrics; unit tests increment expected counters.
 
-**J3. Audit log (caps)**
+### J3. Audit log (caps)
 
 - [ ] KB event `cap.audit {agent,cap,args_hash,decision}` on deny and
       (optionally) allow.
@@ -427,7 +427,7 @@ freeze updates.
 
 ## Epic K — Security & privacy
 
-**K1. Capability enforcement completeness**
+### K1. Capability enforcement completeness
 
 - [x] Ensure **every** hostcall mapping checks caps (fs, net, time, kb, model,
       secrets, exec).
@@ -435,7 +435,7 @@ freeze updates.
 
 **DoD:** Static audit (grep/inspection) & tests verify enforcement paths.
 
-**K2. Secrets handling**
+### K2. Secrets handling
 
 - [ ] `secret_id` indirection only; no raw secrets in KB/events.
 - [ ] Stub “keyring” provider that returns opaque tokens (no real secrets for
@@ -444,7 +444,7 @@ freeze updates.
 **DoD:** Search repo for “api_key” yields no values; unit tests pass with fake
 ids.
 
-**K3. Redaction**
+### K3. Redaction
 
 - [ ] KB returns redacted views for agents without `kb_read.contacts_raw`
       (example: embeddings or masked emails); for MVP, you can implement a
@@ -456,7 +456,7 @@ ids.
 
 ## Epic L — Packaging & runnable artifacts
 
-**L1. Debian packages (dev grade)**
+### L1. Debian packages (dev grade)
 
 - [ ] Use `cargo-deb` for `runloopd`, `rlp`, `agtop`.
 - [ ] Install `runloopd.service` (enable but **do not start automatically** in
@@ -467,7 +467,7 @@ ids.
 **DoD:** `dpkg -i` installs binaries; `systemctl enable --now runloopd` starts
 cleanly.
 
-**L2. Live ISO (dev grade)**
+### L2. Live ISO (dev grade)
 
 - [ ] `packaging/live-build` hooks to copy `.deb`s and enable `runloopd`.
 - [ ] TTY autologin for easy TUI demo.
@@ -478,7 +478,7 @@ cleanly.
 
 ## Epic M — Golden tasks & regression harness
 
-**M1. Golden corpus**
+### M1. Golden corpus
 
 - [ ] `tests/golden/compose_email/inputs.json` variants (recipient
       known/unknown, long/short topics).
@@ -488,13 +488,13 @@ cleanly.
 **DoD:** `cargo test -- --ignored golden` runs opening end‑to‑end (with
 `NullProvider`) and checks properties.
 
-**M2. Router corpus**
+### M2. Router corpus
 
 - [ ] 50 shell prompts, 50 agent prompts; store as CSV with expected route.
 
 **DoD:** Router unit test ≥ **98%** accuracy.
 
-**M3. Replay fidelity**
+### M3. Replay fidelity
 
 - [ ] Record a deterministic trace; ensure `rlp replay` reproduces identical
       artifacts (hash).
@@ -505,7 +505,7 @@ cleanly.
 
 ## Epic N — Documentation (implementation‑level)
 
-**N1. Docs that match what you built**
+### N1. Docs that match what you built
 
 - [ ] Update `docs/architecture.md` with **current** component boundaries.
 - [ ] Add a “Prompt routing & shell integration” section (or `docs/router-shell.md`) describing how interactive prompts flow through the router, how shell hooks work, and how to disable them.

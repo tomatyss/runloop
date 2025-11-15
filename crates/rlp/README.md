@@ -32,11 +32,15 @@ rlp run <opening.yaml> [--params '{"key":"value"}'] [--trace-out trace.json] [--
 
 Example NDJSON slice:
 
+<!-- markdownlint-disable MD013 -->
+
 ```json
 {"ts_ms":1731174100123,"trace_id":"trace:...","run_id":"trace:...","opening_id":"opening:...","kind":"run.started","level":"info","message":"run started","meta":{"params":{"topic":"Q4"}}}
 {"ts_ms":1731174100456,"trace_id":"trace:...","run_id":"trace:...","opening_id":"opening:...","kind":"node.started","level":"info","message":"node contacts started","meta":{"node":"contacts","attempt":1}}
 {"ts_ms":1731174105321,"trace_id":"trace:...","run_id":"trace:...","opening_id":"opening:...","kind":"run.finished","level":"info","message":"run ok","meta":{"status":"ok","duration_ms":5201}}
 ```
+
+<!-- markdownlint-enable MD013 -->
 
 ### `rlp why "<prompt>"`
 
