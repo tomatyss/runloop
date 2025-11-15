@@ -106,7 +106,7 @@ fn file_identifier(metadata: &fs::Metadata) -> Option<FileId> {
     Some(FileId {
         dev: metadata.dev(),
         ino: metadata.ino(),
-        ctime: Some((metadata.ctime(), metadata.ctime_nsec() as i64)),
+        ctime: Some((metadata.ctime(), metadata.ctime_nsec())),
     })
 }
 
