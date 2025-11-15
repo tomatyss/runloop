@@ -525,10 +525,10 @@ cleanly.
 > are classified by the router and either passed to the POSIX shell fast‑path
 > or routed to openings, without per‑command user wiring.
 
-**O1. Machine‑friendly router CLI**
+**O1. Machine-friendly router CLI**
 
-- [ ] Add `rlp route "<prompt>"` (or extend `rlp why`) that emits a minimal, stable JSON payload including at least `{route:"shell|agent", rule, blocked}` and well‑defined exit codes (`0` = ok, `10` = shell, `11` = agent, non‑zero error).
-- [ ] Ensure command is fast (no KB/model work) and side‑effect‑free so it can be called on every prompt in interactive sessions.
+- [x] Add `rlp route "<prompt>"` (or extend `rlp why`) that emits a minimal, stable JSON payload including at least `{route:"shell|agent", rule, blocked}` and well-defined exit codes (`0` = ok, `10` = shell, `11` = agent, non-zero error).
+- [x] Ensure command is fast (no KB/model work) and side-effect-free so it can be called on every prompt in interactive sessions.
 
 **O2. Zsh integration (preferred path)**
 

@@ -29,11 +29,12 @@ use runloop_openings::{
     Opening, ReplayMismatch, RunReport, RunTrace, Runner, RunnerError, parse_opening_str, replay,
 };
 use runloop_rmp::{Header, decode_payload, encode_payload};
-use runloop_router::Router;
+use runloop_router::{Classification as RouterClassification, Route as RouterRoute, Router};
+use serde::Serialize;
 use serde_json::{Value as JsonValue, json, to_string_pretty, to_value, to_writer_pretty};
 use serde_yaml::{self, Mapping as YamlMapping, Value as YamlValue};
 use std::env;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -44,6 +45,9 @@ use tokio::{net::UnixStream, sync::mpsc, task, time};
 use uuid::Uuid;
 
 const CLI_AGENT_ID: &str = "agent:rlp-cli";
+const ROUTE_PAYLOAD_VERSION: u32 = 1;
+const ROUTE_EXIT_CODE_SHELL: i32 = 10;
+const ROUTE_EXIT_CODE_AGENT: i32 = 11;
 
 #[derive(Parser, Debug)]
 #[command(name = "rlp", about = "Runloop CLI (work in progress)")]
@@ -54,6 +58,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    Route(RouteArgs),
     Why(WhyArgs),
     Run(RunArgs),
     Replay(ReplayArgs),
@@ -69,6 +74,35 @@ struct WhyArgs {
     prompt: String,
     #[command(flatten)]
     output: OutputArgs,
+}
+
+#[derive(Args, Debug)]
+struct RouteArgs {
+    /// Prompt to classify; use --stdin to read from standard input instead.
+    #[arg(value_name = "PROMPT")]
+    prompt: Option<String>,
+    /// Read the prompt from STDIN (mutually exclusive with PROMPT).
+    #[arg(long = "stdin")]
+    read_stdin: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct RoutePayload {
+    version: u32,
+    route: RouterRoute,
+    rule: String,
+    blocked: bool,
+}
+
+impl From<&RouterClassification> for RoutePayload {
+    fn from(classification: &RouterClassification) -> Self {
+        Self {
+            version: ROUTE_PAYLOAD_VERSION,
+            route: classification.route,
+            rule: classification.rule.clone(),
+            blocked: classification.blocked,
+        }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -207,21 +241,80 @@ enum CliError {
 
 #[tokio::main]
 async fn main() {
-    if let Err(err) = run().await {
-        eprintln!("error: {err}");
-        std::process::exit(1);
+    match run().await {
+        Ok(code) => std::process::exit(code),
+        Err(err) => {
+            eprintln!("error: {err}");
+            std::process::exit(1);
+        }
     }
 }
 
-async fn run() -> Result<(), CliError> {
+async fn run() -> Result<i32, CliError> {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Why(args) => handle_why(args).await,
-        Commands::Run(args) => handle_run(args).await,
-        Commands::Replay(args) => handle_replay(args).await,
-        Commands::Kb(cmd) => handle_kb(cmd).await,
-        Commands::Config(cmd) => handle_config(cmd).await,
+        Commands::Route(args) => handle_route(args).await,
+        Commands::Why(args) => {
+            handle_why(args).await?;
+            Ok(0)
+        }
+        Commands::Run(args) => {
+            handle_run(args).await?;
+            Ok(0)
+        }
+        Commands::Replay(args) => {
+            handle_replay(args).await?;
+            Ok(0)
+        }
+        Commands::Kb(cmd) => {
+            handle_kb(cmd).await?;
+            Ok(0)
+        }
+        Commands::Config(cmd) => {
+            handle_config(cmd).await?;
+            Ok(0)
+        }
     }
+}
+
+async fn handle_route(args: RouteArgs) -> Result<i32, CliError> {
+    if args.read_stdin && args.prompt.is_some() {
+        return Err(CliError::InvalidParams(
+            "provide either PROMPT argument or --stdin, not both".into(),
+        ));
+    }
+
+    let mut prompt = if args.read_stdin {
+        let mut buffer = String::new();
+        io::stdin().read_to_string(&mut buffer)?;
+        buffer
+    } else if let Some(prompt) = args.prompt {
+        prompt
+    } else {
+        return Err(CliError::InvalidParams(
+            "rlp route requires a prompt argument or --stdin".into(),
+        ));
+    };
+
+    if args.read_stdin {
+        while matches!(prompt.chars().last(), Some('\n' | '\r')) {
+            prompt.pop();
+        }
+    }
+
+    let config = Config::load()?;
+    let router = Router::from_config(&config.router);
+    let classification = router.classify(&prompt);
+
+    let payload = RoutePayload::from(&classification);
+    let rendered = serde_json::to_string(&payload)?;
+    println!("{rendered}");
+
+    let exit_code = match classification.route {
+        RouterRoute::Shell => ROUTE_EXIT_CODE_SHELL,
+        RouterRoute::Agent => ROUTE_EXIT_CODE_AGENT,
+    };
+    Ok(exit_code)
 }
 
 async fn handle_why(args: WhyArgs) -> Result<(), CliError> {
@@ -536,6 +629,7 @@ fn active_config_path(layers: &[ConfigLayer]) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use runloop_core::EventId;
+    use runloop_router::{Classification as RouterClassification, Route as RouterRoute};
     use serde_json::json;
 
     fn event_with_payload(payload: JsonValue) -> EventRecord {
@@ -560,6 +654,28 @@ mod tests {
     fn summarize_event_falls_back_to_pairs() {
         let record = event_with_payload(json!({"foo":"bar","baz":42}));
         assert_eq!(summarize_event(&record), "foo=bar, baz=42");
+    }
+
+    #[test]
+    fn route_payload_serializes_expected_fields() {
+        let classification = RouterClassification {
+            route: RouterRoute::Shell,
+            rule: "simple".into(),
+            features: vec!["cmd:ls".into()],
+            reason: "matched".into(),
+            blocked: true,
+        };
+        let payload = RoutePayload::from(&classification);
+        let json_value = serde_json::to_value(&payload).unwrap();
+        assert_eq!(
+            json_value,
+            json!({
+                "version": ROUTE_PAYLOAD_VERSION,
+                "route": "shell",
+                "rule": "simple",
+                "blocked": true
+            })
+        );
     }
 }
 
