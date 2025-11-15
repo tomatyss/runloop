@@ -275,7 +275,7 @@ README.md
   bundle; upgrade path handles versioning.
 - Signed bundles (Ed25519), deterministic Wasm builds; trust roots in config.
 
-#### Exit criteria
+#### Exit criteria (Bundles)
 
 - Tampered bundle rejected; repro builds verified on two machines;
   install/upgrade rollback tested.
@@ -286,7 +286,7 @@ README.md
   `~/.runloop`.
 - Packages for Debian; demo ISO for fast trial; container image for dev only.
 
-#### Exit criteria
+#### Exit criteria (OS packaging)
 
 - `apt install runloop` brings up `runloopd.service` hardened; ISO boots to
   working TUI with sample openings.
@@ -337,7 +337,7 @@ README.md
 - **Repo hygiene:** CONTRIBUTING, CODE_OF_CONDUCT, SECURITY, CODEOWNERS; branch
   protections; labels; issue templates.
 
-### Exit criteria
+### Exit criteria (Docs & Governance)
 
 - ADRs exist & linked; docs lint clean; contributors can build an agent in < 1
   hour using the docs.
