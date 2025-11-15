@@ -13,12 +13,13 @@ rlp run <opening.yaml> [--params '{"key":"value"}'] [--trace-out trace.json] [--
 ```
 
 - **Daemon first:** the CLI probes sockets in this order: `runtime.socket_path`,
-  `$XDG_RUNTIME_DIR/runloop/runloopd.sock`, `~/.runloop/run/runloopd.sock`,
-  `/run/runloop/runloopd.sock`. If none are serving, it exits with a hint to
-  start `runloopd` or re-run with `--local`.
-- **`--local`** runs inline via the embedded executor. This is the only mode
-  that currently executes work; the daemon submission path will publish the same
-  `RunEvent` v1 stream once the control plane is wired up.
+  `${runtime.sockets_dir}/rmp.sock`, `~/.runloop/sock/rmp.sock`,
+  `/run/runloop/rmp.sock`. If `runtime.socket_path` is set but unreachable, it
+  errors immediately. If none are serving, it exits with a hint to start
+  `runloopd` or re-run with `--local`.
+- **`--local`** runs inline via the embedded executor. When connected to the
+  daemon, the CLI submits the opening over the bus and streams `RunEvent` v1
+  records from `rlp/runs/<trace_id>/events`.
 - **NDJSON output:** stdout receives one JSON object per line in the order
   `run.started → node.* → run.finished`. Each record contains `ts_ms`,
   `trace_id`, `run_id`, `opening_id`, `kind`, `level`, `message`, and a `meta`
@@ -99,8 +100,6 @@ TTY) with a simple “`-- more --`” prompt.
 
 ## Known Gaps
 
-- Daemon submission currently stops after socket probing; use `--local` until
-  `runloopd` implements `ControlRequest::RunSubmit`.
 - `rlp replay <trace_id>` still targets explicit trace files; the KB lookup path
   will land alongside daemon-backed trace storage.
 - Parameter schema validation relies on future agent manifest metadata.

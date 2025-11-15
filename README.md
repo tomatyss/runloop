@@ -85,10 +85,13 @@ cargo run -p rlp -- config path --all
 
 When installed from a .deb or image, the service runs as **`runloop:runloop`**
 and writes state under **`/var/lib/runloop`**; its UDS socket lives at
-`/run/runloop/runloopd.sock`. User mode continues to use `~/.runloop` for
-config/artifacts (runtime socket defaults to
-`$XDG_RUNTIME_DIR/runloop/runloopd.sock`, falling back to
-`~/.runloop/run/runloopd.sock`).
+`/run/runloop/rmp.sock`. User mode continues to use `~/.runloop` for
+config/artifacts. Runtime socket discovery precedence:
+
+1. `runtime.socket_path` (short‑circuit; error if unreachable)
+2. `${runtime.sockets_dir}/rmp.sock`
+3. `~/.runloop/sock/rmp.sock`
+4. `/run/runloop/rmp.sock`
 
 ---
 
@@ -163,9 +166,9 @@ ui:
 ```
 
 Runtime socket settings: prefer `runtime.socket_path` (explicit file). If unset,
-`runtime.sockets_dir` is used with implied filename `runloopd.sock`. Defaults:
-user mode → `$XDG_RUNTIME_DIR/runloop/runloopd.sock` (fallback
-`~/.runloop/run/runloopd.sock`); system mode → `/run/runloop/runloopd.sock`.
+`runtime.sockets_dir` is used with implied filename `rmp.sock`. Defaults for
+user mode favor `~/.runloop/sock/rmp.sock`; system mode uses
+`/run/runloop/rmp.sock`.
 
 **Aliases (compatibility):** `kb.ledger` → `<root_dir>/<events_db>`,
 `kb.materialized` → `<root_dir>/<view_db>`. The config loader maps old keys and

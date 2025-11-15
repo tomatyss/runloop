@@ -165,3 +165,64 @@ A minimal `ErrorReport` frame with `schema_id = 0x000A` and body
 
 Use this vector as a golden test for codecs; decoding should produce the header
 fields above and the stated body map exactly.
+
+## 9. Control plane (MVP)
+
+The control plane uses the same bus and framing:
+
+- Topic: `rlp/ctrl`.
+- Submit: `CT_CTRL_REQ` with
+  `ControlRequest::RunSubmit { request_id, opening_yaml }`.
+  - The CLI applies any `--params` override and sends the merged YAML as
+    `opening_yaml`.
+  - The frame `header.trace_id` MUST equal `request_id` for correlation.
+  - `ttl_ms = 30000` (30s) for control requests.
+- Response: `CT_CTRL_RESP` with
+  `ControlResponse::{RunAccepted, RunRejected, RunCancelled}`.
+  - `RunAccepted` carries `{ request_id, trace_id, opening_id, opening_name }`.
+- Idempotency: the daemon MUST treat duplicate `CT_CTRL_REQ` with identical
+  `trace_id` as idempotent.
+- Acceptance timeout: the CLI waits up to 2000 ms for `RunAccepted` before
+  failing with guidance to start the daemon or use `--local`.
+- Rejections: `RunRejected` includes a human `reason`. Future protocol revisions
+  may add structured `code` / `detail` fields once the daemon emits them; the
+  CLI surfaces the textual reason today.
+
+## 10. Run event stream (MVP)
+
+After `RunAccepted`, the daemon publishes a single unified stream of run events:
+
+- Topic: `rlp/runs/<trace_id>/events`.
+- Schema: `CT_RUN_EVENT`.
+- Payload shape:
+
+```json
+{ "kind": "log|status|plan|trace|artifact|progress",
+  "level": "info|warn|error"?,
+  "message": "...",
+  "meta": { "ts_ms": <u64>, "run_id": "...", "node_id": "..."? , "span_id": "..."? }
+}
+```
+
+- Ordering: FIFO per publisher per topic; no sequence number in MVP.
+- Live-only: no backfill on subscribe; the daemon persists durable history in
+  the KB.
+
+## 11. Topic namespaces & ACLs
+
+- `rlp/ctrl` — control-plane submit/ack.
+- `rlp/runs/<trace_id>/events` — unified per-run event stream.
+- `rlp/sys/*` — reserved for system/admin (drops, metrics, stats). Drop notices
+  use `CT_BUS_DROP_NOTICE` on `rlp/sys/drops`.
+- `action.decision` (schema `CT_ACTION_DECISION`) may only be published by
+  `ui|tui` publisher kinds; the bus rejects other publishers.
+
+## 12. Socket & transport (MVP)
+
+- Single Unix domain socket is used for both bus and control.
+- Discovery precedence:
+  1. If `runtime.socket_path` is non-empty, use it (short‑circuit; if
+     unreachable → error immediately).
+  2. Else if `runtime.sockets_dir` is set, `${runtime.sockets_dir}/rmp.sock`.
+  3. Else `~/.runloop/sock/rmp.sock`.
+  4. Else `/run/runloop/rmp.sock`.

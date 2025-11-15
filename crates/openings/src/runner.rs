@@ -1,7 +1,8 @@
 use crate::{Edge, Literal, Node, Opening, Predicate, Retry, SuccessCondition};
 use async_trait::async_trait;
 use blake3::Hasher;
-use rand::Rng;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use runloop_core::{AgentId, OpeningId, TraceId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -267,7 +268,7 @@ where
         }
 
         let mut outputs_cache: HashMap<String, NodeOutputs> = HashMap::new();
-        let mut rng = rand::thread_rng();
+        let mut rng = StdRng::from_entropy();
         let mut run_failed = false;
         let mut processed = HashMap::new();
 

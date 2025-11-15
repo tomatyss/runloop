@@ -2,17 +2,22 @@ mod output;
 mod run_events;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use clap::{Args, Parser, Subcommand};
 use dirs::home_dir;
+use futures_util::StreamExt;
 use output::{
     Cell, OutputArgs, OutputMode, Table, display_value, print_json, print_table, summarize_json,
 };
-use run_events::RunEventEmitter;
+use run_events::{RunEventEmitter, emit_ndjson_from_run_event_env};
 use runloop_agents_common::{
     ActionDecision, ActionProposal, AgentError, AgentResult, ConfirmationProvider,
 };
+use runloop_bus::Bus;
 use runloop_core::config::{ConfigLayer, ConfigSource};
+use runloop_core::content::{CT_CTRL_REQ, CT_CTRL_RESP, CT_RUN_EVENT};
 use runloop_core::{Config, OpeningId, TraceId};
+use runloop_core::{ControlRequest, ControlResponse, RunAccepted, RunSubmitRequest};
 use runloop_executor_local::{
     ExecutorInitError, LocalExecutor, build_executor as build_local_executor, catch_up_views,
 };
@@ -23,10 +28,10 @@ use runloop_model_broker::SecretResolver;
 use runloop_openings::{
     Opening, ReplayMismatch, RunReport, RunTrace, Runner, RunnerError, parse_opening_str, replay,
 };
+use runloop_rmp::{Header, decode_payload, encode_payload};
 use runloop_router::Router;
 use serde_json::{Value as JsonValue, json, to_string_pretty, to_value, to_writer_pretty};
 use serde_yaml::{self, Mapping as YamlMapping, Value as YamlValue};
-use std::collections::HashSet;
 use std::env;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -34,7 +39,9 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{fs, fs::File};
 use thiserror::Error;
-use tokio::{net::UnixStream, sync::mpsc, task};
+use tokio::time::Duration;
+use tokio::{net::UnixStream, sync::mpsc, task, time};
+use uuid::Uuid;
 
 const CLI_AGENT_ID: &str = "agent:rlp-cli";
 
@@ -167,6 +174,8 @@ enum CliError {
     #[error(transparent)]
     Core(#[from] runloop_core::Error),
     #[error(transparent)]
+    Rmp(#[from] runloop_rmp::Error),
+    #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
@@ -188,10 +197,12 @@ enum CliError {
     ReplayFailure(Vec<ReplayMismatch>),
     #[error("runloop daemon unavailable; tried {0}")]
     DaemonUnavailable(String),
-    #[error(
-        "connected to daemon at {0}, but submission is not implemented yet; rerun with --local"
-    )]
-    DaemonNotReady(String),
+    #[error("daemon at {0} is unreachable; start it or use --local")]
+    DaemonUnreachable(String),
+    #[error("control handshake timed out waiting for acceptance")]
+    AcceptTimeout,
+    #[error("run rejected: {code} — {message}")]
+    RunRejected { code: String, message: String },
 }
 
 #[tokio::main]
@@ -253,20 +264,7 @@ async fn handle_run(args: RunArgs) -> Result<(), CliError> {
     let config = Config::load()?;
     let prepared = prepare_opening(&args.path, args.params.as_deref())?;
     if !args.local {
-        match submit_via_daemon(&config, &prepared).await {
-            Ok(()) => return Ok(()),
-            Err(CliError::DaemonUnavailable(paths)) => {
-                eprintln!(
-                    "warning: runloop daemon unavailable ({paths}); falling back to local executor"
-                );
-            }
-            Err(CliError::DaemonNotReady(path)) => {
-                eprintln!(
-                    "warning: daemon at {path} is not ready for submissions yet; falling back to local executor"
-                );
-            }
-            Err(err) => return Err(err),
-        }
+        return submit_via_daemon(&config, &prepared).await;
     }
     run_opening_locally(&config, prepared, args.trace_out.clone()).await
 }
@@ -815,60 +813,203 @@ impl ConfirmationProvider for CliConfirmationProvider {
     }
 }
 
-async fn submit_via_daemon(config: &Config, _prepared: &PreparedOpening) -> Result<(), CliError> {
-    let candidates = socket_candidates(config);
-    if candidates.is_empty() {
-        return Err(CliError::DaemonUnavailable("<none>".into()));
+async fn submit_via_daemon(config: &Config, prepared: &PreparedOpening) -> Result<(), CliError> {
+    // Resolve socket path with short-circuit rules
+    let path = resolve_socket_path(config).await?;
+
+    // Connect to the bus via IPC
+    let bus = Bus::connect(&path)
+        .await
+        .map_err(|_| CliError::DaemonUnreachable(path.display().to_string()))?;
+
+    // Subscribe to control responses before publishing request
+    let mut ctrl_sub = bus
+        .subscribe("rlp/ctrl")
+        .await
+        .map_err(|_| CliError::DaemonUnreachable(path.display().to_string()))?;
+
+    // Prepare request
+    let request_id = TraceId::new();
+    let submit = ControlRequest::RunSubmit(RunSubmitRequest {
+        request_id,
+        opening_yaml: prepared._yaml.clone(),
+    });
+    let payload = encode_payload(CT_CTRL_REQ, &submit, None)?;
+
+    let header = Header {
+        schema_id: CT_CTRL_REQ,
+        created_at_ms: current_millis(),
+        ttl_ms: 30_000, // per MVP spec
+        trace_id: uuid_to_u128(request_id.0),
+        msg_id: next_msg_id(),
+        ..Header::default()
+    };
+    let message = runloop_bus::Message::new(header, Bytes::from(payload))
+        .map_err(|e| CliError::Core(e.into()))?;
+
+    // Publish with a single retry on immediate failure (pre-accept)
+    let publish_result = bus.publish("rlp/ctrl", message.clone()).await;
+    if publish_result.is_err() {
+        // Retry once with jittered backoff
+        let jitter = 100 + (fastrand::u32(0..300) as u64);
+        time::sleep(Duration::from_millis(jitter)).await;
+        bus.publish("rlp/ctrl", message)
+            .await
+            .map_err(|_| CliError::DaemonUnreachable(path.display().to_string()))?;
     }
-    let mut tried = Vec::new();
-    for path in candidates {
-        tried.push(path.clone());
-        match UnixStream::connect(&path).await {
-            Ok(_) => {
-                return Err(CliError::DaemonNotReady(path.display().to_string()));
+
+    // Await RunAccepted up to 2000 ms
+    let accept = time::timeout(Duration::from_millis(2000), async move {
+        while let Some(msg) = ctrl_sub.next().await {
+            if msg.header.schema_id != CT_CTRL_RESP {
+                continue;
             }
-            Err(_) => continue,
+            // Ensure correlation on trace id
+            if msg.header.trace_id != uuid_to_u128(request_id.0) {
+                continue;
+            }
+            let decoded = decode_payload::<ControlResponse>(CT_CTRL_RESP, &msg.body)
+                .map_err(|e| CliError::Core(e.into()))?;
+            match decoded.payload {
+                ControlResponse::RunAccepted(acc) => return Ok::<RunAccepted, CliError>(acc),
+                ControlResponse::RunRejected {
+                    request_id: _rid,
+                    reason,
+                } => {
+                    return Err(CliError::RunRejected {
+                        code: "UNKNOWN".into(),
+                        message: reason,
+                    });
+                }
+                ControlResponse::RunCancelled { .. } => {
+                    return Err(CliError::RunRejected {
+                        code: "CANCELLED".into(),
+                        message: "run cancelled before start".into(),
+                    });
+                }
+            }
+        }
+        Err(CliError::AcceptTimeout)
+    })
+    .await
+    .unwrap_or(Err(CliError::AcceptTimeout))?;
+
+    // Subscribe to unified run event stream
+    let topic = format!("rlp/runs/{}/events", accept.trace_id);
+    let mut ev_sub = bus
+        .subscribe(&topic)
+        .await
+        .map_err(|_| CliError::DaemonUnreachable(path.display().to_string()))?;
+
+    // Stream CT_RUN_EVENT frames to NDJSON, mapping to the existing format
+    let mut final_success: Option<bool> = None;
+    while let Some(msg) = ev_sub.next().await {
+        if msg.header.schema_id != CT_RUN_EVENT {
+            continue;
+        }
+        match decode_payload::<serde_json::Value>(CT_RUN_EVENT, &msg.body) {
+            Ok(env) => {
+                if let Err(err) = emit_ndjson_from_run_event_env(
+                    TraceId(uuid_from_u128(msg.header.trace_id)),
+                    &accept.opening_id,
+                    &accept.opening_name,
+                    &env.payload,
+                ) {
+                    eprintln!("warning: failed to render event: {err}");
+                }
+                let kind = env.payload.get("kind").and_then(|v| v.as_str());
+                let success = env
+                    .payload
+                    .get("meta")
+                    .and_then(|m| m.get("success"))
+                    .and_then(|v| v.as_bool());
+                // Terminal when daemon emits a status event with meta.success
+                if matches!(kind, Some("status")) && success.is_some() {
+                    final_success = success;
+                    break;
+                }
+            }
+            Err(err) => {
+                eprintln!("warning: failed to decode run event: {err}");
+            }
         }
     }
-    let tried_display = format_paths(&tried);
-    Err(CliError::DaemonUnavailable(tried_display))
+
+    match final_success {
+        Some(true) => Ok(()),
+        Some(false) => Err(CliError::RunFailure(accept.trace_id)),
+        None => Err(CliError::RunFailure(accept.trace_id)),
+    }
 }
 
-fn socket_candidates(config: &Config) -> Vec<PathBuf> {
-    let mut seen = HashSet::new();
-    let mut candidates = Vec::new();
-    if let Some(path) = config
-        .runtime
-        .socket_path
-        .as_ref()
-        .filter(|path| !path.is_empty())
-    {
-        push_candidate(&mut candidates, &mut seen, PathBuf::from(path));
+fn current_millis() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn uuid_to_u128(id: Uuid) -> u128 {
+    id.as_u128()
+}
+
+fn uuid_from_u128(v: u128) -> Uuid {
+    Uuid::from_u128(v)
+}
+
+fn next_msg_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+async fn resolve_socket_path(config: &Config) -> Result<PathBuf, CliError> {
+    let mut tried = Vec::new();
+    // 1) Explicit runtime.socket_path: short-circuit; error if unreachable
+    if let Some(path) = config.runtime.socket_path.as_deref() {
+        let trimmed = path.trim();
+        if trimmed.is_empty() {
+            return Err(CliError::DaemonUnavailable(
+                "runtime.socket_path is set but empty".into(),
+            ));
+        }
+        let p = PathBuf::from(trimmed);
+        tried.push(p.clone());
+        // Probe via a simple UnixStream connect (even though Bus::connect will as well)
+        match UnixStream::connect(&p).await {
+            Ok(_) => return Ok(p),
+            Err(_) => return Err(CliError::DaemonUnreachable(p.display().to_string())),
+        }
     }
-    if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR") {
-        let path = PathBuf::from(xdg).join("runloop").join("runloopd.sock");
-        push_candidate(&mut candidates, &mut seen, path);
+
+    // 2) ${runtime.sockets_dir}/rmp.sock (string field, check non-empty)
+    let sockets_dir = config.runtime.sockets_dir.trim();
+    if !sockets_dir.is_empty() {
+        let p = PathBuf::from(sockets_dir).join("rmp.sock");
+        tried.push(p.clone());
+        if UnixStream::connect(&p).await.is_ok() {
+            return Ok(p);
+        }
     }
+
+    // 3) ~/.runloop/sock/rmp.sock
     if let Some(home) = home_dir() {
-        push_candidate(
-            &mut candidates,
-            &mut seen,
-            home.join(".runloop").join("run").join("runloopd.sock"),
-        );
+        let p = home.join(".runloop").join("sock").join("rmp.sock");
+        tried.push(p.clone());
+        if UnixStream::connect(&p).await.is_ok() {
+            return Ok(p);
+        }
     }
-    push_candidate(
-        &mut candidates,
-        &mut seen,
-        PathBuf::from("/run/runloop/runloopd.sock"),
-    );
-    candidates
-}
 
-fn push_candidate(candidates: &mut Vec<PathBuf>, seen: &mut HashSet<String>, path: PathBuf) {
-    let key = path.display().to_string();
-    if seen.insert(key) {
-        candidates.push(path);
+    // 4) /run/runloop/rmp.sock
+    let p = PathBuf::from("/run/runloop/rmp.sock");
+    tried.push(p.clone());
+    if UnixStream::connect(&p).await.is_ok() {
+        return Ok(p);
     }
+
+    Err(CliError::DaemonUnavailable(format_paths(&tried)))
 }
 
 fn format_paths(paths: &[PathBuf]) -> String {
