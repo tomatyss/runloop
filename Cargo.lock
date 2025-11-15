@@ -3220,6 +3220,7 @@ dependencies = [
 name = "runloopd"
 version = "0.1.0"
 dependencies = [
+ "runloop-bus",
  "runloop-core",
  "runloop-kb",
  "tokio",
