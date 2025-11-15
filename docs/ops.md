@@ -27,12 +27,16 @@ descriptive error.
 
 ### 1.2 Merge semantics
 
+<!-- markdownlint-disable MD013 -->
+
 | Type                         | Rule                                                                                                            |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | Scalars                      | Last writer wins (respecting precedence).                                                                       |
 | Maps                         | Deep merge; map entries follow precedence per key.                                                              |
 | Lists                        | Replace entirely (last writer). Exceptions: `models.providers` unions entries before applying allow/deny lists. |
 | Capability sets / allowlists | Intersect with policy first, then apply precedence.                                                             |
+
+<!-- markdownlint-enable MD013 -->
 
 Environment variables mirror YAML paths (upper case, underscores). Examples:
 

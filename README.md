@@ -233,6 +233,8 @@ normative form used by the parser.
 64-byte header, and a MsgPack body (`frame_len = header_len + body_len`). All
 integers are big-endian; anything else is rejected.
 
+<!-- markdownlint-disable MD013 -->
+
 | Offset | Size | Field            | Notes                                                  |
 | -----: | ---: | ---------------- | ------------------------------------------------------ |
 |      0 |    4 | `magic`          | ASCII `"RMP0"`                                         |
@@ -247,6 +249,8 @@ integers are big-endian; anything else is rejected.
 |     36 |   16 | `trace_id`       | u128 trace for dedupe/telemetry                        |
 |     52 |    8 | `msg_id`         | u64 monotonic per publisher                            |
 |     60 |    4 | `reserved4`      | MUST be `0`                                            |
+
+<!-- markdownlint-enable MD013 -->
 
 **Body envelope.** MsgPack map
 `{ "type": "<family.kind.vN>", "payload": <object>, "meta"?: <map> }`.
