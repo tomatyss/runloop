@@ -623,6 +623,24 @@ fn compute_backoff_ms<R: Rng>(retry: &Retry, attempt: u32, rng: &mut R) -> u64 {
     backoff.max(10.0).round() as u64
 }
 
+fn compare_integer_literal(
+    num: &serde_json::Number,
+    expected: i64,
+    op: crate::ComparisonOp,
+) -> bool {
+    let expected = expected as i128;
+
+    if let Some(actual) = num.as_i64() {
+        return compare_i128(actual as i128, expected, op);
+    }
+    if let Some(actual) = num.as_u64() {
+        return compare_i128(actual as i128, expected, op);
+    }
+    num.as_f64()
+        .map(|actual| compare_f64(actual, expected as f64, op))
+        .unwrap_or(false)
+}
+
 fn evaluate_predicate(predicate: &Predicate, port: &str, outputs: &NodeOutputs) -> bool {
     let Some(values) = outputs.ports.get(port) else {
         return false;
@@ -635,15 +653,7 @@ fn evaluate_predicate(predicate: &Predicate, port: &str, outputs: &NodeOutputs) 
             compare_string(actual, expected, predicate.op)
         }
         (Literal::Integer(expected), JsonValue::Number(num)) => {
-            if let Some(actual) = num.as_i64() {
-                compare_i64(actual, *expected, predicate.op)
-            } else if let Some(actual) = num.as_u64() {
-                compare_i64(actual as i64, *expected, predicate.op)
-            } else if let Some(actual) = num.as_f64() {
-                compare_f64(actual, *expected as f64, predicate.op)
-            } else {
-                false
-            }
+            compare_integer_literal(num, *expected, predicate.op)
         }
         (Literal::Float(expected), JsonValue::Number(num)) => num
             .as_f64()
@@ -651,6 +661,17 @@ fn evaluate_predicate(predicate: &Predicate, port: &str, outputs: &NodeOutputs) 
             .unwrap_or(false),
         _ => false,
     })
+}
+
+fn compare_i128(actual: i128, expected: i128, op: crate::ComparisonOp) -> bool {
+    match op {
+        crate::ComparisonOp::Eq => actual == expected,
+        crate::ComparisonOp::NotEq => actual != expected,
+        crate::ComparisonOp::Gt => actual > expected,
+        crate::ComparisonOp::Gte => actual >= expected,
+        crate::ComparisonOp::Lt => actual < expected,
+        crate::ComparisonOp::Lte => actual <= expected,
+    }
 }
 
 fn compare_bool(actual: bool, expected: bool, op: crate::ComparisonOp) -> bool {
@@ -662,14 +683,6 @@ fn compare_bool(actual: bool, expected: bool, op: crate::ComparisonOp) -> bool {
 }
 
 fn compare_string(actual: &str, expected: &str, op: crate::ComparisonOp) -> bool {
-    match op {
-        crate::ComparisonOp::Eq => actual == expected,
-        crate::ComparisonOp::NotEq => actual != expected,
-        _ => false,
-    }
-}
-
-fn compare_i64(actual: i64, expected: i64, op: crate::ComparisonOp) -> bool {
     match op {
         crate::ComparisonOp::Eq => actual == expected,
         crate::ComparisonOp::NotEq => actual != expected,
@@ -725,5 +738,55 @@ fn evaluate_expression(expr: &crate::Expression, outputs: &HashMap<String, NodeO
                 )
             })
             .unwrap_or(false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn integer_predicate_handles_large_unsigned_values_for_gt() {
+        let mut outputs = NodeOutputs::default();
+        outputs.push("out", json!(u64::MAX));
+
+        let predicate = Predicate {
+            op: crate::ComparisonOp::Gt,
+            value: Literal::Integer(-1),
+        };
+
+        assert!(evaluate_predicate(&predicate, "out", &outputs));
+    }
+
+    #[test]
+    fn integer_predicate_handles_large_unsigned_values_for_lt() {
+        let mut outputs = NodeOutputs::default();
+        outputs.push("out", json!(u64::MAX));
+
+        let predicate = Predicate {
+            op: crate::ComparisonOp::Lt,
+            value: Literal::Integer(i64::MAX),
+        };
+
+        assert!(!evaluate_predicate(&predicate, "out", &outputs));
+    }
+
+    #[test]
+    fn string_predicate_supports_ordering_ops() {
+        let mut outputs = NodeOutputs::default();
+        outputs.push("out", json!("lion"));
+
+        let gt_predicate = Predicate {
+            op: crate::ComparisonOp::Gt,
+            value: Literal::String("hawk".into()),
+        };
+        assert!(evaluate_predicate(&gt_predicate, "out", &outputs));
+
+        let lt_predicate = Predicate {
+            op: crate::ComparisonOp::Lt,
+            value: Literal::String("zebra".into()),
+        };
+        assert!(evaluate_predicate(&lt_predicate, "out", &outputs));
     }
 }

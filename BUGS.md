@@ -30,34 +30,6 @@ them. They accumulate log data indefinitely.
 Either remove the unbounded buffers entirely, or enforce a capacity (matching
 the ring) and drop old data when full.
 
-## 2. Module Cache Ignores On-Disk Updates
-
-- **Status:** Medium
-- **Scope:** `crates/runtime/src/module_cache.rs:23-31`
-
-### 2.1 What Happens
-
-`ModuleCache::load` stores every compiled `Module` in a
-`DashMap<PathBuf, Arc<Module>>` and never invalidates entries. Once cached,
-future calls return the old module even if the Wasm binary has been modified on
-disk.
-
-### 2.2 Impact
-
-- Operators cannot deploy new Wasm builds without restarting the entire runtime.
-- Hot-reload workflows silently run stale code, risking user-facing regressions.
-
-### 2.3 Root Cause
-
-The cache key is the raw path, and there is no mtime/hash check to detect
-changes.
-
-### 2.4 Recommended Fix
-
-Track file metadata (e.g., mtime + length) or a content hash alongside the
-cached module. If the file changes, evict and recompile before returning the
-module.
-
 ## 3. Bus Sends Panic Inside Nested Tokio Runtimes
 
 - **Status:** High
@@ -90,73 +62,6 @@ Offload the async send without calling `block_on` on the current handle—e.g.,
 spawn a task that writes to the bus and synchronizes via a oneshot, or fall back
 to the in-process channel when the runtime already has direct access to the
 agent inbox.
-
-## 4. `model_complete` Corrupts Prompt Buffer When Reserving Output Space
-
-- **Status:** High
-- **Scope:** `crates/runtime/src/hostcalls.rs:314-345`
-
-### 4.1 What Happens
-
-The hostcall treats `prompt_len` as both the size of the prompt to read and the
-available capacity for writing the model output. Guests that pass a buffer
-larger than the actual prompt (to leave room for the response) have their prompt
-string read with trailing zeroed padding, which the echo broker then mirrors
-back.
-
-### 4.2 Impact
-
-- Model prompts delivered to the broker include garbage bytes, causing
-  nondeterministic completions.
-- There is no way for guests to request responses longer than the prompt without
-  contaminating their request payload.
-- Future, non-echo providers will misinterpret prompts and return incorrect or
-  rejected completions.
-
-### 4.3 Root Cause
-
-`read_utf8` consumes `prompt_len` bytes before the host knows how much of that
-buffer contains initialized prompt data. The API conflates "prompt length" with
-"output capacity."
-
-### 4.4 Recommended Fix
-
-Extend the hostcall signature to separate the prompt input length from the
-output buffer capacity (or write into a distinct pointer). The host should read
-only the initialized prompt slice and use an explicit capacity when checking for
-response truncation.
-
-## 5. Predicate Comparisons Overflow On Large Unsigned Values
-
-- **Status:** High
-- **Scope:** `crates/openings/src/runner.rs:216-254`
-
-### 5.1 What Happens
-
-`evaluate_predicate` handles integer literals by first checking `num.as_i64()`,
-then falling back to `num.as_u64()` and casting the result to `i64`. Values
-above `i64::MAX` therefore wrap into the negative range before being compared,
-so predicates like `foo.score >= 9223372036854775808` evaluate against a
-negative number.
-
-### 5.2 Impact
-
-- Openings that gate on monotonically increasing counters or IDs (e.g.,
-  Snowflake IDs) report false negatives.
-- Success conditions tied to large numeric thresholds can be bypassed because
-  the comparison sees wrapped values.
-- Replay traces drift from real world runs when large unsigned outputs appear.
-
-### 5.3 Root Cause
-
-The integer code path truncates `u64` values to `i64` instead of keeping the
-comparison in an unsigned domain (or promoting both sides to `f64`/BigInt).
-
-### 5.4 Recommended Fix
-
-Preserve unsigned comparisons—either compare using `u128`/`u64` throughout or
-branch on the literal type so `Literal::Integer` drives
-`as_i128`/`as_u128`-aware logic without lossy casts.
 
 ## 6. Default Config Emits Spurious Missing-Directory Warnings
 
