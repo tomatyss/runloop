@@ -1,0 +1,45 @@
+version: 1
+
+runtime:
+  base: "debian"
+  agent_container: "wasm32-wasi"
+  sockets_dir: "/run/runloop"
+
+kb:
+  root_dir: "/var/lib/runloop/pog"
+  events_db: "events.sqlite"
+  view_db: "pog.sqlite"
+
+logging:
+  level: "info"
+  format: "json"
+
+router:
+  fastpath_shell: true
+  default_opening: "compose_email"
+  allowlist: []
+  denylist: []
+
+models:
+  default: "local:llama3.1-8b"
+  broker:
+    providers: []
+    route: []
+    cache:
+      ttl_ms: 600000
+      capacity: 1024
+    budgets:
+      default_tokens: 8000
+      hard_cap_usd: 0.50
+
+observability:
+  traces:
+    enabled: false
+    otlp_endpoint: ""
+    sampling: "parent"
+
+security:
+  confirm_external_actions: false
+  secrets:
+    provider: "os-keyring"
+    root: "/var/lib/runloop/secrets"

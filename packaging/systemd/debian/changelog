@@ -1,0 +1,5 @@
+runloop (0.1.0~alpha1-1) trixie; urgency=medium
+
+  * Initial Debian packaging for the Runloop daemon, CLI, and monitor.
+
+ -- Runloop Authors <ops@runloop.dev>  Fri, 09 May 2025 12:00:00 +0000

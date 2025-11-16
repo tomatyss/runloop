@@ -1,0 +1,20 @@
+Runloop Debian Notes
+====================
+
+- The daemon runs as the `runloop` system user and stores state under
+  `/var/lib/runloop`. Logs default to `/var/log/runloop`.
+- Runtime sockets and pid files live in `/run/runloop`; the CLI (`rlp`) and
+  `runloopd` discover the socket according to the precedence documented in
+  `/usr/share/doc/runloop/README.md`.
+- Default configuration is shipped at `/etc/runloop/config.yaml`. Adjust model
+  routes, KB locations, or observability endpoints there and restart the daemon:
+
+      sudo systemctl restart runloopd
+
+- Use the `rlp` CLI (installed with the package) to run openings or inspect
+  configuration layers. All binaries respect the same config file/environment
+  overrides.
+
+- During upgrades the maintainer scripts preserve local state. Purging the
+  package removes `/etc/runloop`, `/var/lib/runloop`, and the `runloop` system
+  user.

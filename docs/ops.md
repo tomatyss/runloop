@@ -180,13 +180,44 @@ trait VectorStore {
 
 ## 4. Packaging targets _(informative)_
 
-| Artifact        | Location                                      | Status                                             |
-| --------------- | --------------------------------------------- | -------------------------------------------------- |
-| Debian packages | `packaging/systemd/` + `packaging/container/` | WIP — templates only.                              |
-| Live ISO        | `packaging/live-build/`                       | Folders exist; scripts TBD after `.deb` packaging. |
-| Dev container   | `packaging/container/`                        | README tracks mounts, base image expectations.     |
+### 4.1 Debian 13 (`trixie`) package
 
-No build scripts exist yet; add them once runtime crates compile.
+- Assets live under `packaging/systemd/` (systemd unit, tmpfiles definition,
+  default config, README, and Debian control files). `packaging/systemd/debian/`
+  is synced into the repo root during builds; do not create a top-level
+  `debian/` directory manually.
+- Build requirements: `build-essential`, `debhelper`, `dh-cargo`, `rustc`,
+  `cargo`, `pkg-config`, `libssl-dev`, `libsqlite3-dev`, `systemd-dev`. Use the
+  helper script or the Just target:
+
+  ```bash
+  just deb
+  # (runs packaging/systemd/build-deb.sh -> dpkg-buildpackage -us -uc -b)
+  ```
+
+- Artifacts land in the parent directory (e.g.,
+  `../runloop_0.1.0~alpha1-1_amd64.deb`). Install via
+  `sudo apt install ./../runloop_<version>_<arch>.deb`.
+- Maintainer scripts create the `runloop` system user, chown `/var/lib/runloop`
+  and `/var/log/runloop`, install `/etc/runloop/config.yaml`, call
+  `systemd-tmpfiles --create`, and enable `runloopd.service`.
+- The service runs with `RUNLOOP_CONFIG=/etc/runloop/config.yaml` and writes its
+  socket to `/run/runloop/rmp.sock`. Restart after config changes:
+
+  ```bash
+  sudo systemctl restart runloopd
+  sudo systemctl status runloopd
+  ```
+
+- Purging the package (`sudo apt purge runloop`) removes `/etc/runloop`,
+  `/var/lib/runloop`, `/var/log/runloop`, and the `runloop` user/group.
+
+### 4.2 Additional artifacts
+
+| Artifact      | Location                | Status                                             |
+| ------------- | ----------------------- | -------------------------------------------------- |
+| Live ISO      | `packaging/live-build/` | Folders exist; scripts TBD after `.deb` packaging. |
+| Dev container | `packaging/container/`  | README tracks mounts, base image expectations.     |
 
 ## 5. Trust policy & agent signatures _(normative)_
 
@@ -234,8 +265,8 @@ dev = { allow_caps = ["kb_read", "kb_write"], allow_net = [], allow_exec = false
 
 - **Parameter schemas:** agent manifests embed JSON Schemas under
   `[schemas.with]` so tooling can validate `with` payloads before execution.
-  Each schema becomes part of the signed manifest; CLI and daemon consumers
-  load them via the shared agent registry.
+  Each schema becomes part of the signed manifest; CLI and daemon consumers load
+  them via the shared agent registry.
 
 - **Revocation:** increment keyset version or publish revocation list; runtime
   refuses to start bundles signed by revoked keys.

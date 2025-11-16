@@ -45,7 +45,8 @@ covers semantic versioning, approvals, and the artifacts we ship for each tag.
 - **Crates & Binaries:** Publish the `runloopd`, `rlp`, and `agtop` binaries to
   the GitHub release along with SHA256 sums.
 - **Debian packages:** Build via `packaging/systemd/` using `just deb`. Verify
-  install on Debian 12 (x86_64 and arm64) and ensure `runloopd.service` starts.
+  install on Debian 13/trixie (x86_64 and arm64) and ensure `runloopd.service`
+  starts.
 - **Containers/dev images:** Build from `packaging/container/` for CI and
   developer environments. Tag images with the exact git SHA.
 - **Live ISO:** Optional for minor releases; mandatory for public betas. The

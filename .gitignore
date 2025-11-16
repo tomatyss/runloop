@@ -1,5 +1,6 @@
 # Build artifacts
 /target/
+/debian/
 **/*.rs.bk
 
 # Tooling cache

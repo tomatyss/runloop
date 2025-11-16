@@ -1,0 +1,31 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+export CARGO_NET_OFFLINE := false
+export CARGO_TERM_COLOR := always
+export CARGO_TARGET_DIR := $(CURDIR)/target/debian
+
+%:
+	dh $@ --with systemd
+
+override_dh_auto_configure:
+	dh_auto_configure
+
+override_dh_auto_build:
+	cargo build --workspace --release --locked
+
+override_dh_auto_install:
+	dh_installdirs
+	install -Dm0755 $(CARGO_TARGET_DIR)/release/runloopd $(CURDIR)/debian/runloop/usr/bin/runloopd
+	install -Dm0755 $(CARGO_TARGET_DIR)/release/rlp $(CURDIR)/debian/runloop/usr/bin/rlp
+	install -Dm0755 $(CARGO_TARGET_DIR)/release/agtop $(CURDIR)/debian/runloop/usr/bin/agtop
+
+override_dh_auto_clean:
+	cargo clean --target-dir $(CARGO_TARGET_DIR) || true
+	dh_auto_clean
+
+override_dh_dwz:
+	@echo "Skipping dwz for Rust binaries"
+
+override_dh_strip:
+	dh_strip --no-automatic-dbgsym

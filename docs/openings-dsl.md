@@ -234,15 +234,15 @@ nodes:
     schema_hints:
       with:
         topic:
-          required: true   # shorthand for “this key must be present”
+          required: true # shorthand for “this key must be present”
         tone:
           enum: ["neutral", "neutral-friendly"]
 ```
 
 - Hints are merged via JSON Schema `allOf` semantics: they can **tighten** the
   manifest schema but never relax it.
-- Hints may introduce new fields only until the manifest grows a real schema,
-  at which point the hint should be removed.
+- Hints may introduce new fields only until the manifest grows a real schema, at
+  which point the hint should be removed.
 - The CLI logs whenever it relies on a hint so maintainers know to update the
   manifest. Hints are scoped per node.
 

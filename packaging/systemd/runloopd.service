@@ -1,0 +1,22 @@
+[Unit]
+Description=Runloop daemon (agent-native operating layer)
+Documentation=https://github.com/runloop/runloop/tree/main/docs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=runloop
+Group=runloop
+WorkingDirectory=/var/lib/runloop
+Environment=RUNLOOP__RUNTIME__SOCKETS_DIR=/run/runloop
+Environment=RUNLOOP_CONFIG=/etc/runloop/config.yaml
+ExecStart=/usr/bin/runloopd
+Restart=on-failure
+RestartSec=2s
+RuntimeDirectory=runloop
+RuntimeDirectoryMode=0755
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
