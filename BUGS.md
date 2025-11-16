@@ -63,38 +63,6 @@ spawn a task that writes to the bus and synchronizes via a oneshot, or fall back
 to the in-process channel when the runtime already has direct access to the
 agent inbox.
 
-## 5. Predicate Comparisons Overflow On Large Unsigned Values
-
-- **Status:** High
-- **Scope:** `crates/openings/src/runner.rs:216-254`
-
-### 5.1 What Happens
-
-`evaluate_predicate` handles integer literals by first checking `num.as_i64()`,
-then falling back to `num.as_u64()` and casting the result to `i64`. Values
-above `i64::MAX` therefore wrap into the negative range before being compared,
-so predicates like `foo.score >= 9223372036854775808` evaluate against a
-negative number.
-
-### 5.2 Impact
-
-- Openings that gate on monotonically increasing counters or IDs (e.g.,
-  Snowflake IDs) report false negatives.
-- Success conditions tied to large numeric thresholds can be bypassed because
-  the comparison sees wrapped values.
-- Replay traces drift from real world runs when large unsigned outputs appear.
-
-### 5.3 Root Cause
-
-The integer code path truncates `u64` values to `i64` instead of keeping the
-comparison in an unsigned domain (or promoting both sides to `f64`/BigInt).
-
-### 5.4 Recommended Fix
-
-Preserve unsigned comparisons—either compare using `u128`/`u64` throughout or
-branch on the literal type so `Literal::Integer` drives
-`as_i128`/`as_u128`-aware logic without lossy casts.
-
 ## 6. Default Config Emits Spurious Missing-Directory Warnings
 
 - **Status:** Medium
