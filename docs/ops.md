@@ -234,8 +234,8 @@ dev = { allow_caps = ["kb_read", "kb_write"], allow_net = [], allow_exec = false
 
 - **Parameter schemas:** agent manifests embed JSON Schemas under
   `[schemas.with]` so tooling can validate `with` payloads before execution.
-  Each schema becomes part of the signed manifest; CLI and daemon consumers
-  load them via the shared agent registry.
+  Each schema becomes part of the signed manifest; CLI and daemon consumers load
+  them via the shared agent registry.
 
 - **Revocation:** increment keyset version or publish revocation list; runtime
   refuses to start bundles signed by revoked keys.

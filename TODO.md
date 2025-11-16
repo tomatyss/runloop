@@ -507,7 +507,7 @@ cleanly.
 
 ### N1. Docs that match what you built
 
-- [ ] Update `docs/architecture.md` with **current** component boundaries.
+- [x] Update `docs/architecture.md` with **current** component boundaries.
 - [ ] Add a “Prompt routing & shell integration” section (or
       `docs/router-shell.md`) describing how interactive prompts flow through
       the router, how shell hooks work, and how to disable them.
