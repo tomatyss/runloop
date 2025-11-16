@@ -1,7 +1,7 @@
 Source: runloop
 Section: utils
 Priority: optional
-Maintainer: Runloop Authors <ops@runloop.dev>
+Maintainer: Runloop Authors <ops@runloop.media>
 Build-Depends:
  debhelper-compat (= 13),
  rustc (>= 1.77),

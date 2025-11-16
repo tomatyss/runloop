@@ -6,7 +6,7 @@ export CARGO_TERM_COLOR := always
 export CARGO_TARGET_DIR := $(CURDIR)/target/debian
 
 %:
-	dh $@ --with systemd
+	dh $@
 
 override_dh_auto_configure:
 	dh_auto_configure

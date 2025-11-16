@@ -19,7 +19,7 @@ This directory houses the Debian 13 (trixie) packaging assets for Runloop:
 Prerequisites on Debian 13:
 
 ```bash
-sudo apt install build-essential debhelper dh-cargo rustc cargo pkg-config \
+sudo apt install build-essential debhelper-compat dh-cargo rustc cargo pkg-config \
                  libssl-dev libsqlite3-dev systemd systemd-dev
 ```
 
