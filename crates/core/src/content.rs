@@ -47,6 +47,10 @@ pub const CT_INTENT_REVIEW_DRAFT: u16 = 230;
 pub const CT_REVIEW_CRITIQUE: u16 = 231;
 pub const CT_INTENT_SEND_MAIL: u16 = 240;
 pub const CT_MAIL_RESULT: u16 = 241;
+/// Internal executor request envelope (runner -> agent host).
+pub const CT_EXECUTOR_AGENT_REQUEST: u16 = 4000;
+/// Internal executor response envelope (agent host -> runner).
+pub const CT_EXECUTOR_AGENT_RESPONSE: u16 = 4001;
 
 // CLI control plane (2001-2002)
 
