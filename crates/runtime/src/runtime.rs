@@ -85,13 +85,6 @@ impl AsyncSpawner {
         self.handle.spawn(fut)
     }
 
-    fn block_on<F, T>(&self, fut: F) -> T
-    where
-        F: std::future::Future<Output = T>,
-    {
-        self.handle.block_on(fut)
-    }
-
     fn handle(&self) -> TokioHandle {
         self.handle.clone()
     }
@@ -628,12 +621,21 @@ impl Runtime {
         {
             let bus_clone = bus.clone();
             let msg = message.clone();
-            return spawner.block_on(async move {
-                bus_clone
+            let (tx, rx) = std_mpsc::channel();
+            spawner.spawn(async move {
+                let result = bus_clone
                     .send(agent_id, msg)
                     .await
-                    .map_err(|err| Error::spawn_failed(PathBuf::from("bus"), err.to_string()))
+                    .map_err(|err| Error::spawn_failed(PathBuf::from("bus"), err.to_string()));
+                let _ = tx.send(result);
             });
+            return match rx.recv() {
+                Ok(result) => result,
+                Err(_) => Err(Error::spawn_failed(
+                    PathBuf::from("bus"),
+                    "bus send task cancelled",
+                )),
+            };
         }
 
         let entry = self
