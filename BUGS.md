@@ -30,39 +30,6 @@ them. They accumulate log data indefinitely.
 Either remove the unbounded buffers entirely, or enforce a capacity (matching
 the ring) and drop old data when full.
 
-## 3. Bus Sends Panic Inside Nested Tokio Runtimes
-
-- **Status:** High
-- **Scope:** `crates/runtime/src/runtime.rs:493-505`
-
-### 3.1 What Happens
-
-When `Runtime::send` runs inside an existing Tokio executor, the call to
-`spawner.block_on` invokes `TokioHandle::block_on`, which panics with "cannot
-start a runtime from within a runtime." Any caller that embeds the runtime
-inside async services hits this panic the first time it forwards a bus message.
-
-### 3.2 Impact
-
-- Crashes supervising services that dispatch messages from async contexts.
-- Prevents integrating the runtime into async control planes without wrapping
-  every `send` in a separate thread.
-- Masks the underlying bus error semantics because the panic aborts execution
-  paths.
-
-### 3.3 Root Cause
-
-The new bus integration replaced the non-async `inbox.try_send` path with a hard
-`block_on` of the async bus send operation, ignoring Tokio's
-`!Send`-from-runtime constraints.
-
-### 3.4 Recommended Fix
-
-Offload the async send without calling `block_on` on the current handle—e.g.,
-spawn a task that writes to the bus and synchronizes via a oneshot, or fall back
-to the in-process channel when the runtime already has direct access to the
-agent inbox.
-
 ## 6. Default Config Emits Spurious Missing-Directory Warnings
 
 - **Status:** Medium
