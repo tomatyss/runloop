@@ -1,5 +1,6 @@
 //! Core types shared across Runloop crates.
 
+pub mod agents;
 pub mod config;
 pub mod content;
 pub mod content_types;
@@ -8,6 +9,7 @@ pub mod error;
 pub mod ids;
 pub mod trace;
 
+pub use agents::{AgentDigest, AgentPorts, AgentRef, AgentSchemaBundle, DescribedAgent};
 pub use config::{Config, ConfigLayer, ConfigOverride, ConfigSource};
 pub use content::{
     CT_ACTION_DECISION, CT_ACTION_REQUEST, CT_AGENT_HELLO, CT_AGENT_LOG_LINE, CT_ARTIFACT,
@@ -19,7 +21,8 @@ pub use content::{
     CT_RUNTIME_HELLO, CT_STATE_DELTA, CT_TOOL_CALL, CT_TOOL_RESULT, CT_TRACE_LINE,
 };
 pub use control::{
-    ControlRequest, ControlResponse, RunAccepted, RunCancelRequest, RunSubmitRequest,
+    ControlRequest, ControlResponse, DescribeAgentsRequest, RunAccepted, RunCancelRequest,
+    RunSubmitRequest,
 };
 pub use error::Error;
 pub use ids::{AgentId, EventId, OpeningId, TraceId};

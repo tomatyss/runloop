@@ -219,6 +219,33 @@ On timeout/failure with no satisfied success condition, the opening fails.
 - Only string replacement of `{{params.*}}` in `with` maps. No arithmetic, no
   conditionals. This avoids making the DSL a programming language.
 
+### 5.6 Schema hints
+
+Agent manifests are the signed source of truth for capability claims and
+parameter schemas. When a manifest has not published a field yet, openings may
+add a temporary `schema_hints` section:
+
+```yaml
+nodes:
+  - id: draft
+    use: agent:writer
+    with:
+      topic: "{{params.topic}}"
+    schema_hints:
+      with:
+        topic:
+          required: true   # shorthand for “this key must be present”
+        tone:
+          enum: ["neutral", "neutral-friendly"]
+```
+
+- Hints are merged via JSON Schema `allOf` semantics: they can **tighten** the
+  manifest schema but never relax it.
+- Hints may introduce new fields only until the manifest grows a real schema,
+  at which point the hint should be removed.
+- The CLI logs whenever it relies on a hint so maintainers know to update the
+  manifest. Hints are scoped per node.
+
 ---
 
 ## 6) Execution semantics
@@ -300,6 +327,11 @@ evolution.
 - Replay: `rlp replay trace.json --opening examples/openings/compose_email.yaml`
   - KB: `rlp kb query ...`, `rlp kb why <id>` All commands produce structured
     output with sensible exit codes.
+- `rlp run` validates every node’s `with` payload against the signed manifest
+  schemas (plus any `schema_hints`) before contacting the daemon. Use
+  `--errors-format table|json` to choose how aggregated validation errors are
+  rendered; failures exit with code **2** so automation can distinguish input
+  issues from runtime problems.
 
 ---
 

@@ -2911,6 +2911,7 @@ dependencies = [
  "fastrand",
  "futures-util",
  "is-terminal",
+ "runloop-agent-registry",
  "runloop-agents-common",
  "runloop-bus",
  "runloop-core",
@@ -2999,6 +3000,20 @@ dependencies = [
  "runloop-core",
  "serde",
  "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "runloop-agent-registry"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "jsonschema",
+ "runloop-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "toml",
  "tracing",
 ]
 
@@ -3229,6 +3244,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "futures-util",
+ "runloop-agent-registry",
  "runloop-agents-common",
  "runloop-bus",
  "runloop-core",

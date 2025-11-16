@@ -1,16 +1,20 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::StreamExt;
+use runloop_agent_registry::AgentRegistry;
 use runloop_agents_common::{ActionDecision, ActionProposal, AgentResult, ConfirmationProvider};
 use runloop_bus::{Bus, BusServerHandle, Message, PublisherKind};
 use runloop_core::content::{CT_CTRL_REQ, CT_CTRL_RESP, CT_RUN_EVENT};
-use runloop_core::{Config, Error, OpeningId, TraceId};
-use runloop_core::{ControlRequest, ControlResponse, RunAccepted, RunSubmitRequest};
+use runloop_core::{AgentDigest, AgentRef, Config, Error, OpeningId, TraceId};
+use runloop_core::{
+    ControlRequest, ControlResponse, DescribeAgentsRequest, RunAccepted, RunSubmitRequest,
+};
 use runloop_executor_local::{ExecutorInitError, build_executor};
 use runloop_kb::{KnowledgeBase, Materializer, Provenance, StateDelta};
 use runloop_model_broker::SecretResolver;
 use runloop_openings::{RunEvent, Runner, parse_opening_str};
 use runloop_rmp::{Header, decode_payload, encode_payload};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 #[cfg(test)]
@@ -25,6 +29,7 @@ async fn main() -> Result<(), Error> {
     tracing::info!("runloopd starting");
 
     let config = Config::load()?;
+    let registry = Arc::new(AgentRegistry::new(config.agents.search_dirs.clone()));
     let bus_path = bus_socket_path(&config)?;
     let mut bus_server = start_bus(bus_path.as_path(), &config).await?;
 
@@ -57,6 +62,7 @@ async fn main() -> Result<(), Error> {
     let (ctrl_shutdown_tx, ctrl_shutdown_rx) = oneshot::channel();
     let ctrl_task = tokio::spawn(run_control_plane_with_ready(
         config.clone(),
+        registry.clone(),
         kb.clone(),
         bus.clone(),
         ctrl_shutdown_rx,
@@ -216,6 +222,7 @@ fn publisher_kind_label(kind: &PublisherKind) -> &'static str {
 
 async fn run_control_plane_with_ready(
     config: Config,
+    registry: Arc<AgentRegistry>,
     kb: KnowledgeBase,
     bus: Bus,
     mut shutdown: oneshot::Receiver<()>,
@@ -250,6 +257,7 @@ async fn run_control_plane_with_ready(
                             ControlRequest::RunSubmit(RunSubmitRequest {
                                 request_id,
                                 opening_yaml,
+                                agent_digests,
                             }) => {
                                 let req_id = request_id;
                                 let req_key = uuid_to_u128(req_id.0);
@@ -272,12 +280,16 @@ async fn run_control_plane_with_ready(
                                 }
                                 // Start the run
                                 match handle_run_submit(
-                                    &config,
-                                    &kb,
-                                    &bus,
+                                    RunSubmitContext {
+                                        config: &config,
+                                        registry: registry.as_ref(),
+                                        kb: &kb,
+                                        bus: &bus,
+                                        accepted_map: accepted.clone(),
+                                    },
                                     req_id,
                                     &opening_yaml,
-                                    accepted.clone(),
+                                    agent_digests,
                                     req_key,
                                 )
                                 .await
@@ -303,6 +315,22 @@ async fn run_control_plane_with_ready(
                                 // MVP: cancellation not implemented
                                 tracing::warn!("run cancel requested but not implemented in MVP");
                             }
+                            ControlRequest::DescribeAgents(DescribeAgentsRequest {
+                                request_id,
+                                agents,
+                            }) => {
+                                if let Err(err) = handle_describe_agents(
+                                    registry.as_ref(),
+                                    &bus,
+                                    trace_key,
+                                    request_id,
+                                    agents,
+                                )
+                                .await
+                                {
+                                    tracing::warn!("describe agents request failed: {err}");
+                                }
+                            }
                         }
                     }
                     Err(err) => tracing::warn!("failed to decode ctrl request: {}", err),
@@ -313,18 +341,59 @@ async fn run_control_plane_with_ready(
     Ok(())
 }
 
-async fn handle_run_submit(
-    config: &Config,
-    kb: &KnowledgeBase,
+async fn handle_describe_agents(
+    registry: &AgentRegistry,
     bus: &Bus,
+    trace_key: u128,
+    request_id: TraceId,
+    agents: Vec<AgentRef>,
+) -> Result<(), Error> {
+    let response = match registry.describe_many(agents.iter()) {
+        Ok(described) => ControlResponse::AgentsDescribed {
+            request_id,
+            agents: described,
+        },
+        Err(err) => ControlResponse::AgentsDescribeFailed {
+            request_id,
+            reason: err.to_string(),
+        },
+    };
+    let header = build_header(CT_CTRL_RESP, trace_key, next_msg_id());
+    let body = encode_payload(CT_CTRL_RESP, &response, None)?;
+    let frame = Message::new(header, Bytes::from(body)).map_err(|e| Error::Bus(e.to_string()))?;
+    bus.publish("rlp/ctrl", frame)
+        .await
+        .map_err(|e| Error::Bus(e.to_string()))
+}
+
+struct RunSubmitContext<'a> {
+    config: &'a Config,
+    registry: &'a AgentRegistry,
+    kb: &'a KnowledgeBase,
+    bus: &'a Bus,
+    accepted_map: Arc<Mutex<std::collections::HashMap<u128, RunAccepted>>>,
+}
+
+async fn handle_run_submit(
+    ctx: RunSubmitContext<'_>,
     request_id: TraceId,
     opening_yaml: &str,
-    accepted_map: Arc<Mutex<std::collections::HashMap<u128, RunAccepted>>>,
+    agent_digests: Vec<AgentDigest>,
     req_key: u128,
 ) -> Result<RunAccepted, Error> {
+    let RunSubmitContext {
+        config,
+        registry,
+        kb,
+        bus,
+        accepted_map,
+    } = ctx;
     // Parse opening
     let opening = parse_opening_str(opening_yaml).map_err(|e| Error::Opening(e.to_string()))?;
     let opening_name = opening.name.clone();
+    if !agent_digests.is_empty() {
+        verify_agent_digests(registry, &opening, &agent_digests)?;
+    }
     // Build executor
     let confirmation = Arc::new(DaemonConfirmationProvider::new(
         config.security.confirm_external_actions,
@@ -450,6 +519,44 @@ async fn handle_run_submit(
         opening_id,
         opening_name,
     })
+}
+
+fn verify_agent_digests(
+    registry: &AgentRegistry,
+    opening: &runloop_openings::Opening,
+    expected: &[AgentDigest],
+) -> Result<(), Error> {
+    let refs = opening.agent_refs();
+    let descriptors = registry
+        .describe_many(refs.iter())
+        .map_err(|err| Error::Config(err.to_string()))?;
+    let mut actual = BTreeMap::new();
+    for descriptor in descriptors {
+        actual.insert(descriptor.reference.clone(), descriptor.digest.clone());
+    }
+    if actual.len() != expected.len() {
+        return Err(Error::Config(
+            "agent digest count mismatch between CLI and daemon".into(),
+        ));
+    }
+    for digest in expected {
+        match actual.get(&digest.reference) {
+            Some(current) if current == &digest.digest => {}
+            Some(current) => {
+                return Err(Error::Config(format!(
+                    "agent '{}' digest mismatch (cli {}, daemon {})",
+                    digest.reference, digest.digest, current
+                )));
+            }
+            None => {
+                return Err(Error::Config(format!(
+                    "agent '{}' missing on daemon",
+                    digest.reference
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn publish_to_topic(
@@ -597,6 +704,11 @@ mod tests {
             target_model: None,
         }];
         config.security.confirm_external_actions = false;
+        let agents_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("agents");
+        config.agents.search_dirs = vec![agents_dir.to_string_lossy().into_owned()];
 
         // Bind bus and launch control loop
         let path = bus_socket_path(&config).expect("bus path");
@@ -606,10 +718,12 @@ mod tests {
             .expect("connect bus");
         let kb = KnowledgeBase::open(&config.kb).expect("open kb");
         kb.migrate().expect("migrate");
+        let registry = Arc::new(AgentRegistry::new(config.agents.search_dirs.clone()));
         let (ready_tx, ready_rx) = oneshot::channel();
         let (ctrl_shutdown_tx, ctrl_shutdown_rx) = oneshot::channel();
         let ctrl = tokio::spawn(run_control_plane_with_ready(
             config.clone(),
+            registry.clone(),
             kb.clone(),
             bus.clone(),
             ctrl_shutdown_rx,
@@ -639,6 +753,7 @@ success:
         let submit = ControlRequest::RunSubmit(RunSubmitRequest {
             request_id,
             opening_yaml: opening_yaml.into(),
+            agent_digests: Vec::new(),
         });
         let mut header = Header::default();
         header.schema_id = CT_CTRL_REQ;

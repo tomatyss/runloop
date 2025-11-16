@@ -6,6 +6,7 @@ members = [
   "crates/runtime",
   "crates/kb",
   "crates/model-broker",
+  "crates/agent-registry",
   "crates/openings",
   "crates/router",
   "crates/runloopd",

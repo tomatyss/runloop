@@ -11,3 +11,20 @@ out = ["artifact.draft.email.v1"]
 
 [caps]
 file = "policy.caps"
+
+[schemas.with]
+type = "object"
+additionalProperties = false
+required = ["topic"]
+
+[schemas.with.properties.topic]
+type = "string"
+minLength = 1
+
+[schemas.with.properties.model]
+type = "string"
+minLength = 1
+
+[schemas.with.properties.tone]
+type = "string"
+minLength = 1

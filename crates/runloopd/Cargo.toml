@@ -15,6 +15,7 @@ runloop-openings = { path = "../openings" }
 runloop-executor-local = { path = "../executor-local" }
 runloop-agents-common = { path = "../agents/common" }
 runloop-model-broker = { path = "../model-broker" }
+runloop-agent-registry = { path = "../agent-registry" }
 bytes = "1.7"
 futures-util = "0.3"
 async-trait = "0.1"
