@@ -374,7 +374,7 @@ draft artifact.
 
 ### Follow-ups (Epic I)
 
-- [ ] `rlp run`: surface invalid agent param types (validated against agent
+- [x] `rlp run`: surface invalid agent param types (validated against agent
       `manifest.toml` schemas; openings may carry temporary hints).
 - [ ] `rlp run`: `--trace-out` writes the daemon-provided trace
       (side-effect-free replayer). _Flag currently dumps the inline runner’s

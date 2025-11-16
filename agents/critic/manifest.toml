@@ -11,3 +11,7 @@ out = ["artifact.review.v1"]
 
 [caps]
 file = "policy.caps"
+
+[schemas.with]
+type = "object"
+additionalProperties = false

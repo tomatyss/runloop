@@ -6,7 +6,8 @@ mod runner;
 
 pub use parser::{
     ArtifactsSpec, ComparisonOp, Edge, Expression, Literal, Node, NodeKind, Opening, Policy,
-    PortPredicate, PortReference, Predicate, Retry, SourceLocation, SuccessCondition,
+    PortPredicate, PortReference, Predicate, Retry, SchemaHintFragment, SchemaHints,
+    SourceLocation, SuccessCondition,
 };
 pub use parser::{Error, parse_opening_str};
 pub use replay::{ReplayMismatch, ReplayReport, replay};
@@ -119,6 +120,68 @@ success:
             "replay should match original outputs"
         );
         assert_eq!(replay_report.replay_hash, report.trace.final_hash);
+    }
+
+    #[test]
+    fn agent_reference_supports_variant() {
+        let yaml = r#"
+version: 0
+name: variants
+nodes:
+  - id: alpha
+    use: agent:writer@nightly
+  - id: beta
+    use: agent:critic
+edges: []
+"#;
+        let opening = parse_opening_str(yaml).expect("parse opening");
+        let node = opening
+            .nodes
+            .iter()
+            .find(|n| n.id == "alpha")
+            .expect("alpha node");
+        match &node.kind {
+            NodeKind::Agent { reference } => {
+                assert_eq!(reference.name, "writer");
+                assert_eq!(reference.variant.as_deref(), Some("nightly"));
+            }
+            other => panic!("expected agent node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn schema_hints_build_object_schema() {
+        let yaml = r#"
+version: 0
+name: hints
+nodes:
+  - id: alpha
+    use: agent:writer
+    schema_hints:
+      with:
+        tone:
+          enum: ["neutral"]
+        topic:
+          required: true
+edges: []
+"#;
+        let opening = parse_opening_str(yaml).expect("parse opening");
+        let node = opening
+            .nodes
+            .iter()
+            .find(|n| n.id == "alpha")
+            .expect("node");
+        let schema = node.schema_hints.with_schema().expect("schema");
+        let properties = schema
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .expect("properties map");
+        assert!(properties.contains_key("tone"));
+        let required = schema
+            .get("required")
+            .and_then(|value| value.as_array())
+            .expect("required array");
+        assert!(required.iter().any(|value| value.as_str() == Some("topic")));
     }
 
     #[tokio::test]

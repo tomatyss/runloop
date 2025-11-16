@@ -3,21 +3,25 @@ mod run_events;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use dirs::home_dir;
 use futures_util::StreamExt;
 use output::{
     Cell, OutputArgs, OutputMode, Table, display_value, print_json, print_table, summarize_json,
 };
 use run_events::{RunEventEmitter, emit_ndjson_from_run_event_env};
+use runloop_agent_registry::{
+    AgentRegistry, AgentRegistryError, SchemaValidationError, digests_from, schema_property_names,
+    validate_instance,
+};
 use runloop_agents_common::{
     ActionDecision, ActionProposal, AgentError, AgentResult, ConfirmationProvider,
 };
-use runloop_bus::Bus;
+use runloop_bus::{Bus, Subscription};
 use runloop_core::config::{ConfigLayer, ConfigSource};
 use runloop_core::content::{CT_CTRL_REQ, CT_CTRL_RESP, CT_RUN_EVENT};
-use runloop_core::{Config, OpeningId, TraceId};
-use runloop_core::{ControlRequest, ControlResponse, RunAccepted, RunSubmitRequest};
+use runloop_core::{AgentDigest, AgentRef, Config, DescribedAgent, OpeningId, TraceId};
+use runloop_core::{ControlRequest, ControlResponse, DescribeAgentsRequest, RunSubmitRequest};
 use runloop_executor_local::{
     ExecutorInitError, LocalExecutor, build_executor as build_local_executor, catch_up_views,
 };
@@ -26,14 +30,17 @@ use runloop_kb::{
 };
 use runloop_model_broker::SecretResolver;
 use runloop_openings::{
-    Opening, ReplayMismatch, RunReport, RunTrace, Runner, RunnerError, parse_opening_str, replay,
+    NodeKind, Opening, ReplayMismatch, RunReport, RunTrace, Runner, RunnerError,
+    SchemaHintFragment, parse_opening_str, replay,
 };
 use runloop_rmp::{Header, decode_payload, encode_payload};
 use runloop_router::{Classification as RouterClassification, Route as RouterRoute, Router};
 use serde::Serialize;
 use serde_json::{Value as JsonValue, json, to_string_pretty, to_value, to_writer_pretty};
 use serde_yaml::{self, Mapping as YamlMapping, Value as YamlValue};
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
+use std::fmt;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -119,6 +126,15 @@ struct RunArgs {
     /// Execute directly via the local executor instead of the daemon.
     #[arg(long)]
     local: bool,
+    /// Format for rendering parameter validation errors.
+    #[arg(long = "errors-format", value_enum, default_value = "table")]
+    errors_format: ErrorsFormat,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ErrorsFormat {
+    Table,
+    Json,
 }
 
 #[derive(Args, Debug)]
@@ -233,10 +249,31 @@ enum CliError {
     DaemonUnavailable(String),
     #[error("daemon at {0} is unreachable; start it or use --local")]
     DaemonUnreachable(String),
+    #[error("daemon does not support agent metadata describe requests")]
+    DaemonDescribeUnsupported,
+    #[error("agent metadata error: {0}")]
+    AgentMetadata(String),
     #[error("control handshake timed out waiting for acceptance")]
     AcceptTimeout,
     #[error("run rejected: {code} — {message}")]
     RunRejected { code: String, message: String },
+    #[error("parameter validation failed")]
+    ValidationFailed(ValidationFailure),
+}
+
+impl CliError {
+    fn exit_code(&self) -> i32 {
+        match self {
+            CliError::ValidationFailed(_) => 2,
+            _ => 1,
+        }
+    }
+}
+
+impl From<AgentRegistryError> for CliError {
+    fn from(err: AgentRegistryError) -> Self {
+        CliError::AgentMetadata(err.to_string())
+    }
 }
 
 #[tokio::main]
@@ -244,8 +281,15 @@ async fn main() {
     match run().await {
         Ok(code) => std::process::exit(code),
         Err(err) => {
-            eprintln!("error: {err}");
-            std::process::exit(1);
+            match &err {
+                CliError::ValidationFailed(failure) => {
+                    if let Err(print_err) = print_validation_failure(failure) {
+                        eprintln!("error: failed to render validation errors: {print_err}");
+                    }
+                }
+                _ => eprintln!("error: {err}"),
+            }
+            std::process::exit(err.exit_code());
         }
     }
 }
@@ -356,10 +400,29 @@ async fn handle_why(args: WhyArgs) -> Result<(), CliError> {
 async fn handle_run(args: RunArgs) -> Result<(), CliError> {
     let config = Config::load()?;
     let prepared = prepare_opening(&args.path, args.params.as_deref())?;
-    if !args.local {
-        return submit_via_daemon(&config, &prepared).await;
+    let agent_refs = prepared.opening.agent_refs();
+    let registry = AgentRegistry::new(config.agents.search_dirs.clone());
+
+    if args.local {
+        let descriptors = load_descriptors_local(&registry, &agent_refs)?;
+        validate_opening_params(&prepared.opening, &descriptors, args.errors_format)?;
+        return run_opening_locally(&config, prepared, args.trace_out.clone()).await;
     }
-    run_opening_locally(&config, prepared, args.trace_out.clone()).await
+
+    let mut client = DaemonClient::connect(&config).await?;
+    let descriptors = match client.describe_agents(&agent_refs).await {
+        Ok(desc) => desc,
+        Err(CliError::DaemonDescribeUnsupported) => {
+            eprintln!(
+                "warning: daemon does not provide agent metadata; falling back to local manifests"
+            );
+            load_descriptors_local(&registry, &agent_refs)?
+        }
+        Err(err) => return Err(err),
+    };
+    validate_opening_params(&prepared.opening, &descriptors, args.errors_format)?;
+    let digests = digests_from(&descriptors);
+    client.run(prepared, digests).await
 }
 
 async fn handle_replay(args: ReplayArgs) -> Result<(), CliError> {
@@ -483,6 +546,193 @@ fn handle_config_path(args: ConfigPathArgs) -> Result<(), CliError> {
     } else {
         println!("no config file found; using defaults + environment overrides");
     }
+    Ok(())
+}
+
+fn load_descriptors_local(
+    registry: &AgentRegistry,
+    refs: &[AgentRef],
+) -> Result<Vec<DescribedAgent>, CliError> {
+    if refs.is_empty() {
+        return Ok(Vec::new());
+    }
+    registry.describe_many(refs.iter()).map_err(CliError::from)
+}
+
+fn validate_opening_params(
+    opening: &Opening,
+    descriptors: &[DescribedAgent],
+    format: ErrorsFormat,
+) -> Result<(), CliError> {
+    let descriptor_map = descriptors_to_map(descriptors);
+    let mut errors = Vec::new();
+    let mut hint_logger = HintLogger::default();
+    for node in &opening.nodes {
+        if let NodeKind::Agent { reference } = &node.kind {
+            let descriptor = descriptor_map.get(reference).ok_or_else(|| {
+                CliError::AgentMetadata(format!(
+                    "missing manifest metadata for agent '{}'",
+                    reference
+                ))
+            })?;
+            let params = JsonValue::Object(node.with.clone());
+            let manifest_props = descriptor
+                .schema
+                .with
+                .as_ref()
+                .map(schema_property_names)
+                .unwrap_or_default();
+            if let Some(schema) = descriptor.schema.with.as_ref() {
+                errors.extend(run_schema_validation(
+                    node.id.as_str(),
+                    reference,
+                    descriptor,
+                    schema,
+                    &params,
+                    ValidationSource::Manifest,
+                )?);
+            }
+            if let Some(hint_schema) = node.schema_hints.with_schema() {
+                if let Some(SchemaHintFragment::Properties(map)) = &node.schema_hints.with {
+                    for field in map.keys() {
+                        if manifest_props.is_empty() || !manifest_props.contains(field) {
+                            hint_logger.log_missing(reference, field);
+                        }
+                    }
+                }
+                errors.extend(run_schema_validation(
+                    node.id.as_str(),
+                    reference,
+                    descriptor,
+                    &hint_schema,
+                    &params,
+                    ValidationSource::Hint,
+                )?);
+            }
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(CliError::ValidationFailed(ValidationFailure {
+            errors,
+            format,
+        }))
+    }
+}
+
+fn descriptors_to_map(descriptors: &[DescribedAgent]) -> BTreeMap<AgentRef, DescribedAgent> {
+    let mut map = BTreeMap::new();
+    for descriptor in descriptors {
+        map.insert(descriptor.reference.clone(), descriptor.clone());
+    }
+    map
+}
+
+fn run_schema_validation(
+    node_id: &str,
+    reference: &AgentRef,
+    descriptor: &DescribedAgent,
+    schema: &JsonValue,
+    params: &JsonValue,
+    source: ValidationSource,
+) -> Result<Vec<ValidationErrorRow>, CliError> {
+    match validate_instance(schema, params) {
+        Ok(_) => Ok(Vec::new()),
+        Err(SchemaValidationError::InvalidSchema(err)) => Err(CliError::AgentMetadata(format!(
+            "invalid schema for {}: {err}",
+            reference
+        ))),
+        Err(SchemaValidationError::Violations(violations)) => {
+            let mut rows = Vec::new();
+            for violation in violations {
+                rows.push(ValidationErrorRow {
+                    node_id: node_id.to_string(),
+                    agent: reference.clone(),
+                    agent_version: descriptor.version.clone(),
+                    field: pointer_to_field(&violation.instance_path),
+                    rule: violation.kind,
+                    message: violation.message,
+                    value_summary: summarize_json(&violation.value, 48),
+                    source,
+                });
+            }
+            Ok(rows)
+        }
+    }
+}
+
+fn pointer_to_field(pointer: &str) -> String {
+    if pointer.is_empty() {
+        "(root)".into()
+    } else {
+        pointer
+            .trim_start_matches('/')
+            .split('/')
+            .map(|segment| segment.replace("~1", "/").replace("~0", "~"))
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+}
+
+fn print_validation_failure(failure: &ValidationFailure) -> io::Result<()> {
+    let issues = failure.errors.len();
+    let suffix = if issues == 1 { "" } else { "s" };
+    let label = match failure.format {
+        ErrorsFormat::Table => "table",
+        ErrorsFormat::Json => "JSON",
+    };
+    eprintln!("Parameter validation failed; {issues} issue{suffix} (see {label} below)");
+    match failure.format {
+        ErrorsFormat::Table => render_validation_table(&failure.errors),
+        ErrorsFormat::Json => render_validation_json(&failure.errors),
+    }
+}
+
+fn render_validation_table(errors: &[ValidationErrorRow]) -> io::Result<()> {
+    let mut table = Table::new(vec![
+        "node".into(),
+        "agent".into(),
+        "version".into(),
+        "field".into(),
+        "rule".into(),
+        "source".into(),
+        "detail".into(),
+    ]);
+    for error in errors {
+        let detail = format!("{} (value: {})", error.message, error.value_summary);
+        table.add_row(vec![
+            Cell::text(error.node_id.clone()),
+            Cell::text(error.agent.to_string()),
+            Cell::text(error.agent_version.clone()),
+            Cell::text(error.field.clone()),
+            Cell::text(error.rule.clone()),
+            Cell::text(error.source.to_string()),
+            Cell::text(detail),
+        ]);
+    }
+    let settings = OutputArgs::default().resolve();
+    print_table(&table, &settings)
+}
+
+fn render_validation_json(errors: &[ValidationErrorRow]) -> io::Result<()> {
+    let rows: Vec<JsonValue> = errors
+        .iter()
+        .map(|error| {
+            json!({
+                "node": error.node_id,
+                "agent": error.agent.to_string(),
+                "version": error.agent_version,
+                "field": error.field,
+                "rule": error.rule,
+                "source": error.source.to_string(),
+                "message": error.message,
+                "value": error.value_summary,
+            })
+        })
+        .collect();
+    print_json(&JsonValue::Array(rows))?;
     Ok(())
 }
 
@@ -628,7 +878,7 @@ fn active_config_path(layers: &[ConfigLayer]) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use runloop_core::EventId;
+    use runloop_core::{AgentPorts, AgentSchemaBundle, EventId};
     use runloop_router::{Classification as RouterClassification, Route as RouterRoute};
     use serde_json::json;
 
@@ -676,6 +926,76 @@ mod tests {
                 "blocked": true
             })
         );
+    }
+
+    #[test]
+    fn pointer_to_field_formats_segments() {
+        assert_eq!(pointer_to_field(""), "(root)");
+        assert_eq!(pointer_to_field("/with/topic"), "with.topic");
+        assert_eq!(
+            pointer_to_field("/with/tone~1secondary"),
+            "with.tone/secondary"
+        );
+    }
+
+    #[test]
+    fn validate_opening_params_reports_manifest_errors() {
+        let opening = parse_opening_str(
+            r#"
+version: 0
+name: test
+nodes:
+  - id: draft
+    use: agent:writer
+    with: {}
+  - id: sink
+    use: agent:critic
+edges:
+  - from: draft.out
+    to: sink.in
+"#,
+        )
+        .expect("parse opening");
+
+        let writer_descriptor = DescribedAgent {
+            reference: AgentRef::new("writer", None),
+            version: "0.1.0".into(),
+            digest: "abc123".into(),
+            schema: AgentSchemaBundle {
+                with: Some(json!({
+                    "type": "object",
+                    "required": ["topic"],
+                    "properties": {
+                        "topic": { "type": "string" }
+                    },
+                    "additionalProperties": false
+                })),
+            },
+            ports: AgentPorts::default(),
+        };
+        let critic_descriptor = DescribedAgent {
+            reference: AgentRef::new("critic", None),
+            version: "0.1.0".into(),
+            digest: "def456".into(),
+            schema: AgentSchemaBundle::default(),
+            ports: AgentPorts::default(),
+        };
+
+        let err = validate_opening_params(
+            &opening,
+            &[writer_descriptor, critic_descriptor],
+            ErrorsFormat::Table,
+        )
+        .unwrap_err();
+        match err {
+            CliError::ValidationFailed(failure) => {
+                assert_eq!(failure.errors.len(), 1);
+                assert_eq!(failure.errors[0].node_id, "draft");
+                assert_eq!(failure.errors[0].field, "(root)");
+                assert_eq!(failure.errors[0].source.to_string(), "manifest");
+            }
+            other => panic!("unexpected error {other:?}"),
+        }
     }
 }
 
@@ -929,132 +1249,195 @@ impl ConfirmationProvider for CliConfirmationProvider {
     }
 }
 
-async fn submit_via_daemon(config: &Config, prepared: &PreparedOpening) -> Result<(), CliError> {
-    // Resolve socket path with short-circuit rules
-    let path = resolve_socket_path(config).await?;
+struct DaemonClient {
+    bus: Bus,
+    ctrl_sub: Subscription,
+    socket_display: String,
+}
 
-    // Connect to the bus via IPC
-    let bus = Bus::connect(&path)
-        .await
-        .map_err(|_| CliError::DaemonUnreachable(path.display().to_string()))?;
-
-    // Subscribe to control responses before publishing request
-    let mut ctrl_sub = bus
-        .subscribe("rlp/ctrl")
-        .await
-        .map_err(|_| CliError::DaemonUnreachable(path.display().to_string()))?;
-
-    // Prepare request
-    let request_id = TraceId::new();
-    let submit = ControlRequest::RunSubmit(RunSubmitRequest {
-        request_id,
-        opening_yaml: prepared._yaml.clone(),
-    });
-    let payload = encode_payload(CT_CTRL_REQ, &submit, None)?;
-
-    let header = Header {
-        schema_id: CT_CTRL_REQ,
-        created_at_ms: current_millis(),
-        ttl_ms: 30_000, // per MVP spec
-        trace_id: uuid_to_u128(request_id.0),
-        msg_id: next_msg_id(),
-        ..Header::default()
-    };
-    let message = runloop_bus::Message::new(header, Bytes::from(payload))
-        .map_err(|e| CliError::Core(e.into()))?;
-
-    // Publish with a single retry on immediate failure (pre-accept)
-    let publish_result = bus.publish("rlp/ctrl", message.clone()).await;
-    if publish_result.is_err() {
-        // Retry once with jittered backoff
-        let jitter = 100 + (fastrand::u32(0..300) as u64);
-        time::sleep(Duration::from_millis(jitter)).await;
-        bus.publish("rlp/ctrl", message)
+impl DaemonClient {
+    async fn connect(config: &Config) -> Result<Self, CliError> {
+        let path = resolve_socket_path(config).await?;
+        let bus = Bus::connect(&path)
             .await
             .map_err(|_| CliError::DaemonUnreachable(path.display().to_string()))?;
+        let ctrl_sub = bus
+            .subscribe("rlp/ctrl")
+            .await
+            .map_err(|_| CliError::DaemonUnreachable(path.display().to_string()))?;
+        Ok(Self {
+            bus,
+            ctrl_sub,
+            socket_display: path.display().to_string(),
+        })
     }
 
-    // Await RunAccepted up to 2000 ms
-    let accept = time::timeout(Duration::from_millis(2000), async move {
-        while let Some(msg) = ctrl_sub.next().await {
-            if msg.header.schema_id != CT_CTRL_RESP {
-                continue;
-            }
-            // Ensure correlation on trace id
-            if msg.header.trace_id != uuid_to_u128(request_id.0) {
-                continue;
-            }
-            let decoded = decode_payload::<ControlResponse>(CT_CTRL_RESP, &msg.body)
-                .map_err(|e| CliError::Core(e.into()))?;
-            match decoded.payload {
-                ControlResponse::RunAccepted(acc) => return Ok::<RunAccepted, CliError>(acc),
-                ControlResponse::RunRejected {
-                    request_id: _rid,
-                    reason,
-                } => {
-                    return Err(CliError::RunRejected {
-                        code: "UNKNOWN".into(),
-                        message: reason,
-                    });
-                }
-                ControlResponse::RunCancelled { .. } => {
-                    return Err(CliError::RunRejected {
-                        code: "CANCELLED".into(),
-                        message: "run cancelled before start".into(),
-                    });
-                }
-            }
+    async fn describe_agents(
+        &mut self,
+        refs: &[AgentRef],
+    ) -> Result<Vec<DescribedAgent>, CliError> {
+        if refs.is_empty() {
+            return Ok(Vec::new());
         }
-        Err(CliError::AcceptTimeout)
-    })
-    .await
-    .unwrap_or(Err(CliError::AcceptTimeout))?;
-
-    // Subscribe to unified run event stream
-    let topic = format!("rlp/runs/{}/events", accept.trace_id);
-    let mut ev_sub = bus
-        .subscribe(&topic)
-        .await
-        .map_err(|_| CliError::DaemonUnreachable(path.display().to_string()))?;
-
-    // Stream CT_RUN_EVENT frames to NDJSON, mapping to the existing format
-    let mut final_success: Option<bool> = None;
-    while let Some(msg) = ev_sub.next().await {
-        if msg.header.schema_id != CT_RUN_EVENT {
-            continue;
-        }
-        match decode_payload::<serde_json::Value>(CT_RUN_EVENT, &msg.body) {
-            Ok(env) => {
-                if let Err(err) = emit_ndjson_from_run_event_env(
-                    TraceId(uuid_from_u128(msg.header.trace_id)),
-                    &accept.opening_id,
-                    &accept.opening_name,
-                    &env.payload,
-                ) {
-                    eprintln!("warning: failed to render event: {err}");
-                }
-                let kind = env.payload.get("kind").and_then(|v| v.as_str());
-                let success = env
-                    .payload
-                    .get("meta")
-                    .and_then(|m| m.get("success"))
-                    .and_then(|v| v.as_bool());
-                // Terminal when daemon emits a status event with meta.success
-                if matches!(kind, Some("status")) && success.is_some() {
-                    final_success = success;
-                    break;
-                }
+        let request_id = TraceId::new();
+        let request = ControlRequest::DescribeAgents(DescribeAgentsRequest {
+            request_id,
+            agents: refs.to_vec(),
+        });
+        self.send_request(request_id, request).await?;
+        let response = self
+            .wait_for_control_response(request_id, Duration::from_millis(800), || {
+                CliError::DaemonDescribeUnsupported
+            })
+            .await?;
+        match response {
+            ControlResponse::AgentsDescribed { agents, .. } => Ok(agents),
+            ControlResponse::AgentsDescribeFailed { reason, .. } => {
+                Err(CliError::AgentMetadata(reason))
             }
-            Err(err) => {
-                eprintln!("warning: failed to decode run event: {err}");
-            }
+            _ => Err(CliError::AgentMetadata(
+                "unexpected control response while describing agents".into(),
+            )),
         }
     }
 
-    match final_success {
-        Some(true) => Ok(()),
-        Some(false) => Err(CliError::RunFailure(accept.trace_id)),
-        None => Err(CliError::RunFailure(accept.trace_id)),
+    async fn run(
+        mut self,
+        prepared: PreparedOpening,
+        digests: Vec<AgentDigest>,
+    ) -> Result<(), CliError> {
+        let request_id = TraceId::new();
+        let submit = ControlRequest::RunSubmit(RunSubmitRequest {
+            request_id,
+            opening_yaml: prepared._yaml.clone(),
+            agent_digests: digests,
+        });
+        self.send_request(request_id, submit).await?;
+        let response = self
+            .wait_for_control_response(request_id, Duration::from_millis(2000), || {
+                CliError::AcceptTimeout
+            })
+            .await?;
+        let accept = match response {
+            ControlResponse::RunAccepted(acc) => acc,
+            ControlResponse::RunRejected { reason, .. } => {
+                return Err(CliError::RunRejected {
+                    code: "REJECTED".into(),
+                    message: reason,
+                });
+            }
+            ControlResponse::RunCancelled { .. } => {
+                return Err(CliError::RunRejected {
+                    code: "CANCELLED".into(),
+                    message: "run cancelled before start".into(),
+                });
+            }
+            other => {
+                return Err(CliError::AgentMetadata(format!(
+                    "unexpected control response: {other:?}"
+                )));
+            }
+        };
+        let topic = format!("rlp/runs/{}/events", accept.trace_id);
+        let mut ev_sub = self
+            .bus
+            .subscribe(&topic)
+            .await
+            .map_err(|_| CliError::DaemonUnreachable(self.socket_display.clone()))?;
+
+        let mut final_success: Option<bool> = None;
+        while let Some(msg) = ev_sub.next().await {
+            if msg.header.schema_id != CT_RUN_EVENT {
+                continue;
+            }
+            match decode_payload::<serde_json::Value>(CT_RUN_EVENT, &msg.body) {
+                Ok(env) => {
+                    if let Err(err) = emit_ndjson_from_run_event_env(
+                        TraceId(uuid_from_u128(msg.header.trace_id)),
+                        &accept.opening_id,
+                        &accept.opening_name,
+                        &env.payload,
+                    ) {
+                        eprintln!("warning: failed to render event: {err}");
+                    }
+                    let kind = env.payload.get("kind").and_then(|v| v.as_str());
+                    let success = env
+                        .payload
+                        .get("meta")
+                        .and_then(|m| m.get("success"))
+                        .and_then(|v| v.as_bool());
+                    if matches!(kind, Some("status")) && success.is_some() {
+                        final_success = success;
+                        break;
+                    }
+                }
+                Err(err) => {
+                    eprintln!("warning: failed to decode run event: {err}");
+                }
+            }
+        }
+
+        match final_success {
+            Some(true) => Ok(()),
+            Some(false) => Err(CliError::RunFailure(accept.trace_id)),
+            None => Err(CliError::RunFailure(accept.trace_id)),
+        }
+    }
+
+    async fn send_request(
+        &self,
+        request_id: TraceId,
+        request: ControlRequest,
+    ) -> Result<(), CliError> {
+        let payload = encode_payload(CT_CTRL_REQ, &request, None)?;
+        let header = Header {
+            schema_id: CT_CTRL_REQ,
+            created_at_ms: current_millis(),
+            ttl_ms: 30_000,
+            trace_id: uuid_to_u128(request_id.0),
+            msg_id: next_msg_id(),
+            ..Header::default()
+        };
+        let message = runloop_bus::Message::new(header, Bytes::from(payload))
+            .map_err(|e| CliError::Core(e.into()))?;
+        let publish_result = self.bus.publish("rlp/ctrl", message.clone()).await;
+        if publish_result.is_err() {
+            let jitter = 100 + (fastrand::u32(0..300) as u64);
+            time::sleep(Duration::from_millis(jitter)).await;
+            self.bus
+                .publish("rlp/ctrl", message)
+                .await
+                .map_err(|_| CliError::DaemonUnreachable(self.socket_display.clone()))
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn wait_for_control_response<F>(
+        &mut self,
+        request_id: TraceId,
+        timeout: Duration,
+        on_timeout: F,
+    ) -> Result<ControlResponse, CliError>
+    where
+        F: FnOnce() -> CliError,
+    {
+        let trace_key = uuid_to_u128(request_id.0);
+        let fut = async {
+            while let Some(msg) = self.ctrl_sub.next().await {
+                if msg.header.schema_id != CT_CTRL_RESP || msg.header.trace_id != trace_key {
+                    continue;
+                }
+                let decoded = decode_payload::<ControlResponse>(CT_CTRL_RESP, &msg.body)
+                    .map_err(|e| CliError::Core(e.into()))?;
+                return Ok(decoded.payload);
+            }
+            Err(CliError::AcceptTimeout)
+        };
+        match time::timeout(timeout, fut).await {
+            Ok(result) => result,
+            Err(_) => Err(on_timeout()),
+        }
     }
 }
 
@@ -1203,6 +1586,56 @@ struct PreparedOpening {
     _yaml: String,
     params: JsonValue,
     opening_name: String,
+}
+
+#[derive(Clone, Debug)]
+struct ValidationFailure {
+    errors: Vec<ValidationErrorRow>,
+    format: ErrorsFormat,
+}
+
+#[derive(Clone, Debug)]
+struct ValidationErrorRow {
+    node_id: String,
+    agent: AgentRef,
+    agent_version: String,
+    field: String,
+    rule: String,
+    message: String,
+    value_summary: String,
+    source: ValidationSource,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ValidationSource {
+    Manifest,
+    Hint,
+}
+
+impl fmt::Display for ValidationSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidationSource::Manifest => f.write_str("manifest"),
+            ValidationSource::Hint => f.write_str("hint"),
+        }
+    }
+}
+
+#[derive(Default)]
+struct HintLogger {
+    seen: BTreeSet<String>,
+}
+
+impl HintLogger {
+    fn log_missing(&mut self, reference: &AgentRef, field: &str) {
+        let key = format!("{}|{}", reference.spec(), field);
+        if self.seen.insert(key) {
+            eprintln!(
+                "note: using schema hint for {}.{field} (manifest lacks schema)",
+                reference
+            );
+        }
+    }
 }
 
 fn prepare_opening(path: &str, params_override: Option<&str>) -> Result<PreparedOpening, CliError> {

@@ -1,7 +1,8 @@
 use indexmap::IndexSet;
+use runloop_core::AgentRef;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use serde_yaml::{Mapping, Sequence, Value};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -64,7 +65,7 @@ pub struct Policy {
 
 #[derive(Clone, Debug)]
 pub enum NodeKind {
-    Agent { name: String },
+    Agent { reference: AgentRef },
     Opening { name: String },
 }
 
@@ -82,11 +83,34 @@ pub struct Node {
     pub id: String,
     pub kind: NodeKind,
     pub with: JsonMap<String, JsonValue>,
+    pub schema_hints: SchemaHints,
     pub retry: Retry,
     pub timeout_ms: Option<u64>,
     pub budget_tokens: Option<u32>,
     pub tags: Vec<String>,
     pub location: SourceLocation,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SchemaHints {
+    pub with: Option<SchemaHintFragment>,
+}
+
+#[derive(Clone, Debug)]
+pub enum SchemaHintFragment {
+    Raw(JsonValue),
+    Properties(JsonMap<String, JsonValue>),
+}
+
+impl SchemaHints {
+    /// Convert the hint into a JSON Schema fragment, if present.
+    pub fn with_schema(&self) -> Option<JsonValue> {
+        match &self.with {
+            Some(SchemaHintFragment::Raw(value)) => Some(value.clone()),
+            Some(SchemaHintFragment::Properties(props)) => Some(build_hint_schema(props)),
+            None => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -175,6 +199,22 @@ pub struct Opening {
     pub edges: Vec<Edge>,
     pub success: Option<SuccessCondition>,
     pub artifacts: ArtifactsSpec,
+}
+
+impl Opening {
+    /// Return the unique list of agent references referenced by this opening.
+    pub fn agent_refs(&self) -> Vec<AgentRef> {
+        let mut seen = BTreeSet::new();
+        let mut refs = Vec::new();
+        for node in &self.nodes {
+            if let NodeKind::Agent { reference } = &node.kind
+                && seen.insert(reference.clone())
+            {
+                refs.push(reference.clone());
+            }
+        }
+        refs
+    }
 }
 
 pub fn parse_opening_str(source: &str) -> Result<Opening, Error> {
@@ -350,9 +390,14 @@ fn parse_nodes(
 
         let mut with = with_map;
         apply_param_templates(&mut with, params, locate_child(source, node_loc, "with"))?;
+        let schema_hints =
+            parse_schema_hints(mapping_get(mapping, "schema_hints"), source, node_loc)?;
 
         if confirm_external
-            && matches!(&kind, NodeKind::Agent { name } if name == "mailer")
+            && matches!(
+                &kind,
+                NodeKind::Agent { reference } if reference.name == "mailer"
+            )
             && matches!(
                 with.get("require_human_confirm"),
                 Some(JsonValue::Bool(false))
@@ -409,6 +454,7 @@ fn parse_nodes(
             id,
             kind,
             with,
+            schema_hints,
             retry,
             timeout_ms,
             budget_tokens,
@@ -420,6 +466,114 @@ fn parse_nodes(
     Ok(nodes)
 }
 
+fn parse_schema_hints(
+    value: Option<&Value>,
+    source: &str,
+    node_loc: SourceLocation,
+) -> Result<SchemaHints, Error> {
+    let Some(value) = value else {
+        return Ok(SchemaHints::default());
+    };
+    let loc = locate_child(source, node_loc, "schema_hints");
+    let mapping = value
+        .as_mapping()
+        .ok_or_else(|| Error::validation("schema_hints must be a mapping", loc))?;
+    let with = mapping_get(mapping, "with")
+        .map(|v| parse_with_hint_fragment(v, source, locate_child(source, loc, "with")))
+        .transpose()?;
+    Ok(SchemaHints { with })
+}
+
+fn parse_with_hint_fragment(
+    value: &Value,
+    _source: &str,
+    loc: SourceLocation,
+) -> Result<SchemaHintFragment, Error> {
+    if let Some(map) = value.as_mapping() {
+        if is_schema_like(map) {
+            let json_value: JsonValue = serde_yaml::from_value(value.clone()).map_err(|err| {
+                Error::validation(format!("invalid schema_hints.with entry: {err}"), loc)
+            })?;
+            return Ok(SchemaHintFragment::Raw(json_value));
+        }
+        let mut props = JsonMap::new();
+        for (key, fragment) in map {
+            let Some(key_str) = key.as_str() else {
+                return Err(Error::validation(
+                    "schema_hints.with keys must be strings",
+                    loc,
+                ));
+            };
+            let json_value: JsonValue =
+                serde_yaml::from_value(fragment.clone()).map_err(|err| {
+                    Error::validation(format!("invalid schema hint for '{key_str}': {err}"), loc)
+                })?;
+            props.insert(key_str.to_string(), json_value);
+        }
+        return Ok(SchemaHintFragment::Properties(props));
+    }
+    let json_value: JsonValue = serde_yaml::from_value(value.clone())
+        .map_err(|err| Error::validation(format!("invalid schema_hints.with value: {err}"), loc))?;
+    Ok(SchemaHintFragment::Raw(json_value))
+}
+
+fn is_schema_like(map: &Mapping) -> bool {
+    const SCHEMA_KEYS: &[&str] = &[
+        "type",
+        "$schema",
+        "properties",
+        "required",
+        "allOf",
+        "anyOf",
+        "oneOf",
+        "not",
+        "items",
+        "const",
+        "$defs",
+        "definitions",
+        "$ref",
+    ];
+    map.keys().any(|key| {
+        key.as_str()
+            .map(|candidate| {
+                SCHEMA_KEYS
+                    .iter()
+                    .any(|schema_key| schema_key == &candidate)
+            })
+            .unwrap_or(false)
+    })
+}
+
+fn build_hint_schema(props: &JsonMap<String, JsonValue>) -> JsonValue {
+    let mut required = Vec::new();
+    let mut normalized = JsonMap::new();
+    for (name, fragment) in props {
+        let mut is_required = false;
+        let cleaned = match fragment.clone() {
+            JsonValue::Object(mut obj) => {
+                if let Some(flag) = obj.remove("required")
+                    && flag.as_bool().unwrap_or(false)
+                {
+                    is_required = true;
+                }
+                JsonValue::Object(obj)
+            }
+            other => other,
+        };
+        if is_required {
+            required.push(JsonValue::String(name.clone()));
+        }
+        normalized.insert(name.clone(), cleaned);
+    }
+    let mut schema = JsonMap::new();
+    schema.insert("type".into(), JsonValue::String("object".into()));
+    schema.insert("properties".into(), JsonValue::Object(normalized));
+    if !required.is_empty() {
+        schema.insert("required".into(), JsonValue::Array(required));
+    }
+    JsonValue::Object(schema)
+}
+
 fn parse_use(raw: &str, source: &str, loc: SourceLocation) -> Result<NodeKind, Error> {
     let parts: Vec<_> = raw.split(':').collect();
     if parts.len() != 2 {
@@ -429,9 +583,10 @@ fn parse_use(raw: &str, source: &str, loc: SourceLocation) -> Result<NodeKind, E
         ));
     }
     let kind = match parts[0] {
-        "agent" => NodeKind::Agent {
-            name: parts[1].to_string(),
-        },
+        "agent" => {
+            let reference = parse_agent_reference(parts[1], source, loc)?;
+            NodeKind::Agent { reference }
+        }
         "opening" => NodeKind::Opening {
             name: parts[1].to_string(),
         },
@@ -443,6 +598,46 @@ fn parse_use(raw: &str, source: &str, loc: SourceLocation) -> Result<NodeKind, E
         }
     };
     Ok(kind)
+}
+
+fn parse_agent_reference(raw: &str, source: &str, loc: SourceLocation) -> Result<AgentRef, Error> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(Error::validation("agent reference cannot be empty", loc));
+    }
+    let (name, variant) = if let Some((name, variant)) = trimmed.split_once('@') {
+        (name.trim(), Some(variant.trim()))
+    } else {
+        (trimmed, None)
+    };
+    if name.is_empty() {
+        return Err(Error::validation("agent name cannot be empty", loc));
+    }
+    if !valid_identifier(name) {
+        return Err(Error::validation(
+            "agent name must contain only alphanumeric characters, '-' or '_'",
+            locate_pattern(source, format!("use: agent:{raw}")),
+        ));
+    }
+    if let Some(variant) = variant {
+        if variant.is_empty() {
+            return Err(Error::validation("agent variant cannot be empty", loc));
+        }
+        if !valid_identifier(variant) {
+            return Err(Error::validation(
+                "agent variant must contain only alphanumeric characters, '-' or '_'",
+                locate_pattern(source, format!("use: agent:{raw}")),
+            ));
+        }
+        return Ok(AgentRef::new(name.to_string(), Some(variant.to_string())));
+    }
+    Ok(AgentRef::new(name.to_string(), None))
+}
+
+fn valid_identifier(value: &str) -> bool {
+    value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 fn parse_retry(value: &Value, source: &str, node_loc: SourceLocation) -> Result<Retry, Error> {
@@ -513,9 +708,6 @@ fn parse_edges(value: &Value, source: &str) -> Result<Vec<Edge>, Error> {
     let seq = value
         .as_sequence()
         .ok_or_else(|| Error::validation("edges must be a sequence", loc))?;
-    if seq.is_empty() {
-        return Err(Error::validation("edges must not be empty", loc));
-    }
 
     let mut edges = Vec::with_capacity(seq.len());
     for entry in seq {

@@ -13,7 +13,7 @@ use runloop_agents_common::{
     AgentContext, AgentError, ConfirmationProvider, ContextBundle, DraftArtifact, ResolvedContact,
     Review,
 };
-use runloop_core::Config;
+use runloop_core::{AgentRef, Config};
 use runloop_kb::{KnowledgeBase, Materializer, Provenance, StateDelta};
 use runloop_model_broker::{Broker, BrokerInitError, SecretResolver};
 use runloop_openings::{
@@ -119,10 +119,16 @@ impl LocalExecutor {
 
     async fn exec_agent(
         &self,
-        name: &str,
+        reference: &AgentRef,
         request: NodeExecutionRequest<'_>,
     ) -> Result<NodeExecution, RunnerError> {
-        match name {
+        if let Some(variant) = &reference.variant {
+            return Err(RunnerError::Executor(format!(
+                "agent '{}' variant '{variant}' unsupported in local executor",
+                reference.name
+            )));
+        }
+        match reference.name.as_str() {
             "contact_resolver" => self.exec_contact(request).await,
             "context_gatherer" => self.exec_context(request).await,
             "writer" => self.exec_writer(request).await,
@@ -341,7 +347,7 @@ impl Executor for LocalExecutor {
         request: NodeExecutionRequest<'_>,
     ) -> Result<NodeExecution, RunnerError> {
         match &request.node.kind {
-            NodeKind::Agent { name } => self.exec_agent(name, request).await,
+            NodeKind::Agent { reference } => self.exec_agent(reference, request).await,
             NodeKind::Opening { name } => Err(RunnerError::Executor(format!(
                 "nested opening '{name}' unsupported in CLI executor"
             ))),

@@ -1,4 +1,4 @@
-use crate::{OpeningId, TraceId};
+use crate::{AgentDigest, AgentRef, DescribedAgent, OpeningId, TraceId};
 use serde::{Deserialize, Serialize};
 
 /// Control-plane request envelope carried over `CT_CTRL_REQ`.
@@ -8,6 +8,8 @@ pub enum ControlRequest {
     RunSubmit(RunSubmitRequest),
     /// Cancel a previously-submitted run by trace id.
     RunCancel(RunCancelRequest),
+    /// Describe manifest metadata for a list of agent references.
+    DescribeAgents(DescribeAgentsRequest),
 }
 
 /// Submit an opening YAML blob for execution.
@@ -15,12 +17,21 @@ pub enum ControlRequest {
 pub struct RunSubmitRequest {
     pub request_id: TraceId,
     pub opening_yaml: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_digests: Vec<AgentDigest>,
 }
 
 /// Cancel request payload.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RunCancelRequest {
     pub trace_id: TraceId,
+}
+
+/// Describe agents referenced by the CLI.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DescribeAgentsRequest {
+    pub request_id: TraceId,
+    pub agents: Vec<AgentRef>,
 }
 
 /// Control-plane response carried over `CT_CTRL_RESP`.
@@ -34,6 +45,14 @@ pub enum ControlResponse {
     RunCancelled {
         request_id: TraceId,
         trace_id: TraceId,
+    },
+    AgentsDescribed {
+        request_id: TraceId,
+        agents: Vec<DescribedAgent>,
+    },
+    AgentsDescribeFailed {
+        request_id: TraceId,
+        reason: String,
     },
 }
 
