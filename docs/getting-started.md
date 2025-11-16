@@ -57,6 +57,31 @@ See the tree in `README.md` for directories. Key docs:
 Finer details appear in `docs/ops.md`. As implementation lands, these commands
 gain real outputs; until then they serve as interface contracts.
 
+## Installing from the Debian package
+
+1. Build the `.deb` from source (Debian 13/trixie host):
+
+   ```bash
+   just deb
+   ```
+
+   Artifacts land in `../runloop_<version>_<arch>.deb`.
+
+2. Install and start the daemon:
+
+   ```bash
+   sudo apt install ../runloop_0.1.0~alpha1-1_amd64.deb
+   sudo systemctl status runloopd
+   ```
+
+   The package installs `runloopd`, `rlp`, and `agtop`, writes the default
+   config to `/etc/runloop/config.yaml`, creates `/var/lib/runloop`, and starts
+   the `runloopd` systemd unit.
+
+3. Update `/etc/runloop/config.yaml` as needed, then run
+   `sudo systemctl restart runloopd`. Purging the package removes the config,
+   state, and the `runloop` system user.
+
 ## Finding work items
 
 - `TODO.md` → repo scaffolding checklist
