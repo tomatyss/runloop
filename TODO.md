@@ -313,7 +313,7 @@ returns correct email, confidence ≥ 0.8.
 
 **DoD:** Returns ≥1 bullet and citations referencing KB events.
 
-- [ ] Harden the LIKE predicate (lowercase `payload_json`, escape `%`/`_`) so
+- [x] Harden the LIKE predicate (lowercase `payload_json`, escape `%`/`_`) so
       topic/contact filters behave case-insensitively without accidental
       wildcard injection.
 
@@ -507,7 +507,7 @@ cleanly.
 
 ### N1. Docs that match what you built
 
-- [ ] Update `docs/architecture.md` with **current** component boundaries.
+- [x] Update `docs/architecture.md` with **current** component boundaries.
 - [ ] Add a “Prompt routing & shell integration” section (or
       `docs/router-shell.md`) describing how interactive prompts flow through
       the router, how shell hooks work, and how to disable them.

@@ -24,20 +24,15 @@ pub async fn gather(ctx: &AgentContext, req: ContextRequest) -> AgentResult<Cont
 fn collect_snippets(ctx: &AgentContext, req: &ContextRequest) -> AgentResult<Vec<ContextSnippet>> {
     let mut clauses = Vec::new();
     if let Some(contact) = &req.contact {
-        clauses.push(format!(
-            "payload_json LIKE '%{}%'",
-            escape_like(&contact.email)
-        ));
-        clauses.push(format!(
-            "payload_json LIKE '%{}%'",
-            escape_like(&contact.name.to_ascii_lowercase())
-        ));
+        if !contact.email.is_empty() {
+            clauses.push(payload_like_clause(&contact.email));
+        }
+        if !contact.name.is_empty() {
+            clauses.push(payload_like_clause(&contact.name));
+        }
     }
     if !req.topic.is_empty() {
-        clauses.push(format!(
-            "payload_json LIKE '%{}%'",
-            escape_like(&req.topic.to_ascii_lowercase())
-        ));
+        clauses.push(payload_like_clause(&req.topic));
     }
     let predicate = if clauses.is_empty() {
         "1=1".to_string()
@@ -110,8 +105,25 @@ fn summarise_payload(payload: &str, topic: &str) -> String {
     }
 }
 
-fn escape_like(input: &str) -> String {
-    input.replace('\'', "''")
+fn payload_like_clause(term: &str) -> String {
+    format!(
+        "LOWER(payload_json) LIKE '%{}%' ESCAPE '\\\\'",
+        normalize_like_pattern(term)
+    )
+}
+
+fn normalize_like_pattern(input: &str) -> String {
+    let mut escaped = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch.to_ascii_lowercase() {
+            '\'' => escaped.push_str("''"),
+            '\\' => escaped.push_str("\\\\"),
+            '%' => escaped.push_str("\\%"),
+            '_' => escaped.push_str("\\_"),
+            other => escaped.push(other),
+        }
+    }
+    escaped
 }
 
 #[cfg(test)]
@@ -127,7 +139,19 @@ mod tests {
     }
 
     #[test]
-    fn escape_like_doubles_quotes() {
-        assert_eq!(escape_like("acme'co"), "acme''co");
+    fn normalize_like_pattern_escapes_specials_and_lowercases() {
+        assert_eq!(
+            normalize_like_pattern(r#"Q4_Plan 50%\ Path's"#),
+            r#"q4\_plan 50\%\\ path''s"#
+        );
+    }
+
+    #[test]
+    fn payload_like_clause_builds_literal_case_insensitive_match() {
+        let clause = payload_like_clause("John_Doe 50%");
+        assert_eq!(
+            clause,
+            "LOWER(payload_json) LIKE '%john\\_doe 50\\%%' ESCAPE '\\\\'"
+        );
     }
 }
