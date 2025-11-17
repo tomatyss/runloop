@@ -179,7 +179,7 @@ The control plane uses the same bus and framing:
   - `ttl_ms = 30000` (30s) for control requests.
 - Response: `CT_CTRL_RESP` with
   `ControlResponse::{RunAccepted, RunRejected, RunCancelled}`.
-  - `RunAccepted` carries `{ request_id, trace_id, opening_id, opening_name }`.
+- `RunAccepted` carries `{ request_id, trace_id, opening_id, opening_name }`.
 - Idempotency: the daemon MUST treat duplicate `CT_CTRL_REQ` with identical
   `trace_id` as idempotent.
 - Acceptance timeout: the CLI waits up to 2000 ms for `RunAccepted` before
@@ -187,6 +187,65 @@ The control plane uses the same bus and framing:
 - Rejections: `RunRejected` includes a human `reason`. Future protocol revisions
   may add structured `code` / `detail` fields once the daemon emits them; the
   CLI surfaces the textual reason today.
+
+### 9.1 Executor ↔ agent envelopes
+
+- Topic namespace: `agent/<agent_ref>` (one topic per logical agent). The
+  executor publishes requests here. Each request includes a unique
+  `reply_topic` (e.g., `rlp/runs/<trace_id>/agents/<agent>/<uuid>`), and the
+  agent publishes its response on that topic.
+- Request (`CT_EXECUTOR_AGENT_REQUEST`, type `intent.executor.agent.request.v1`)
+  body:
+
+  ```json
+  {
+    "type": "intent.executor.agent.request.v1",
+    "payload": {
+      "node": {
+        /* serialized Node from the DSL */
+      },
+      "inputs": {
+        /* NodeInputs */
+      },
+      "trace_id": "trace:...",
+      "opening_id": "opening:...",
+      "attempt": 1,
+      "reply_topic": "rlp/runs/<trace>/agents/<agent>/<uuid>"
+    },
+    "meta": null
+  }
+  ```
+
+  RMP headers carry `trace_id`, `msg_id`, and TTL (default **30s**). The
+  executor subscribes to `reply_topic` before publishing the request.
+
+- Response (`CT_EXECUTOR_AGENT_RESPONSE`, type
+  `toolresult.executor.agent.response.v1`) body:
+
+  ```json
+  {
+    "type": "toolresult.executor.agent.response.v1",
+    "payload": {
+      "Completed": { "ports": {"out": [ {"schema_id": 0x00D1, "type": "artifact.draft.email.v1", "value": {...}} ] } }
+    }
+    // meta is currently omitted
+  }
+  ```
+
+  or
+
+  ```json
+  {
+    "type": "toolresult.executor.agent.response.v1",
+    "payload": {
+      "Failed": { "retryable": false, "reason": "timeout" }
+    }
+  }
+  ```
+
+- Agents (WASM or shim) consume the request body, execute their work, and
+  publish the response on the per-request `reply_topic`. The executor rebuilds
+  `NodeOutputs` from the typed port data.
 
 ## 10. Run event stream (MVP)
 

@@ -3255,6 +3255,7 @@ dependencies = [
  "runloop-model-broker",
  "runloop-openings",
  "runloop-rmp",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

@@ -1,11 +1,12 @@
 use indexmap::IndexSet;
 use runloop_core::AgentRef;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use serde_yaml::{Mapping, Sequence, Value};
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fmt;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceLocation {
     pub line: usize,
     pub column: usize,
@@ -56,20 +57,20 @@ impl Error {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Policy {
     pub budget_tokens: Option<u32>,
     pub timeout_ms: Option<u64>,
     pub confirm_external: Option<bool>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum NodeKind {
     Agent { reference: AgentRef },
     Opening { name: String },
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Retry {
     pub max_attempts: u32,
     pub initial_backoff_ms: u64,
@@ -78,7 +79,7 @@ pub struct Retry {
     pub jitter: f32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Node {
     pub id: String,
     pub kind: NodeKind,
@@ -91,12 +92,12 @@ pub struct Node {
     pub location: SourceLocation,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SchemaHints {
     pub with: Option<SchemaHintFragment>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SchemaHintFragment {
     Raw(JsonValue),
     Properties(JsonMap<String, JsonValue>),
@@ -113,13 +114,13 @@ impl SchemaHints {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PortReference {
     pub node: String,
     pub port: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Literal {
     Bool(bool),
     Integer(i64),
@@ -127,7 +128,7 @@ pub enum Literal {
     String(String),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ComparisonOp {
     Eq,
     NotEq,
@@ -151,19 +152,19 @@ impl fmt::Display for ComparisonOp {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Predicate {
     pub op: ComparisonOp,
     pub value: Literal,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PortPredicate {
     pub reference: PortReference,
     pub predicate: Predicate,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Edge {
     pub from: PortReference,
     pub predicate: Option<Predicate>,
@@ -171,24 +172,24 @@ pub struct Edge {
     pub location: SourceLocation,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Expression {
     Exists(PortReference),
     Comparison(PortPredicate),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SuccessCondition {
     AnyOf(Vec<Expression>),
     AllOf(Vec<Expression>),
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ArtifactsSpec {
     pub save: Vec<PortReference>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Opening {
     pub version: u32,
     pub name: String,

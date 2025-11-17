@@ -1,5 +1,8 @@
+mod executor_bus;
+
 use async_trait::async_trait;
 use bytes::Bytes;
+use executor_bus::{AgentDispatcher, BusExecutor};
 use futures_util::StreamExt;
 use runloop_agent_registry::AgentRegistry;
 use runloop_agents_common::{ActionDecision, ActionProposal, AgentResult, ConfirmationProvider};
@@ -53,10 +56,22 @@ async fn main() -> Result<(), Error> {
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let mat_worker = tokio::spawn(run_materializer(materializer, shutdown_rx));
 
+    let confirmation = Arc::new(DaemonConfirmationProvider::new(
+        config.security.confirm_external_actions,
+    ));
+    let secrets: Arc<dyn SecretResolver> = Arc::new(DaemonSecretResolver);
+    let local_executor =
+        build_executor(config.clone(), confirmation, secrets).map_err(|e| match e {
+            ExecutorInitError::Config(err) => err,
+            other => Error::Runtime(other.to_string()),
+        })?;
+
     // Connect as daemon publisher
     let bus = Bus::connect_as(bus_path.as_path(), PublisherKind::Agent)
         .await
         .map_err(|e| Error::Bus(e.to_string()))?;
+
+    let dispatcher = Arc::new(AgentDispatcher::new(bus.clone(), local_executor));
 
     // Spawn control-plane loop
     let (ctrl_shutdown_tx, ctrl_shutdown_rx) = oneshot::channel();
@@ -65,6 +80,7 @@ async fn main() -> Result<(), Error> {
         registry.clone(),
         kb.clone(),
         bus.clone(),
+        dispatcher.clone(),
         ctrl_shutdown_rx,
         None,
     ));
@@ -86,6 +102,7 @@ async fn main() -> Result<(), Error> {
             tracing::warn!("control plane task join error: {join_err}");
         }
     }
+    dispatcher.shutdown().await;
     drop(bus);
     bus_server.close();
 
@@ -221,10 +238,11 @@ fn publisher_kind_label(kind: &PublisherKind) -> &'static str {
 }
 
 async fn run_control_plane_with_ready(
-    config: Config,
+    _config: Config,
     registry: Arc<AgentRegistry>,
     kb: KnowledgeBase,
     bus: Bus,
+    dispatcher: Arc<AgentDispatcher>,
     mut shutdown: oneshot::Receiver<()>,
     ready: Option<oneshot::Sender<()>>,
 ) -> Result<(), Error> {
@@ -281,10 +299,10 @@ async fn run_control_plane_with_ready(
                                 // Start the run
                                 match handle_run_submit(
                                     RunSubmitContext {
-                                        config: &config,
                                         registry: registry.as_ref(),
                                         kb: &kb,
                                         bus: &bus,
+                                        dispatcher: dispatcher.clone(),
                                         accepted_map: accepted.clone(),
                                     },
                                     req_id,
@@ -367,10 +385,10 @@ async fn handle_describe_agents(
 }
 
 struct RunSubmitContext<'a> {
-    config: &'a Config,
     registry: &'a AgentRegistry,
     kb: &'a KnowledgeBase,
     bus: &'a Bus,
+    dispatcher: Arc<AgentDispatcher>,
     accepted_map: Arc<Mutex<std::collections::HashMap<u128, RunAccepted>>>,
 }
 
@@ -382,10 +400,10 @@ async fn handle_run_submit(
     req_key: u128,
 ) -> Result<RunAccepted, Error> {
     let RunSubmitContext {
-        config,
         registry,
         kb,
         bus,
+        dispatcher,
         accepted_map,
     } = ctx;
     // Parse opening
@@ -394,15 +412,8 @@ async fn handle_run_submit(
     if !agent_digests.is_empty() {
         verify_agent_digests(registry, &opening, &agent_digests)?;
     }
-    // Build executor
-    let confirmation = Arc::new(DaemonConfirmationProvider::new(
-        config.security.confirm_external_actions,
-    ));
-    let secrets = Arc::new(DaemonSecretResolver);
-    let executor = build_executor(config.clone(), confirmation, secrets).map_err(|e| match e {
-        ExecutorInitError::Config(err) => err,
-        other => Error::Runtime(other.to_string()),
-    })?;
+    // Build bus executor for this run
+    let executor = Arc::new(BusExecutor::new(bus.clone(), dispatcher.clone()));
 
     // Create runner and setup event channel
     let runner = Runner::new(opening, executor);
@@ -626,11 +637,11 @@ fn current_millis() -> u64 {
         .as_millis() as u64
 }
 
-fn uuid_to_u128(id: uuid::Uuid) -> u128 {
+pub(crate) fn uuid_to_u128(id: uuid::Uuid) -> u128 {
     id.as_u128()
 }
 
-fn next_msg_id() -> u64 {
+pub(crate) fn next_msg_id() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)
@@ -757,6 +768,13 @@ edges:
         let kb = KnowledgeBase::open(&config.kb).expect("open kb");
         kb.migrate().expect("migrate");
         let registry = Arc::new(AgentRegistry::new(config.agents.search_dirs.clone()));
+        let confirmation = Arc::new(DaemonConfirmationProvider::new(
+            config.security.confirm_external_actions,
+        ));
+        let secrets: Arc<dyn SecretResolver> = Arc::new(DaemonSecretResolver);
+        let local_executor =
+            build_executor(config.clone(), confirmation, secrets).expect("build executor");
+        let dispatcher = Arc::new(AgentDispatcher::new(bus.clone(), local_executor));
         let (ready_tx, ready_rx) = oneshot::channel();
         let (ctrl_shutdown_tx, ctrl_shutdown_rx) = oneshot::channel();
         let ctrl = tokio::spawn(run_control_plane_with_ready(
@@ -764,6 +782,7 @@ edges:
             registry.clone(),
             kb.clone(),
             bus.clone(),
+            dispatcher.clone(),
             ctrl_shutdown_rx,
             Some(ready_tx),
         ));
@@ -842,6 +861,7 @@ success:
         ctrl.await
             .expect("ctrl task join")
             .expect("control plane finished cleanly");
+        dispatcher.shutdown().await;
     }
 
     #[test]
