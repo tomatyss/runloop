@@ -20,6 +20,7 @@
   - [Release Process](release-process.md)
 
 - [Tools](tools.md)
+  - [Router & Shell Integration](router-shell.md)
   - [TUI](tui.md)
 
 - [Contributor Guide](contributor-guide.md)

@@ -510,8 +510,8 @@ cleanly.
 ### N1. Docs that match what you built
 
 - [x] Update `docs/architecture.md` with **current** component boundaries.
-- [ ] Add a “Prompt routing & shell integration” section (or
-      `docs/router-shell.md`) describing how interactive prompts flow through
+- [x] Add a “Prompt routing & shell integration” section
+      (`docs/router-shell.md`) describing how interactive prompts flow through
       the router, how shell hooks work, and how to disable them.
 - [ ] `docs/message-protocol.md`: fill header fields table; example frame.
 - [ ] `docs/kb-schemas.md`: list MVP event kinds with fields.

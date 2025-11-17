@@ -21,6 +21,7 @@ most relevant guides and specs from this workspace.
 - [Operations runbook](ops.md)
 - [Release process](release-process.md)
 - [Contributor guide](contributor-guide.md)
+- [Prompt routing & shell integration](router-shell.md)
 
 ## More Resources
 

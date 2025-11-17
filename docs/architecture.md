@@ -54,8 +54,8 @@ or depends on. Paths refer to workspace members declared in `Cargo.toml`.
   invocations are serialized into `CT_EXECUTOR_AGENT_REQUEST` envelopes,
   published on `agent/<agent>`, and responses (`CT_EXECUTOR_AGENT_RESPONSE`)
   arrive on the per-request reply topic encoded in the payload. A dispatcher
-  keeps per-agent workers alive, so the runner no longer calls the
-  LocalExecutor directly.
+  keeps per-agent workers alive, so the runner no longer calls the LocalExecutor
+  directly.
 - Exposes the daemon service entrypoint packaged for both user and system mode.
 
 ### Message Bus & RMP (`crates/rmp`, `crates/bus`)
@@ -168,8 +168,8 @@ or depends on. Paths refer to workspace members declared in `Cargo.toml`.
 - **Protocol:** [docs/message-protocol.md](message-protocol.md)
 - **Knowledge base schemas:** [docs/kb-schemas.md](kb-schemas.md)
 - **Openings grammar:** [docs/openings-dsl.md](openings-dsl.md)
-- **Router & shell integration:** forthcoming section per TODO Epic O; interim
-  coverage lives in [README.md](../README.md).
+- **Router & shell integration:** see [`docs/router-shell.md`](router-shell.md)
+  for routing heuristics, snippets, and opt-in shell wiring.
 - **Operations:** [docs/ops.md](ops.md)
 - **Observability tooling:** [docs/perf.md](perf.md), `docs/tui.md`
   (screenshots).

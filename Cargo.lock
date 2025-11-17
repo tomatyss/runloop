@@ -2925,6 +2925,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "tempfile",
  "terminal_size",
  "textwrap",
  "thiserror 2.0.17",
