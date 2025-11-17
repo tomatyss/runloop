@@ -216,7 +216,28 @@ impl SchemasSection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use runloop_core::AgentRef;
+    use std::path::{Path, PathBuf};
+    use tempfile::tempdir;
+
+    fn write_manifest(root: &Path, manifest: &str) -> PathBuf {
+        let agent_dir = root.join("writer");
+        std::fs::create_dir_all(&agent_dir).expect("create agent dir");
+        let manifest_path = agent_dir.join("manifest.toml");
+        std::fs::write(&manifest_path, manifest).expect("write manifest");
+        manifest_path
+    }
+
+    fn basic_manifest() -> &'static str {
+        r#"[agent]
+name = "writer"
+version = "1.0.0"
+
+[ports]
+in = []
+out = []
+"#
+    }
 
     #[test]
     fn describe_loads_manifest_schema() {
@@ -230,5 +251,60 @@ mod tests {
             .expect("describe writer");
         assert_eq!(descriptor.reference.name, "writer");
         assert!(descriptor.schema.with.is_some());
+    }
+
+    #[test]
+    fn describe_many_deduplicates_references() {
+        let tmp = tempdir().expect("tmp dir");
+        write_manifest(tmp.path(), basic_manifest());
+        let registry = AgentRegistry::new([tmp.path().to_path_buf()]);
+        let reference = AgentRef::new("writer", None);
+        let refs = vec![reference.clone(), reference];
+        let described = registry.describe_many(refs.iter()).expect("describe");
+        assert_eq!(
+            described.len(),
+            1,
+            "duplicate references should be collapsed"
+        );
+    }
+
+    #[test]
+    fn describe_rejects_variant_mismatch() {
+        let tmp = tempdir().expect("tmp dir");
+        write_manifest(
+            tmp.path(),
+            r#"[agent]
+name = "writer"
+version = "1.0.0"
+variant = "pro"
+
+[ports]
+in = []
+out = []
+"#,
+        );
+        let registry = AgentRegistry::new([tmp.path().to_path_buf()]);
+        let err = registry
+            .describe(&AgentRef::new("writer", Some("basic".into())))
+            .expect_err("variant mismatch should fail");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("variant mismatch"),
+            "expected mismatch detail, got {msg}"
+        );
+    }
+
+    #[test]
+    fn schema_property_names_extracts_keys() {
+        let schema = serde_json::json!({
+            "properties": {
+                "alpha": {},
+                "beta": {}
+            }
+        });
+        let props = schema_property_names(&schema);
+        assert!(props.contains("alpha"));
+        assert!(props.contains("beta"));
+        assert_eq!(props.len(), 2);
     }
 }

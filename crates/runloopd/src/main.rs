@@ -684,6 +684,44 @@ mod tests {
     use super::*;
     use runloop_core::config::{ModelProvider, ModelRoute, ProviderKind};
 
+    fn fixture_registry_and_opening() -> (AgentRegistry, runloop_openings::Opening) {
+        let agents_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("agents");
+        let registry = AgentRegistry::new(vec![agents_dir.to_string_lossy().into_owned()]);
+        let opening_yaml = r#"version: 0
+name: digest-test
+nodes:
+  - id: a
+    use: agent:writer
+  - id: b
+    use: agent:critic
+edges:
+  - from: a.out
+    to: b.in
+"#;
+        let opening =
+            parse_opening_str(opening_yaml).expect("opening fixture parses for digest tests");
+        (registry, opening)
+    }
+
+    fn current_digests(
+        registry: &AgentRegistry,
+        opening: &runloop_openings::Opening,
+    ) -> Vec<AgentDigest> {
+        let refs = opening.agent_refs();
+        registry
+            .describe_many(refs.iter())
+            .expect("describe succeeds")
+            .into_iter()
+            .map(|desc| AgentDigest {
+                reference: desc.reference,
+                digest: desc.digest,
+            })
+            .collect()
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn control_accepts_and_streams_events() {
         let tmp = tempdir().expect("tmp");
@@ -850,5 +888,44 @@ success:
         let err = action_decision_acl(&kinds).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("unknown publisher kind"));
+    }
+
+    #[test]
+    fn verify_agent_digests_accepts_matching_values() {
+        let (registry, opening) = fixture_registry_and_opening();
+        let digests = current_digests(&registry, &opening);
+        verify_agent_digests(&registry, &opening, &digests).expect("digests match");
+    }
+
+    #[test]
+    fn verify_agent_digests_detects_digest_mismatch() {
+        let (registry, opening) = fixture_registry_and_opening();
+        let mut digests = current_digests(&registry, &opening);
+        assert!(!digests.is_empty(), "fixture opening should include agents");
+        digests[0].digest = "deadbeef".into();
+        let err = verify_agent_digests(&registry, &opening, &digests).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("digest mismatch"));
+    }
+
+    #[test]
+    fn verify_agent_digests_detects_missing_agent_reference() {
+        let (registry, opening) = fixture_registry_and_opening();
+        let mut digests = current_digests(&registry, &opening);
+        assert!(!digests.is_empty(), "fixture opening should include agents");
+        digests[0].reference = AgentRef::new("nonexistent", None);
+        let err = verify_agent_digests(&registry, &opening, &digests).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("missing on daemon"));
+    }
+
+    #[test]
+    fn verify_agent_digests_detects_length_mismatch() {
+        let (registry, opening) = fixture_registry_and_opening();
+        let mut digests = current_digests(&registry, &opening);
+        digests.pop();
+        let err = verify_agent_digests(&registry, &opening, &digests).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("digest count mismatch"));
     }
 }
