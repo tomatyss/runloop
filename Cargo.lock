@@ -229,6 +229,7 @@ name = "b3sum"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "tempfile",
 ]
 
 [[package]]
@@ -3012,6 +3013,7 @@ dependencies = [
  "runloop-core",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.17",
  "toml",
  "tracing",

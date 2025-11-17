@@ -291,3 +291,61 @@ fn truncate(input: &str, max: usize) -> String {
         slice
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn sample_record(kind: &str, node: Option<&str>) -> NdjsonRecord {
+        NdjsonRecord {
+            ts_ms: 123,
+            _trace_id: "trace:1".into(),
+            run_id: "run-1".into(),
+            opening_id: "opening-1".into(),
+            kind: kind.into(),
+            level: "info".into(),
+            message: "msg".into(),
+            meta: match node {
+                Some(name) => {
+                    json!({"node": name, "status": "running", "attempt": 1, "duration_ms": 42 })
+                }
+                None => json!({}),
+            },
+        }
+    }
+
+    #[test]
+    fn dashboard_state_tracks_run_and_nodes() {
+        let mut state = DashboardState::default();
+        state.apply(NdjsonRecord {
+            kind: "run.started".into(),
+            meta: json!({"opening_name": "compose"}),
+            ..sample_record("run.started", None)
+        });
+        assert_eq!(state.last_run_id.as_deref(), Some("run-1"));
+        assert_eq!(state.last_opening.as_deref(), Some("compose"));
+        state.apply(NdjsonRecord {
+            level: "ERROR".into(),
+            meta: json!({"node": "writer", "chunk": "failure", "status": "error", "attempt": 2, "duration_ms": 99}),
+            ..sample_record("log", Some("writer"))
+        });
+        let nodes = state.sorted_nodes();
+        assert_eq!(nodes.len(), 1);
+        let (name, stats) = &nodes[0];
+        assert_eq!(name, "writer");
+        assert_eq!(stats.status, "error");
+        assert_eq!(stats.attempt, 2);
+        assert_eq!(stats.duration_ms, 99);
+        assert_eq!(stats.last_level.to_lowercase(), "error");
+        assert_eq!(state.total_events, 2);
+    }
+
+    #[test]
+    fn truncate_adds_ellipsis_when_exceeding_limit() {
+        let base = "abcdefghijklmnopqrstuvwxyz";
+        let truncated = truncate(base, 10);
+        assert!(truncated.ends_with("..."));
+        assert_eq!(truncated.chars().count(), 10);
+    }
+}
