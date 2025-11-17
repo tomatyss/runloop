@@ -356,7 +356,10 @@ mod tests {
     use super::*;
     use std::env;
     use std::path::PathBuf;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
     use tempfile::tempdir;
+
+    static CWD_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     #[test]
     fn enable_inserts_block() {
@@ -456,13 +459,21 @@ mod tests {
     }
     struct DirGuard {
         original: PathBuf,
+        _lock: MutexGuard<'static, ()>,
     }
 
     impl DirGuard {
         fn new(path: &Path) -> Self {
+            let lock = CWD_LOCK
+                .get_or_init(|| Mutex::new(()))
+                .lock()
+                .expect("cwd mutex poisoned");
             let original = env::current_dir().unwrap();
             env::set_current_dir(path).unwrap();
-            Self { original }
+            Self {
+                original,
+                _lock: lock,
+            }
         }
     }
 
