@@ -1,5 +1,6 @@
 mod output;
 mod run_events;
+mod shell;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -38,6 +39,10 @@ use runloop_router::{Classification as RouterClassification, Route as RouterRout
 use serde::Serialize;
 use serde_json::{Value as JsonValue, json, to_string_pretty, to_value, to_writer_pretty};
 use serde_yaml::{self, Mapping as YamlMapping, Value as YamlValue};
+use shell::{
+    DisableRequest, EnableRequest, ShellAction, ShellEditResult, ShellFlavor,
+    disable as disable_shell, enable as enable_shell,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fmt;
@@ -73,6 +78,8 @@ enum Commands {
     Kb(KbCommands),
     #[command(subcommand)]
     Config(ConfigCommands),
+    #[command(subcommand)]
+    Shell(ShellCommands),
 }
 
 #[derive(Args, Debug)]
@@ -219,6 +226,44 @@ struct ConfigPathArgs {
     output: OutputArgs,
 }
 
+#[derive(Subcommand, Debug)]
+enum ShellCommands {
+    Enable(ShellEnableArgs),
+    Disable(ShellDisableArgs),
+}
+
+#[derive(Args, Debug)]
+struct ShellEnableArgs {
+    /// Shell flavor to configure.
+    #[arg(long = "shell", value_enum, default_value_t = ShellFlavor::Zsh)]
+    flavor: ShellFlavor,
+    /// Override rc file path (defaults to ~/.zshrc or ~/.bashrc).
+    #[arg(long = "rc-path", value_name = "PATH")]
+    rc_path: Option<PathBuf>,
+    /// Override snippet path (defaults to system/user share locations).
+    #[arg(long = "snippet", value_name = "PATH")]
+    snippet_path: Option<PathBuf>,
+    /// Opening YAML path exported as RUNLOOP_ROUTER_OPENING_PATH.
+    #[arg(long = "opening", value_name = "PATH")]
+    opening_path: Option<PathBuf>,
+    /// Preview the edits without touching files.
+    #[arg(long = "dry-run")]
+    dry_run: bool,
+}
+
+#[derive(Args, Debug)]
+struct ShellDisableArgs {
+    /// Shell flavor to remove integration from.
+    #[arg(long = "shell", value_enum, default_value_t = ShellFlavor::Zsh)]
+    flavor: ShellFlavor,
+    /// Override rc file path (defaults to ~/.zshrc or ~/.bashrc).
+    #[arg(long = "rc-path", value_name = "PATH")]
+    rc_path: Option<PathBuf>,
+    /// Preview the edits without touching files.
+    #[arg(long = "dry-run")]
+    dry_run: bool,
+}
+
 #[derive(Debug, Error)]
 enum CliError {
     #[error(transparent)]
@@ -255,6 +300,8 @@ enum CliError {
     AgentMetadata(String),
     #[error("control handshake timed out waiting for acceptance")]
     AcceptTimeout,
+    #[error("shell integration error: {0}")]
+    ShellIntegration(String),
     #[error("run rejected: {code} — {message}")]
     RunRejected { code: String, message: String },
     #[error("parameter validation failed")]
@@ -273,6 +320,12 @@ impl CliError {
 impl From<AgentRegistryError> for CliError {
     fn from(err: AgentRegistryError) -> Self {
         CliError::AgentMetadata(err.to_string())
+    }
+}
+
+impl From<shell::ShellError> for CliError {
+    fn from(err: shell::ShellError) -> Self {
+        CliError::ShellIntegration(err.to_string())
     }
 }
 
@@ -316,6 +369,10 @@ async fn run() -> Result<i32, CliError> {
         }
         Commands::Config(cmd) => {
             handle_config(cmd).await?;
+            Ok(0)
+        }
+        Commands::Shell(cmd) => {
+            handle_shell(cmd).await?;
             Ok(0)
         }
     }
@@ -547,6 +604,51 @@ fn handle_config_path(args: ConfigPathArgs) -> Result<(), CliError> {
         println!("no config file found; using defaults + environment overrides");
     }
     Ok(())
+}
+
+async fn handle_shell(cmd: ShellCommands) -> Result<(), CliError> {
+    match cmd {
+        ShellCommands::Enable(args) => {
+            let request = EnableRequest {
+                flavor: args.flavor,
+                rc_path: args.rc_path,
+                snippet_override: args.snippet_path,
+                opening_path: args.opening_path,
+                dry_run: args.dry_run,
+            };
+            let result = enable_shell(request)?;
+            render_shell_result(&result);
+        }
+        ShellCommands::Disable(args) => {
+            let request = DisableRequest {
+                flavor: args.flavor,
+                rc_path: args.rc_path,
+                dry_run: args.dry_run,
+            };
+            let result = disable_shell(request)?;
+            render_shell_result(&result);
+        }
+    }
+    Ok(())
+}
+
+fn render_shell_result(result: &ShellEditResult) {
+    let status = match result.action {
+        ShellAction::Added => "installed runloop shell integration",
+        ShellAction::Removed => "removed runloop shell integration",
+        ShellAction::AlreadyPresent => "shell integration already present",
+        ShellAction::NotFound => "shell integration block not found",
+    };
+    println!("{status} in {}", result.rc_path.display());
+    if let Some(snippet) = &result.snippet_path {
+        println!("snippet: {}", snippet.display());
+    }
+    if result.dry_run {
+        println!("dry-run: no files modified");
+    }
+    for note in &result.notes {
+        println!("- {note}");
+    }
 }
 
 fn load_descriptors_local(

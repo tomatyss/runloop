@@ -329,6 +329,9 @@ Local‑first storage with:
     `{ "version": 1, "route": "agent", "rule": "fallback:opening", "blocked": false }`
     and exits `10` for shell decisions or `11` for agent decisions so shells can
     branch without parsing stdout.
+  - See [`docs/router-shell.md`](docs/router-shell.md) for opt-in shell
+    integration (zsh/bash widgets, env toggles, and the `rlp shell enable`
+    helper).
   - Run an Opening locally with
     `cargo run -p rlp -- run examples/openings/compose_email.yaml --params '{"recipient":"john","topic":"Q4 plan"}' --trace-out trace.json`.
     The command now drives the full compose-email stack (contact resolver →

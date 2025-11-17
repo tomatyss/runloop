@@ -168,8 +168,8 @@ or depends on. Paths refer to workspace members declared in `Cargo.toml`.
 - **Protocol:** [docs/message-protocol.md](message-protocol.md)
 - **Knowledge base schemas:** [docs/kb-schemas.md](kb-schemas.md)
 - **Openings grammar:** [docs/openings-dsl.md](openings-dsl.md)
-- **Router & shell integration:** forthcoming section per TODO Epic O; interim
-  coverage lives in [README.md](../README.md).
+- **Router & shell integration:** see [`docs/router-shell.md`](router-shell.md)
+  for routing heuristics, snippets, and opt-in shell wiring.
 - **Operations:** [docs/ops.md](ops.md)
 - **Observability tooling:** [docs/perf.md](perf.md), `docs/tui.md`
   (screenshots).
