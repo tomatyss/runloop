@@ -272,7 +272,9 @@ include line/col. ✅
 ### Follow-ups (Epic G)
 
 - [ ] Integrate Runner with `runloopd`/bus executor so node work goes through
-      real agents instead of the local stub.
+      real agents instead of the local stub. _(Bus executor + dispatcher landed;
+      remaining work: launch actual WASM/shim agents rather than proxying
+      through the LocalExecutor.)_
 - [ ] Persist run/replay traces in the knowledge base (`run.*` / `node.*`
       events) once schemas are ready.
 

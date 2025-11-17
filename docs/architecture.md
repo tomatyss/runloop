@@ -50,6 +50,12 @@ or depends on. Paths refer to workspace members declared in `Cargo.toml`.
   and enforces lifecycle (timeouts, retry orchestration, resource budgeting).
 - Hosts the message bus listener and publishes audit events (`run.*`, `node.*`,
   `cap.audit`) into the KB.
+- `runloopd` now attaches the openings runner to a **bus executor**: node
+  invocations are serialized into `CT_EXECUTOR_AGENT_REQUEST` envelopes,
+  published on `agent/<agent>`, and responses (`CT_EXECUTOR_AGENT_RESPONSE`)
+  arrive on the per-request reply topic encoded in the payload. A dispatcher
+  keeps per-agent workers alive, so the runner no longer calls the
+  LocalExecutor directly.
 - Exposes the daemon service entrypoint packaged for both user and system mode.
 
 ### Message Bus & RMP (`crates/rmp`, `crates/bus`)

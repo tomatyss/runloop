@@ -117,6 +117,18 @@ static DESCRIPTORS: &[TypeDescriptor] = &[
     type_descriptor!(CT_REVIEW_CRITIQUE, Critique, "review", 1),
     type_descriptor!(CT_INTENT_SEND_MAIL, Intent, "send.mail", 1),
     type_descriptor!(CT_MAIL_RESULT, ToolResult, "mail.result", 1),
+    type_descriptor!(
+        CT_EXECUTOR_AGENT_REQUEST,
+        Intent,
+        "executor.agent.request",
+        1
+    ),
+    type_descriptor!(
+        CT_EXECUTOR_AGENT_RESPONSE,
+        ToolResult,
+        "executor.agent.response",
+        1
+    ),
     type_descriptor!(CT_CTRL_REQ, Intent, "ctrl.request", 1),
     type_descriptor!(CT_CTRL_RESP, ToolResult, "ctrl.response", 1),
     type_descriptor!(CT_METRICS_SNAPSHOT, Observation, "metrics.snapshot", 1),
