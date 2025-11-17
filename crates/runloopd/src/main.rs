@@ -17,7 +17,7 @@ use runloop_kb::{KnowledgeBase, Materializer, Provenance, StateDelta};
 use runloop_model_broker::SecretResolver;
 use runloop_openings::{RunEvent, Runner, parse_opening_str};
 use runloop_rmp::{Header, decode_payload, encode_payload};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 #[cfg(test)]
@@ -253,7 +253,6 @@ async fn run_control_plane_with_ready(
     if let Some(tx) = ready {
         let _ = tx.send(());
     }
-    use std::collections::HashMap;
     let accepted: Arc<Mutex<HashMap<u128, RunAccepted>>> = Arc::new(Mutex::new(HashMap::new()));
     loop {
         tokio::select! {
@@ -312,9 +311,7 @@ async fn run_control_plane_with_ready(
                                 )
                                 .await
                                 {
-                                    Ok(acc) => {
-                                        accepted.lock().unwrap().insert(req_key, acc);
-                                    }
+                                    Ok(_) => {}
                                     Err(err) => {
                                         let reason = format!("{err}");
                                         let resp = ControlResponse::RunRejected {
@@ -389,7 +386,372 @@ struct RunSubmitContext<'a> {
     kb: &'a KnowledgeBase,
     bus: &'a Bus,
     dispatcher: Arc<AgentDispatcher>,
-    accepted_map: Arc<Mutex<std::collections::HashMap<u128, RunAccepted>>>,
+    accepted_map: Arc<Mutex<HashMap<u128, RunAccepted>>>,
+}
+
+struct RunSession {
+    runner: Runner<BusExecutor>,
+    trace_id: TraceId,
+    opening_id: OpeningId,
+    opening_name: String,
+    events: mpsc::UnboundedReceiver<RunEvent>,
+}
+
+impl RunSession {
+    fn acceptance(&self, request_id: TraceId) -> RunAccepted {
+        RunAccepted {
+            request_id,
+            trace_id: self.trace_id,
+            opening_id: self.opening_id,
+            opening_name: self.opening_name.clone(),
+        }
+    }
+
+    fn topic(&self) -> String {
+        format!("rlp/runs/{}/events", self.trace_id)
+    }
+
+    fn trace_key(&self) -> u128 {
+        uuid_to_u128(self.trace_id.0)
+    }
+}
+
+struct RunLauncher<'a> {
+    registry: &'a AgentRegistry,
+    kb: &'a KnowledgeBase,
+    bus: &'a Bus,
+    dispatcher: Arc<AgentDispatcher>,
+    accepted_map: Arc<Mutex<HashMap<u128, RunAccepted>>>,
+}
+
+impl<'a> RunLauncher<'a> {
+    fn new(ctx: RunSubmitContext<'a>) -> Self {
+        Self {
+            registry: ctx.registry,
+            kb: ctx.kb,
+            bus: ctx.bus,
+            dispatcher: ctx.dispatcher,
+            accepted_map: ctx.accepted_map,
+        }
+    }
+
+    async fn launch(
+        &self,
+        request_id: TraceId,
+        opening_yaml: &str,
+        agent_digests: Vec<AgentDigest>,
+        req_key: u128,
+    ) -> Result<RunAccepted, Error> {
+        let repository = RunRepository::new(self.kb.clone());
+        let session = self.prepare_session(opening_yaml, &agent_digests)?;
+        let accepted = session.acceptance(request_id);
+        repository
+            .record_started(&accepted.trace_id, &accepted.opening_id)
+            .map_err(|e| Error::Kb(e.to_string()))?;
+        if let Err(err) = self.accept_request(&accepted).await {
+            repository.record_failed_start(&accepted.trace_id, &accepted.opening_id);
+            return Err(err);
+        }
+        self.insert_acceptance(req_key, &accepted);
+        self.spawn_runner(session, req_key, repository.clone());
+        Ok(accepted)
+    }
+
+    fn prepare_session(
+        &self,
+        opening_yaml: &str,
+        agent_digests: &[AgentDigest],
+    ) -> Result<RunSession, Error> {
+        let opening = parse_opening_str(opening_yaml).map_err(|e| Error::Opening(e.to_string()))?;
+        if !agent_digests.is_empty() {
+            verify_agent_digests(self.registry, &opening, agent_digests)?;
+        }
+        let opening_name = opening.name.clone();
+        let runner = Runner::new(opening, self.build_executor());
+        let trace_id = runner.trace_id();
+        let opening_id = runner.opening_id();
+        let (tx, rx) = mpsc::unbounded_channel();
+        let runner = runner.with_event_tx(tx);
+        Ok(RunSession {
+            runner,
+            trace_id,
+            opening_id,
+            opening_name,
+            events: rx,
+        })
+    }
+
+    async fn accept_request(&self, accepted: &RunAccepted) -> Result<(), Error> {
+        let response = ControlResponse::RunAccepted(accepted.clone());
+        let header = build_header(
+            CT_CTRL_RESP,
+            uuid_to_u128(accepted.request_id.0),
+            next_msg_id(),
+        );
+        let body = encode_payload(CT_CTRL_RESP, &response, None)?;
+        let frame =
+            Message::new(header, Bytes::from(body)).map_err(|e| Error::Bus(e.to_string()))?;
+        self.bus
+            .publish("rlp/ctrl", frame)
+            .await
+            .map_err(|e| Error::Bus(e.to_string()))
+    }
+
+    fn spawn_runner(&self, session: RunSession, req_key: u128, repository: RunRepository) {
+        let bus = self.bus.clone();
+        let streamer = RunStreamer::new(bus, repository, self.accepted_map.clone());
+        streamer.spawn(session, req_key);
+    }
+
+    fn build_executor(&self) -> Arc<BusExecutor> {
+        Arc::new(BusExecutor::new(self.bus.clone(), self.dispatcher.clone()))
+    }
+
+    fn insert_acceptance(&self, req_key: u128, accepted: &RunAccepted) {
+        let mut guard = match self.accepted_map.lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                tracing::warn!("accepted_map poisoned; skipping idempotency insert");
+                return;
+            }
+        };
+        guard.insert(req_key, accepted.clone());
+    }
+}
+
+#[derive(Clone)]
+struct RunRepository {
+    kb: KnowledgeBase,
+}
+
+impl RunRepository {
+    fn new(kb: KnowledgeBase) -> Self {
+        Self { kb }
+    }
+
+    fn record_started(
+        &self,
+        trace_id: &TraceId,
+        opening_id: &OpeningId,
+    ) -> Result<(), runloop_kb::Error> {
+        record_kb_run_event(&self.kb, trace_id, opening_id, "run.started", "started")
+    }
+
+    fn record_finished(&self, trace_id: &TraceId, opening_id: &OpeningId, status: &str) {
+        if let Err(err) =
+            record_kb_run_event(&self.kb, trace_id, opening_id, "run.finished", status)
+        {
+            tracing::warn!(%err, "failed to persist run.finished");
+        }
+    }
+
+    fn record_failed_start(&self, trace_id: &TraceId, opening_id: &OpeningId) {
+        if let Err(err) =
+            record_kb_run_event(&self.kb, trace_id, opening_id, "run.finished", "failed")
+        {
+            tracing::warn!(%err, "failed to persist failed run start");
+        }
+    }
+}
+
+struct RunStreamer {
+    bus: Bus,
+    repository: RunRepository,
+    accepted_map: Arc<Mutex<HashMap<u128, RunAccepted>>>,
+}
+
+impl RunStreamer {
+    fn new(
+        bus: Bus,
+        repository: RunRepository,
+        accepted_map: Arc<Mutex<HashMap<u128, RunAccepted>>>,
+    ) -> Self {
+        Self {
+            bus,
+            repository,
+            accepted_map,
+        }
+    }
+
+    fn spawn(self, session: RunSession, req_key: u128) {
+        tokio::spawn(async move { self.pump(session, req_key).await });
+    }
+
+    async fn pump(self, session: RunSession, req_key: u128) {
+        let RunStreamer {
+            bus,
+            repository,
+            accepted_map,
+        } = self;
+        let topic = session.topic();
+        let trace_key = session.trace_key();
+        let RunSession {
+            runner,
+            trace_id,
+            opening_id,
+            opening_name: _,
+            mut events,
+        } = session;
+        let mut run_future = Box::pin(async move { runner.run().await });
+        let composer = EventComposer::new(trace_id, opening_id);
+        tokio::task::yield_now().await;
+        sleep(Duration::from_millis(20)).await;
+        let _ = publish_to_topic(&bus, &topic, trace_key, composer.started()).await;
+        loop {
+            tokio::select! {
+                res = &mut run_future => {
+                    match res {
+                        Ok(report) => {
+                            let success = report.trace.success;
+                            let payload = composer.finished(success);
+                            let _ = publish_to_topic(&bus, &topic, trace_key, payload).await;
+                            repository.record_finished(composer.trace_id(), composer.opening_id(), if success { "finished" } else { "failed" });
+                        }
+                        Err(err) => {
+                            let payload = composer.failure(&err.to_string());
+                            let _ = publish_to_topic(&bus, &topic, trace_key, payload).await;
+                            repository.record_finished(composer.trace_id(), composer.opening_id(), "failed");
+                        }
+                    }
+                    break;
+                }
+                maybe_event = events.recv() => {
+                    match maybe_event {
+                        Some(event) => {
+                            if let Some(payload) = composer.event_payload(event) {
+                                let _ = publish_to_topic(&bus, &topic, trace_key, payload).await;
+                            }
+                        }
+                        None => break,
+                    }
+                }
+            }
+        }
+        let _ = accepted_map.lock().map(|mut guard| guard.remove(&req_key));
+    }
+}
+
+struct EventComposer {
+    trace_id: TraceId,
+    opening_id: OpeningId,
+}
+
+impl EventComposer {
+    fn new(trace_id: TraceId, opening_id: OpeningId) -> Self {
+        Self {
+            trace_id,
+            opening_id,
+        }
+    }
+
+    fn trace_id(&self) -> &TraceId {
+        &self.trace_id
+    }
+
+    fn opening_id(&self) -> &OpeningId {
+        &self.opening_id
+    }
+
+    fn started(&self) -> serde_json::Value {
+        self.status_payload("info", "run started".into(), None)
+    }
+
+    fn finished(&self, success: bool) -> serde_json::Value {
+        let level = if success { "info" } else { "error" };
+        let message = if success {
+            "run ok".to_string()
+        } else {
+            "run error".to_string()
+        };
+        self.status_payload(level, message, Some(success))
+    }
+
+    fn failure(&self, err: &str) -> serde_json::Value {
+        self.status_payload("error", format!("run failed: {err}"), Some(false))
+    }
+
+    fn event_payload(&self, event: RunEvent) -> Option<serde_json::Value> {
+        match event {
+            RunEvent::NodeState {
+                node_id,
+                state,
+                attempt,
+            } => Some(self.node_state(node_id, state, attempt)),
+            RunEvent::LogLine {
+                node_id,
+                level,
+                message,
+            } => Some(self.log_line(node_id, level, message)),
+            RunEvent::TraceLine { line } => Some(self.trace_line(line)),
+            RunEvent::Completed { .. } => None,
+        }
+    }
+
+    fn node_state(
+        &self,
+        node_id: String,
+        state: runloop_openings::NodeState,
+        attempt: u32,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "kind": "plan",
+            "message": format!("node {node_id} state update"),
+            "meta": {
+                "ts_ms": current_millis(),
+                "run_id": self.trace_id.to_string(),
+                "node_id": node_id,
+                "attempt": attempt,
+                "state": format!("{state:?}")
+            }
+        })
+    }
+
+    fn log_line(&self, node_id: String, level: String, message: String) -> serde_json::Value {
+        serde_json::json!({
+            "kind": "log",
+            "level": level,
+            "message": message,
+            "meta": {
+                "ts_ms": current_millis(),
+                "run_id": self.trace_id.to_string(),
+                "node_id": node_id
+            }
+        })
+    }
+
+    fn trace_line(&self, line: String) -> serde_json::Value {
+        serde_json::json!({
+            "kind": "trace",
+            "level": "info",
+            "message": line,
+            "meta": {
+                "ts_ms": current_millis(),
+                "run_id": self.trace_id.to_string()
+            }
+        })
+    }
+
+    fn status_payload(
+        &self,
+        level: &'static str,
+        message: String,
+        success: Option<bool>,
+    ) -> serde_json::Value {
+        let mut meta = serde_json::json!({
+            "ts_ms": current_millis(),
+            "run_id": self.trace_id.to_string(),
+            "opening_id": self.opening_id.to_string()
+        });
+        if let Some(success) = success {
+            meta["success"] = serde_json::Value::Bool(success);
+        }
+        serde_json::json!({
+            "kind": "status",
+            "level": level,
+            "message": message,
+            "meta": meta
+        })
+    }
 }
 
 async fn handle_run_submit(
@@ -399,137 +761,9 @@ async fn handle_run_submit(
     agent_digests: Vec<AgentDigest>,
     req_key: u128,
 ) -> Result<RunAccepted, Error> {
-    let RunSubmitContext {
-        registry,
-        kb,
-        bus,
-        dispatcher,
-        accepted_map,
-    } = ctx;
-    // Parse opening
-    let opening = parse_opening_str(opening_yaml).map_err(|e| Error::Opening(e.to_string()))?;
-    let opening_name = opening.name.clone();
-    if !agent_digests.is_empty() {
-        verify_agent_digests(registry, &opening, &agent_digests)?;
-    }
-    // Build bus executor for this run
-    let executor = Arc::new(BusExecutor::new(bus.clone(), dispatcher.clone()));
-
-    // Create runner and setup event channel
-    let runner = Runner::new(opening, executor);
-    let trace_id = runner.trace_id();
-    let opening_id = runner.opening_id();
-    let (tx, mut rx) = mpsc::unbounded_channel();
-    let runner = runner.with_event_tx(tx);
-
-    // Respond with RunAccepted
-    let resp = ControlResponse::RunAccepted(RunAccepted {
-        request_id,
-        trace_id,
-        opening_id,
-        opening_name: opening_name.clone(),
-    });
-    let header = build_header(CT_CTRL_RESP, uuid_to_u128(request_id.0), next_msg_id());
-    let body = encode_payload(CT_CTRL_RESP, &resp, None)?;
-    let frame = Message::new(header, Bytes::from(body)).map_err(|e| Error::Bus(e.to_string()))?;
-    bus.publish("rlp/ctrl", frame)
+    RunLauncher::new(ctx)
+        .launch(request_id, opening_yaml, agent_digests, req_key)
         .await
-        .map_err(|e| Error::Bus(e.to_string()))?;
-
-    // Spawn the run in background
-    let bus_clone = bus.clone();
-    let kb_clone = kb.clone();
-    let accepted_map = accepted_map.clone();
-    tokio::spawn(async move {
-        let topic = format!("rlp/runs/{}/events", trace_id);
-        let mut run_future = Box::pin(async move { runner.run().await });
-        let bus = bus_clone;
-        let trace_key = uuid_to_u128(trace_id.0);
-        // Give clients a moment to subscribe after acceptance
-        tokio::task::yield_now().await;
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        // Publish run started event after a brief grace period
-        let _ = publish_to_topic(&bus, &topic, trace_key, serde_json::json!({
-            "kind": "status",
-            "level": "info",
-            "message": "run started",
-            "meta": {"ts_ms": current_millis(), "run_id": trace_id.to_string(), "opening_id": opening_id.to_string()}
-        })).await;
-        // Drain runner events and publish as CT_RUN_EVENT
-        loop {
-            tokio::select! {
-                res = &mut run_future => {
-                    match res {
-                        Ok(report) => {
-                            // Emit node finishes and run finished summary
-                            let success = report.trace.success;
-                            let status_str = if success { "ok" } else { "error" };
-                            let payload = serde_json::json!({
-                                "kind": "status",
-                                "level": if success {"info"} else {"error"},
-                                "message": format!("run {}", status_str),
-                                "meta": {"ts_ms": current_millis(), "run_id": trace_id.to_string(), "opening_id": opening_id.to_string(), "success": success}
-                            });
-                            let _ = publish_to_topic(&bus, &topic, trace_key, payload).await;
-                            // Persist run.finished
-                            let _ = record_kb_run_event(&kb_clone, &trace_id, &opening_id, "run.finished", if success {"finished"} else {"failed"});
-                        }
-                        Err(err) => {
-                            let payload = serde_json::json!({
-                                "kind": "status",
-                                "level": "error",
-                                "message": format!("run failed: {err}"),
-                                "meta": {"ts_ms": current_millis(), "run_id": trace_id.to_string(), "opening_id": opening_id.to_string(), "success": false}
-                            });
-                            let _ = publish_to_topic(&bus, &topic, trace_key, payload).await;
-                            let _ = record_kb_run_event(&kb_clone, &trace_id, &opening_id, "run.finished", "failed");
-                        }
-                    }
-                    break;
-                }
-                maybe_event = rx.recv() => {
-                    if let Some(event) = maybe_event {
-                        let payload = match event {
-                            RunEvent::NodeState { node_id, state, attempt } => serde_json::json!({
-                                "kind": "plan",
-                                "message": format!("node {} state update", node_id),
-                                "meta": {"ts_ms": current_millis(), "run_id": trace_id.to_string(), "node_id": node_id, "attempt": attempt, "state": format!("{:?}", state)}
-                            }),
-                            RunEvent::LogLine { node_id, level, message } => serde_json::json!({
-                                "kind": "log",
-                                "level": level,
-                                "message": message,
-                                "meta": {"ts_ms": current_millis(), "run_id": trace_id.to_string(), "node_id": node_id}
-                            }),
-                            RunEvent::TraceLine { line } => serde_json::json!({
-                                "kind": "trace",
-                                "level": "info",
-                                "message": line,
-                                "meta": {"ts_ms": current_millis(), "run_id": trace_id.to_string()}
-                            }),
-                            RunEvent::Completed { .. } => continue,
-                        };
-                        let _ = publish_to_topic(&bus, &topic, trace_key, payload).await;
-                    } else {
-                        break;
-                    }
-                }
-            }
-        }
-        // Remove from idempotency map after completion
-        let _ = accepted_map.lock().unwrap().remove(&req_key);
-    });
-
-    // Persist run.started into KB (minimal)
-    record_kb_run_event(kb, &trace_id, &opening_id, "run.started", "started")
-        .map_err(|e| Error::Kb(e.to_string()))?;
-
-    Ok(RunAccepted {
-        request_id,
-        trace_id,
-        opening_id,
-        opening_name,
-    })
 }
 
 fn verify_agent_digests(
