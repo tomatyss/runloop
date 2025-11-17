@@ -191,9 +191,9 @@ The control plane uses the same bus and framing:
 ### 9.1 Executor ↔ agent envelopes
 
 - Topic namespace: `agent/<agent_ref>` (one topic per logical agent). The
-  executor publishes requests here. Each request includes a unique
-  `reply_topic` (e.g., `rlp/runs/<trace_id>/agents/<agent>/<uuid>`), and the
-  agent publishes its response on that topic.
+  executor publishes requests here. Each request includes a unique `reply_topic`
+  (e.g., `rlp/runs/<trace_id>/agents/<agent>/<uuid>`), and the agent publishes
+  its response on that topic.
 - Request (`CT_EXECUTOR_AGENT_REQUEST`, type `intent.executor.agent.request.v1`)
   body:
 
