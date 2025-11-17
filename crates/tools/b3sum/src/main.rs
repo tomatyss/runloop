@@ -45,11 +45,15 @@ mod tests {
         writeln!(second, "beta").expect("write second");
         let path_a = first.path().to_string_lossy().to_string();
         let path_b = second.path().to_string_lossy().to_string();
+        let mut expected = vec![path_a.clone(), path_b.clone()];
+        expected.sort();
         let results = hash_inputs(vec![path_b.clone(), path_a.clone()]).expect("hash inputs");
-        assert_eq!(results[0].0, path_a);
-        assert_eq!(results[1].0, path_b);
-        let manual_hash_a = blake3::hash(&fs::read(&results[0].0).unwrap()).to_string();
-        assert_eq!(results[0].1, manual_hash_a);
+        assert_eq!(results.len(), expected.len());
+        for (result, expected_path) in results.iter().zip(expected.iter()) {
+            assert_eq!(&result.0, expected_path);
+            let manual_hash = blake3::hash(&fs::read(&result.0).unwrap()).to_string();
+            assert_eq!(result.1, manual_hash);
+        }
     }
 
     #[test]
