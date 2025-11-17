@@ -13,9 +13,9 @@ use runloop_core::{
     ControlRequest, ControlResponse, DescribeAgentsRequest, RunAccepted, RunSubmitRequest,
 };
 use runloop_executor_local::{ExecutorInitError, build_executor};
-use runloop_kb::{KnowledgeBase, Materializer, Provenance, StateDelta};
+use runloop_kb::{KnowledgeBase, Materializer, NodeFinishedRecord, TraceStore};
 use runloop_model_broker::SecretResolver;
-use runloop_openings::{RunEvent, Runner, parse_opening_str};
+use runloop_openings::{NodeState, RunEvent, RunTrace, Runner, parse_opening_str};
 use runloop_rmp::{Header, decode_payload, encode_payload};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -39,6 +39,7 @@ async fn main() -> Result<(), Error> {
     let kb = KnowledgeBase::open(&config.kb).map_err(|err| Error::Kb(err.to_string()))?;
     kb.migrate()
         .map_err(|err| Error::Kb(format!("migration failed: {err}")))?;
+    let trace_store = TraceStore::from_kb(kb.clone(), "agent:runloopd", Some("system".into()));
 
     let materializer = Materializer::new(kb.clone());
 
@@ -75,12 +76,15 @@ async fn main() -> Result<(), Error> {
 
     // Spawn control-plane loop
     let (ctrl_shutdown_tx, ctrl_shutdown_rx) = oneshot::channel();
+    let ctrl_ctx = ControlPlaneCtx {
+        config: config.clone(),
+        registry: registry.clone(),
+        bus: bus.clone(),
+        dispatcher: dispatcher.clone(),
+        trace_store: trace_store.clone(),
+    };
     let ctrl_task = tokio::spawn(run_control_plane_with_ready(
-        config.clone(),
-        registry.clone(),
-        kb.clone(),
-        bus.clone(),
-        dispatcher.clone(),
+        ctrl_ctx,
         ctrl_shutdown_rx,
         None,
     ));
@@ -237,15 +241,26 @@ fn publisher_kind_label(kind: &PublisherKind) -> &'static str {
     }
 }
 
-async fn run_control_plane_with_ready(
-    _config: Config,
+struct ControlPlaneCtx {
+    config: Config,
     registry: Arc<AgentRegistry>,
-    kb: KnowledgeBase,
     bus: Bus,
     dispatcher: Arc<AgentDispatcher>,
+    trace_store: TraceStore,
+}
+
+async fn run_control_plane_with_ready(
+    ctx: ControlPlaneCtx,
     mut shutdown: oneshot::Receiver<()>,
     ready: Option<oneshot::Sender<()>>,
 ) -> Result<(), Error> {
+    let ControlPlaneCtx {
+        config: _config,
+        registry,
+        bus,
+        dispatcher,
+        trace_store,
+    } = ctx;
     let mut inbox = bus
         .subscribe("rlp/ctrl")
         .await
@@ -299,10 +314,10 @@ async fn run_control_plane_with_ready(
                                 match handle_run_submit(
                                     RunSubmitContext {
                                         registry: registry.as_ref(),
-                                        kb: &kb,
                                         bus: &bus,
                                         dispatcher: dispatcher.clone(),
                                         accepted_map: accepted.clone(),
+                                        trace_store: trace_store.clone(),
                                     },
                                     req_id,
                                     &opening_yaml,
@@ -383,10 +398,10 @@ async fn handle_describe_agents(
 
 struct RunSubmitContext<'a> {
     registry: &'a AgentRegistry,
-    kb: &'a KnowledgeBase,
     bus: &'a Bus,
     dispatcher: Arc<AgentDispatcher>,
     accepted_map: Arc<Mutex<HashMap<u128, RunAccepted>>>,
+    trace_store: TraceStore,
 }
 
 struct RunSession {
@@ -418,7 +433,7 @@ impl RunSession {
 
 struct RunLauncher<'a> {
     registry: &'a AgentRegistry,
-    kb: &'a KnowledgeBase,
+    trace_store: TraceStore,
     bus: &'a Bus,
     dispatcher: Arc<AgentDispatcher>,
     accepted_map: Arc<Mutex<HashMap<u128, RunAccepted>>>,
@@ -428,7 +443,7 @@ impl<'a> RunLauncher<'a> {
     fn new(ctx: RunSubmitContext<'a>) -> Self {
         Self {
             registry: ctx.registry,
-            kb: ctx.kb,
+            trace_store: ctx.trace_store,
             bus: ctx.bus,
             dispatcher: ctx.dispatcher,
             accepted_map: ctx.accepted_map,
@@ -442,7 +457,7 @@ impl<'a> RunLauncher<'a> {
         agent_digests: Vec<AgentDigest>,
         req_key: u128,
     ) -> Result<RunAccepted, Error> {
-        let repository = RunRepository::new(self.kb.clone());
+        let repository = RunRepository::new(self.trace_store.clone());
         let session = self.prepare_session(opening_yaml, &agent_digests)?;
         let accepted = session.acceptance(request_id);
         repository
@@ -521,12 +536,12 @@ impl<'a> RunLauncher<'a> {
 
 #[derive(Clone)]
 struct RunRepository {
-    kb: KnowledgeBase,
+    trace_store: TraceStore,
 }
 
 impl RunRepository {
-    fn new(kb: KnowledgeBase) -> Self {
-        Self { kb }
+    fn new(trace_store: TraceStore) -> Self {
+        Self { trace_store }
     }
 
     fn record_started(
@@ -534,22 +549,44 @@ impl RunRepository {
         trace_id: &TraceId,
         opening_id: &OpeningId,
     ) -> Result<(), runloop_kb::Error> {
-        record_kb_run_event(&self.kb, trace_id, opening_id, "run.started", "started")
+        self.trace_store.record_run_started(trace_id, opening_id)
     }
 
     fn record_finished(&self, trace_id: &TraceId, opening_id: &OpeningId, status: &str) {
-        if let Err(err) =
-            record_kb_run_event(&self.kb, trace_id, opening_id, "run.finished", status)
+        if let Err(err) = self
+            .trace_store
+            .record_run_finished(trace_id, opening_id, status)
         {
             tracing::warn!(%err, "failed to persist run.finished");
         }
     }
 
     fn record_failed_start(&self, trace_id: &TraceId, opening_id: &OpeningId) {
-        if let Err(err) =
-            record_kb_run_event(&self.kb, trace_id, opening_id, "run.finished", "failed")
+        if let Err(err) = self
+            .trace_store
+            .record_run_finished(trace_id, opening_id, "failed")
         {
             tracing::warn!(%err, "failed to persist failed run start");
+        }
+    }
+
+    fn record_nodes(
+        &self,
+        trace_id: &TraceId,
+        opening_id: &OpeningId,
+        records: &[NodeFinishedRecord],
+    ) {
+        if let Err(err) = self
+            .trace_store
+            .record_nodes(trace_id, opening_id, records)
+        {
+            tracing::warn!(%err, "failed to persist node summaries");
+        }
+    }
+
+    fn record_run_trace(&self, trace: &RunTrace) {
+        if let Err(err) = self.trace_store.record_run_trace(trace) {
+            tracing::warn!(%err, "failed to persist run trace");
         }
     }
 }
@@ -594,6 +631,7 @@ impl RunStreamer {
         } = session;
         let mut run_future = Box::pin(async move { runner.run().await });
         let composer = EventComposer::new(trace_id, opening_id);
+        let mut tracker = NodeTracker::new();
         tokio::task::yield_now().await;
         sleep(Duration::from_millis(20)).await;
         let _ = publish_to_topic(&bus, &topic, trace_key, composer.started()).await;
@@ -605,11 +643,16 @@ impl RunStreamer {
                             let success = report.trace.success;
                             let payload = composer.finished(success);
                             let _ = publish_to_topic(&bus, &topic, trace_key, payload).await;
+                            let nodes = node_records_from_trace(&report.trace);
+                            repository.record_nodes(composer.trace_id(), composer.opening_id(), &nodes);
+                            repository.record_run_trace(&report.trace);
                             repository.record_finished(composer.trace_id(), composer.opening_id(), if success { "finished" } else { "failed" });
                         }
                         Err(err) => {
                             let payload = composer.failure(&err.to_string());
                             let _ = publish_to_topic(&bus, &topic, trace_key, payload).await;
+                            let failure_records = tracker.summarize();
+                            repository.record_nodes(composer.trace_id(), composer.opening_id(), &failure_records);
                             repository.record_finished(composer.trace_id(), composer.opening_id(), "failed");
                         }
                     }
@@ -618,6 +661,7 @@ impl RunStreamer {
                 maybe_event = events.recv() => {
                     match maybe_event {
                         Some(event) => {
+                            tracker.handle(&event);
                             if let Some(payload) = composer.event_payload(event) {
                                 let _ = publish_to_topic(&bus, &topic, trace_key, payload).await;
                             }
@@ -766,6 +810,7 @@ async fn handle_run_submit(
         .await
 }
 
+
 fn verify_agent_digests(
     registry: &AgentRegistry,
     opening: &runloop_openings::Opening,
@@ -824,32 +869,135 @@ async fn publish_to_topic(
         .map_err(|e| Error::Bus(e.to_string()))
 }
 
-fn record_kb_run_event(
-    kb: &KnowledgeBase,
-    trace_id: &TraceId,
-    opening_id: &OpeningId,
-    kind: &str,
-    status: &str,
-) -> Result<(), runloop_kb::Error> {
-    let payload = serde_json::json!({
-        "opening_id": opening_id.to_string(),
-        "status": status,
-    });
-    let provenance = Provenance {
-        trace_id: trace_id.to_string(),
-        opening_id: opening_id.to_string(),
-        agent_id: "agent:runloopd".into(),
-        inputs_hash: None,
-        rationale: None,
-    };
-    kb.propose(StateDelta::new(
-        kind,
-        "agent:runloopd",
-        Some("system".into()),
-        payload,
-        provenance,
-    ))?;
-    Ok(())
+fn node_records_from_trace(trace: &RunTrace) -> Vec<NodeFinishedRecord> {
+    trace
+        .nodes
+        .iter()
+        .map(|node| {
+            let (attempt, outputs_hash, error) = match node.final_attempt.as_ref() {
+                Some(attempt) => (
+                    attempt.attempt,
+                    attempt.output_hash.clone(),
+                    attempt.error.clone(),
+                ),
+                None => (0, None, None),
+            };
+            NodeFinishedRecord {
+                node_id: node.node_id.clone(),
+                status: status_from_state(&node.state),
+                attempt,
+                duration_ms: 0,
+                outputs_hash,
+                error,
+            }
+        })
+        .collect()
+}
+
+struct NodeTracker {
+    nodes: HashMap<String, NodeTelemetry>,
+}
+
+impl NodeTracker {
+    fn new() -> Self {
+        Self {
+            nodes: HashMap::new(),
+        }
+    }
+
+    fn handle(&mut self, event: &RunEvent) {
+        if let RunEvent::NodeState {
+            node_id,
+            state,
+            attempt,
+        } = event
+        {
+            let telemetry = self
+                .nodes
+                .entry(node_id.clone())
+                .or_insert_with(NodeTelemetry::new);
+            telemetry.attempt = *attempt;
+            match state {
+                NodeState::Running => {
+                    telemetry.status = Some("running".into());
+                    telemetry.start_ts = Some(current_millis());
+                    telemetry.end_ts = None;
+                    telemetry.error = None;
+                }
+                NodeState::Succeeded => {
+                    telemetry.status = Some("ok".into());
+                    telemetry.end_ts = Some(current_millis());
+                }
+                NodeState::Failed { reason } => {
+                    telemetry.status = Some("error".into());
+                    telemetry.error = Some(reason.clone());
+                    telemetry.end_ts = Some(current_millis());
+                }
+                NodeState::Skipped => {
+                    telemetry.status = Some("skipped".into());
+                    telemetry.end_ts = Some(current_millis());
+                }
+                NodeState::Cancelled => {
+                    telemetry.status = Some("cancelled".into());
+                    telemetry.end_ts = Some(current_millis());
+                }
+                NodeState::Pending => {}
+            }
+        }
+    }
+
+    fn summarize(&self) -> Vec<NodeFinishedRecord> {
+        self.nodes
+            .iter()
+            .map(|(node_id, telemetry)| NodeFinishedRecord {
+                node_id: node_id.clone(),
+                status: telemetry.status.clone().unwrap_or_else(|| "pending".into()),
+                attempt: telemetry.attempt,
+                duration_ms: telemetry.duration_ms(),
+                outputs_hash: None,
+                error: telemetry.error.clone(),
+            })
+            .collect()
+    }
+}
+
+struct NodeTelemetry {
+    attempt: u32,
+    start_ts: Option<u64>,
+    end_ts: Option<u64>,
+    status: Option<String>,
+    error: Option<String>,
+}
+
+impl NodeTelemetry {
+    fn new() -> Self {
+        Self {
+            attempt: 0,
+            start_ts: None,
+            end_ts: None,
+            status: None,
+            error: None,
+        }
+    }
+
+    fn duration_ms(&self) -> u64 {
+        match (self.start_ts, self.end_ts) {
+            (Some(start), Some(end)) if end >= start => end - start,
+            _ => 0,
+        }
+    }
+}
+
+fn status_from_state(state: &NodeState) -> String {
+    match state {
+        NodeState::Succeeded => "ok",
+        NodeState::Failed { .. } => "error",
+        NodeState::Skipped => "skipped",
+        NodeState::Cancelled => "cancelled",
+        NodeState::Pending => "pending",
+        NodeState::Running => "running",
+    }
+    .into()
 }
 
 fn build_header(schema_id: u16, trace_id: u128, msg_id: u64) -> Header {
@@ -1002,6 +1150,7 @@ edges:
         let kb = KnowledgeBase::open(&config.kb).expect("open kb");
         kb.migrate().expect("migrate");
         let registry = Arc::new(AgentRegistry::new(config.agents.search_dirs.clone()));
+        let trace_store = TraceStore::from_kb(kb.clone(), "agent:runloopd", Some("system".into()));
         let confirmation = Arc::new(DaemonConfirmationProvider::new(
             config.security.confirm_external_actions,
         ));
@@ -1011,12 +1160,15 @@ edges:
         let dispatcher = Arc::new(AgentDispatcher::new(bus.clone(), local_executor));
         let (ready_tx, ready_rx) = oneshot::channel();
         let (ctrl_shutdown_tx, ctrl_shutdown_rx) = oneshot::channel();
+        let ctrl_ctx = ControlPlaneCtx {
+            config: config.clone(),
+            registry: registry.clone(),
+            bus: bus.clone(),
+            dispatcher: dispatcher.clone(),
+            trace_store: trace_store.clone(),
+        };
         let ctrl = tokio::spawn(run_control_plane_with_ready(
-            config.clone(),
-            registry.clone(),
-            kb.clone(),
-            bus.clone(),
-            dispatcher.clone(),
+            ctrl_ctx,
             ctrl_shutdown_rx,
             Some(ready_tx),
         ));
