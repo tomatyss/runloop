@@ -1,0 +1,21 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+	purge)
+		rm -rf /var/lib/runloop /var/log/runloop
+		if [ -d /etc/runloop ]; then
+			rm -rf /etc/runloop
+		fi
+		if getent passwd runloop >/dev/null 2>&1; then
+			deluser --system --quiet runloop || true
+		fi
+		if getent group runloop >/dev/null 2>&1; then
+			delgroup --quiet runloop || true
+		fi
+	;;
+esac
+
+#DEBHELPER#
+
+exit 0

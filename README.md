@@ -93,6 +93,27 @@ config/artifacts. Runtime socket discovery precedence:
 3. `~/.runloop/sock/rmp.sock`
 4. `/run/runloop/rmp.sock`
 
+#### Debian 13 (`trixie`) packages
+
+Build the .deb via `dpkg-buildpackage` (convenience target provided):
+
+```bash
+just deb
+# artifacts land in ../runloop_<version>_<arch>.deb
+```
+
+Install and manage the daemon:
+
+```bash
+sudo apt install ../runloop_0.1.0~alpha1-1_amd64.deb
+sudo systemctl status runloopd
+sudo systemctl restart runloopd   # when updating /etc/runloop/config.yaml
+```
+
+The package ships `runloopd`, `rlp`, and `agtop`, configures the `runloop`
+system user, and writes state under `/var/lib/runloop`. Remove with
+`sudo apt purge runloop` to drop both configuration and data.
+
 ---
 
 ## Configuration (Config v1)

@@ -20,6 +20,9 @@ build:
 build-release:
 	@cargo build --workspace --release
 
+deb:
+	@packaging/systemd/build-deb.sh
+
 test:
 	@cargo test --workspace
 
