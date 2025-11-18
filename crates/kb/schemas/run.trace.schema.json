@@ -1,0 +1,129 @@
+{
+  "$id": "https://runloop.local/schemas/run.trace.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "run.trace v1",
+  "type": "object",
+  "required": ["trace_id", "opening_id", "nodes", "final_hash", "success"],
+  "properties": {
+    "trace_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "opening_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "final_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "success": {
+      "type": "boolean"
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/node_trace"
+      }
+    }
+  },
+  "$defs": {
+    "node_trace": {
+      "type": "object",
+      "required": ["node_id", "state"],
+      "properties": {
+        "node_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "state": {
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": [
+                "Pending",
+                "Running",
+                "Succeeded",
+                "Skipped",
+                "Cancelled"
+              ]
+            },
+            {
+              "type": "object",
+              "required": ["Failed"],
+              "properties": {
+                "Failed": {
+                  "type": "object",
+                  "required": ["reason"],
+                  "properties": {
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "final_attempt": {
+          "$ref": "#/$defs/node_attempt_trace"
+        }
+      }
+    },
+    "node_attempt_trace": {
+      "type": "object",
+      "required": ["attempt", "inputs"],
+      "properties": {
+        "attempt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "inputs": {
+          "$ref": "#/$defs/node_ports"
+        },
+        "outputs": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/node_ports"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "output_hash": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "type": ["string", "null"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "node_ports": {
+      "type": "object",
+      "required": ["ports"],
+      "properties": {
+        "ports": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {}
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

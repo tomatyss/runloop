@@ -1,5 +1,7 @@
 //! Knowledge base access layer backed by SQLite event logs and materialized views.
 
+pub mod trace_store;
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,6 +20,8 @@ use rusqlite::{Connection, OpenFlags, Row, Statement, Transaction, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use thiserror::Error;
+
+pub use trace_store::{NodeFinishedRecord, TraceStore};
 
 /// Canonical KB error type.
 #[derive(Debug, Error)]
@@ -521,6 +525,32 @@ impl KnowledgeBase {
         Ok(results)
     }
 
+    /// Load the stored RunTrace payload for a given trace_id, if any.
+    pub fn load_run_trace(&self, trace_id: &TraceId) -> Result<Option<Value>, Error> {
+        let trace_key = trace_id.to_string();
+        if let Some(value) = self.load_run_trace_by_key(&trace_key)? {
+            return Ok(Some(value));
+        }
+        if let Some(stripped) = trace_key.strip_prefix("trace:") {
+            return self.load_run_trace_by_key(stripped);
+        }
+        Ok(None)
+    }
+
+    fn load_run_trace_by_key(&self, key: &str) -> Result<Option<Value>, Error> {
+        let conn = self.views.lock();
+        let mut stmt =
+            conn.prepare("SELECT trace_json FROM run_traces WHERE trace_id = ?1 LIMIT 1")?;
+        let mut rows = stmt.query(params![key])?;
+        if let Some(row) = rows.next()? {
+            let json: String = row.get(0)?;
+            let value: Value =
+                serde_json::from_str(&json).map_err(|err| Error::Config(err.to_string()))?;
+            return Ok(Some(value));
+        }
+        Ok(None)
+    }
+
     /// Record a capability audit decision (in-memory only, for compatibility with existing tests).
     pub fn record_cap_audit(&self, record: CapAuditRecord) {
         self.cap_audits.lock().push(record);
@@ -591,6 +621,14 @@ static EMBEDDED_SCHEMAS: &[(&str, &str)] = &[
     (
         "run.finished",
         include_str!("../schemas/run.finished.schema.json"),
+    ),
+    (
+        "node.finished",
+        include_str!("../schemas/node.finished.schema.json"),
+    ),
+    (
+        "run.trace",
+        include_str!("../schemas/run.trace.schema.json"),
     ),
 ];
 
@@ -808,6 +846,8 @@ fn apply_event(tx: &Transaction<'_>, event: &PendingEvent) -> Result<(), Error> 
         "contact.upserted" => apply_contact_event(tx, event)?,
         "artifact.created" => apply_artifact_event(tx, event)?,
         "run.started" | "run.finished" => apply_run_event(tx, event)?,
+        "node.finished" => apply_node_finished_event(tx, event)?,
+        "run.trace" => apply_run_trace_event(tx, event)?,
         "email.sent" => apply_email_event(tx, event)?,
         _ => {}
     }
@@ -936,6 +976,122 @@ fn apply_run_event(tx: &Transaction<'_>, event: &PendingEvent) -> Result<(), Err
             opening_id = excluded.opening_id,
             source_event = excluded.source_event",
         params![&trace_id, &status, &opening_id, event.id,],
+    )?;
+
+    record_history(tx, &format!("run:{trace_id}"), event.id)?;
+    Ok(())
+}
+
+fn apply_node_finished_event(tx: &Transaction<'_>, event: &PendingEvent) -> Result<(), Error> {
+    let trace_id = event
+        .payload
+        .get("trace_id")
+        .and_then(Value::as_str)
+        .map(|s| s.trim().to_string())
+        .ok_or_else(|| Error::Config("node.finished missing payload.trace_id".into()))?;
+    let opening_id = event
+        .payload
+        .get("opening_id")
+        .and_then(Value::as_str)
+        .map(|s| s.trim().to_string())
+        .ok_or_else(|| Error::Config("node.finished missing payload.opening_id".into()))?;
+    let node_id = event
+        .payload
+        .get("node_id")
+        .and_then(Value::as_str)
+        .map(|s| s.trim().to_string())
+        .ok_or_else(|| Error::Config("node.finished missing payload.node_id".into()))?;
+    let status = event
+        .payload
+        .get("status")
+        .and_then(Value::as_str)
+        .map(|s| s.trim().to_string())
+        .ok_or_else(|| Error::Config("node.finished missing payload.status".into()))?;
+    let attempt = event
+        .payload
+        .get("attempt")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let duration_ms = event
+        .payload
+        .get("duration_ms")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let outputs_hash = event
+        .payload
+        .get("outputs_hash")
+        .and_then(Value::as_str)
+        .map(|s| s.trim().to_string());
+    let error = event
+        .payload
+        .get("error")
+        .and_then(Value::as_str)
+        .map(|s| s.trim().to_string());
+
+    tx.execute(
+        "INSERT INTO run_nodes (trace_id, node_id, status, attempt, duration_ms, outputs_hash, error, source_event)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(trace_id, node_id) DO UPDATE SET
+            status = excluded.status,
+            attempt = excluded.attempt,
+            duration_ms = excluded.duration_ms,
+            outputs_hash = excluded.outputs_hash,
+            error = excluded.error,
+            source_event = excluded.source_event",
+        params![
+            &trace_id,
+            &node_id,
+            &status,
+            attempt,
+            duration_ms,
+            outputs_hash.as_deref(),
+            error.as_deref(),
+            event.id,
+        ],
+    )?;
+
+    record_history(tx, &format!("run:{trace_id}"), event.id)?;
+    record_history(tx, &format!("node:{trace_id}#{node_id}"), event.id)?;
+    record_history(tx, &format!("opening:{opening_id}"), event.id)?;
+    Ok(())
+}
+
+fn apply_run_trace_event(tx: &Transaction<'_>, event: &PendingEvent) -> Result<(), Error> {
+    let trace_id = event
+        .provenance
+        .get("trace_id")
+        .and_then(Value::as_str)
+        .map(|s| s.trim().to_string())
+        .ok_or_else(|| Error::Config("run.trace missing provenance.trace_id".into()))?;
+    let final_hash = event
+        .payload
+        .get("final_hash")
+        .and_then(Value::as_str)
+        .map(|s| s.trim().to_string())
+        .ok_or_else(|| Error::Config("run.trace missing payload.final_hash".into()))?;
+    let success = event
+        .payload
+        .get("success")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| Error::Config("run.trace missing payload.success".into()))?;
+    let trace_json =
+        serde_json::to_string(&event.payload).map_err(|err| Error::Config(err.to_string()))?;
+
+    tx.execute(
+        "INSERT INTO run_traces (trace_id, trace_json, final_hash, success, source_event)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(trace_id) DO UPDATE SET
+            trace_json = excluded.trace_json,
+            final_hash = excluded.final_hash,
+            success = excluded.success,
+            source_event = excluded.source_event",
+        params![
+            &trace_id,
+            &trace_json,
+            &final_hash,
+            success as i64,
+            event.id
+        ],
     )?;
 
     record_history(tx, &format!("run:{trace_id}"), event.id)?;
@@ -1076,6 +1232,25 @@ fn apply_views_migrations(conn: &Connection) -> Result<(), Error> {
             opening_id TEXT NOT NULL,
             source_event INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS run_nodes (
+            trace_id TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            attempt INTEGER NOT NULL DEFAULT 0,
+            duration_ms INTEGER NOT NULL DEFAULT 0,
+            outputs_hash TEXT,
+            error TEXT,
+            source_event INTEGER NOT NULL,
+            PRIMARY KEY(trace_id, node_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_run_nodes_trace ON run_nodes(trace_id);
+        CREATE TABLE IF NOT EXISTS run_traces (
+            trace_id TEXT PRIMARY KEY,
+            trace_json TEXT NOT NULL,
+            final_hash TEXT NOT NULL,
+            success INTEGER NOT NULL,
+            source_event INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS entity_history (
             entity_key TEXT NOT NULL,
             event_id INTEGER NOT NULL,
@@ -1190,6 +1365,10 @@ pub fn derive_artifact_key(sha256: Option<&str>, path: Option<&str>) -> Option<S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use runloop_core::ids::OpeningId;
+    use runloop_openings::{
+        NodeAttemptTrace, NodeInputs, NodeOutputs, NodeState, NodeTrace, RunTrace,
+    };
     use rusqlite::ErrorCode;
     use serde_json::{Value, json};
 
@@ -1359,6 +1538,84 @@ mod tests {
         );
         let err = kb.propose(delta).expect_err("invalid evidence should fail");
         assert!(matches!(err, Error::MissingEvidence(id) if id == 999));
+    }
+
+    #[test]
+    fn run_trace_round_trip() {
+        let kb = KnowledgeBase::new();
+        let trace_store = TraceStore::from_kb(kb.clone(), "agent:test", Some("system".into()));
+        let trace_id = TraceId::new();
+        let opening_id = OpeningId::new();
+        let trace = sample_run_trace(trace_id, opening_id);
+        trace_store
+            .record_run_trace(&trace)
+            .expect("record run trace");
+        trace_store.flush().expect("flush views");
+
+        let loaded = kb
+            .load_run_trace(&trace.trace_id)
+            .expect("load trace")
+            .expect("trace exists");
+        let parsed: RunTrace = serde_json::from_value(loaded).expect("parse run trace");
+        assert_eq!(parsed.final_hash, trace.final_hash);
+        assert_eq!(parsed.nodes.len(), trace.nodes.len());
+        assert_eq!(parsed.trace_id, trace.trace_id);
+    }
+
+    #[test]
+    fn node_finished_materializes_into_view() {
+        let kb = KnowledgeBase::new();
+        let trace_store = TraceStore::from_kb(kb.clone(), "agent:test", Some("system".into()));
+        let trace_id = TraceId::new();
+        let opening_id = OpeningId::new();
+        let record = NodeFinishedRecord {
+            node_id: "writer".into(),
+            status: "ok".into(),
+            attempt: 1,
+            duration_ms: 42,
+            outputs_hash: Some(
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+            ),
+            error: None,
+        };
+        let expected_hash = record.outputs_hash.clone().unwrap();
+        trace_store
+            .record_node_finished(&trace_id, &opening_id, &record)
+            .expect("persist node");
+        trace_store.flush().expect("materializer flush");
+
+        let result = kb
+            .query("SELECT trace_id, node_id, status, outputs_hash FROM run_nodes")
+            .expect("query run_nodes");
+        assert_eq!(result.rows.len(), 1);
+        let row = result.rows[0].as_object().expect("row object");
+        assert_eq!(row["trace_id"], json!(trace_id.to_string()));
+        assert_eq!(row["node_id"], json!(record.node_id));
+        assert_eq!(row["status"], json!(record.status));
+        assert_eq!(row["outputs_hash"], json!(expected_hash));
+    }
+
+    fn sample_run_trace(trace_id: TraceId, opening_id: OpeningId) -> RunTrace {
+        let node = NodeTrace {
+            node_id: "writer".into(),
+            state: NodeState::Succeeded,
+            final_attempt: Some(NodeAttemptTrace {
+                attempt: 1,
+                inputs: NodeInputs::default(),
+                outputs: Some(NodeOutputs::default()),
+                output_hash: Some(
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                ),
+                error: None,
+            }),
+        };
+        RunTrace {
+            trace_id,
+            opening_id,
+            nodes: vec![node],
+            final_hash: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".into(),
+            success: true,
+        }
     }
 
     #[test]

@@ -287,7 +287,7 @@ include line/col. ✅
       real agents instead of the local stub. _(Bus executor + dispatcher landed;
       remaining work: launch actual WASM/shim agents rather than proxying
       through the LocalExecutor.)_
-- [ ] Persist run/replay traces in the knowledge base (`run.*` / `node.*`
+- [x] Persist run/replay traces in the knowledge base (`run.*` / `node.*`
       events) once schemas are ready.
 
 ---
