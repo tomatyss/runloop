@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -239,7 +239,7 @@ impl LocalExecutor {
         if let Some(bundle) = self.wasm_bundle(reference) {
             let args = vec![reference_spec(reference), "--query".into(), query.clone()];
             match self
-                .invoke_agent(
+                .invoke_agent::<ResolvedContact>(
                     reference,
                     &bundle,
                     &request.node.id,
@@ -280,7 +280,7 @@ impl LocalExecutor {
                 args.push(encode_json_arg(contact)?);
             }
             match self
-                .invoke_agent(
+                .invoke_agent::<ContextBundle>(
                     reference,
                     &bundle,
                     &request.node.id,
@@ -346,7 +346,7 @@ impl LocalExecutor {
             args.push("--context-base64".into());
             args.push(encode_json_arg(&context)?);
             match self
-                .invoke_agent(
+                .invoke_agent::<WriterAgentOutput>(
                     reference,
                     &bundle,
                     &request.node.id,
@@ -378,6 +378,7 @@ impl LocalExecutor {
             }
         }
         self.exec_writer_native(request, recipient, context, topic, tone, model)
+            .await
     }
 
     async fn exec_critic(
@@ -395,7 +396,7 @@ impl LocalExecutor {
                 encode_json_arg(&MinimalDraft::from(&draft))?,
             ];
             match self
-                .invoke_agent(
+                .invoke_agent::<Review>(
                     reference,
                     &bundle,
                     &request.node.id,
@@ -440,10 +441,10 @@ impl LocalExecutor {
             .unwrap_or_else(|| "update".into());
         let decision = self.request_confirmation(request, &draft, &contact).await?;
         if let Some(bundle) = self.wasm_bundle(reference) {
-            if let Some(action) = decision.as_ref() {
-                if !action.approved {
-                    return Err(RunnerError::Executor("send cancelled by operator".into()));
-                }
+            if let Some(action) = decision.as_ref()
+                && !action.approved
+            {
+                return Err(RunnerError::Executor("send cancelled by operator".into()));
             }
             let args = vec![
                 reference_spec(reference),
@@ -457,7 +458,7 @@ impl LocalExecutor {
                 topic.clone(),
             ];
             match self
-                .invoke_agent(
+                .invoke_agent::<MailerAgentOutput>(
                     reference,
                     &bundle,
                     &request.node.id,
@@ -500,6 +501,7 @@ impl LocalExecutor {
             topic,
             override_confirmation,
         )
+        .await
     }
 
     async fn request_confirmation(
@@ -698,7 +700,7 @@ impl LocalExecutor {
 
     async fn exec_critic_native(
         &self,
-        request: &NodeExecutionRequest<'_>,
+        _request: &NodeExecutionRequest<'_>,
         draft: DraftArtifact,
     ) -> Result<NodeExecution, RunnerError> {
         let review = critic_agent::critique(ReviewRequest { draft })
@@ -837,13 +839,12 @@ impl LocalExecutor {
 
     fn wasm_bundle(&self, reference: &AgentRef) -> Option<AgentBundle> {
         self.registry.bundle(reference).ok().and_then(|bundle| {
-            bundle.wasm_entry.as_ref().and_then(|entry| {
-                if entry.path.is_file() {
-                    Some(bundle)
-                } else {
-                    None
-                }
-            })
+            let has_wasm = bundle
+                .wasm_entry
+                .as_ref()
+                .map(|entry| entry.path.is_file())
+                .unwrap_or(false);
+            if has_wasm { Some(bundle) } else { None }
         })
     }
 
@@ -929,11 +930,8 @@ struct WriterAgentOutput {
 struct MailerAgentOutput {
     status: String,
     recipients: Vec<String>,
-    topic: String,
     message_id: String,
     delivered_at_ms: u64,
-    #[serde(default)]
-    body_preview: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
