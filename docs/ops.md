@@ -205,9 +205,11 @@ trait VectorStore {
   tmpfiles definition, `/etc/runloop/config.yaml` (as a conffile), and docs. The
   maintainer scripts create the `runloop` system user, chown `/var/lib/runloop`
   / `/var/log/runloop`, call `systemd-tmpfiles --create`, run
-  `systemctl daemon-reload`, and **enable but do not start** `runloopd.service`.
-  Operators start it manually (`sudo systemctl start runloopd`) after editing
-  config if desired.
+  `systemctl daemon-reload`, and **enable but do not start** `runloopd.service`
+  on a first-time install so operators can edit config before launching.
+  Upgrades capture whether the daemon was running prior to `dpkg` stopping it
+  and automatically restart `runloopd.service` once the new bits are configured,
+  keeping CLI/agent traffic flowing with zero downtime.
 - The CLI (`rlp`) and monitor (`agtop`) ship as independent packages so they can
   be updated without restarting the daemon; they just depend on
   `ca-certificates` plus transitive Rust runtime libraries.

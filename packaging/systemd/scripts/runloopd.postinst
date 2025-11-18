@@ -1,6 +1,8 @@
 #!/bin/sh
 set -e
 
+STATE_FILE="/run/runloopd.was-active"
+
 is_systemd() {
 	if [ -d /run/systemd/system ]; then
 		return 0
@@ -39,6 +41,22 @@ set_config_permissions() {
 	fi
 }
 
+start_if_previously_running() {
+	if [ ! -f "$STATE_FILE" ]; then
+		return
+	fi
+
+	if is_systemd; then
+		systemctl start runloopd.service >/dev/null 2>&1 || true
+	fi
+
+	rm -f "$STATE_FILE"
+}
+
+clear_state_file() {
+	rm -f "$STATE_FILE"
+}
+
 case "$1" in
 	configure)
 		create_runloop_user
@@ -51,6 +69,10 @@ case "$1" in
 			systemctl daemon-reload >/dev/null 2>&1 || true
 			systemctl enable runloopd.service >/dev/null 2>&1 || true
 		fi
+		start_if_previously_running
+		;;
+	abort-upgrade|abort-remove|abort-deconfigure)
+		clear_state_file
 		;;
 esac
 
