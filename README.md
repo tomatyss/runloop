@@ -342,9 +342,11 @@ Local‑first storage with:
     environment so the CLI secret resolver can read them. Mail send still runs
     as a dry-run and prompts for approval unless
     `security.confirm_external_actions=false`.
-  - Replay a recorded run with
-    `cargo run -p rlp -- replay trace.json --opening examples/openings/compose_email.yaml`;
-    mismatches are reported per node with output hashes.
+  - Replay a recorded run with either a stored trace ID or a JSON file:
+    `cargo run -p rlp -- replay trace:<trace_uuid> --opening examples/openings/compose_email.yaml`
+    pulls the canonical `run.trace` payload from the KB, while passing a file path (e.g.
+    `trace.json`) keeps the previous developer workflow. Mismatches are reported per node with
+    output hashes.
   - Knowledge base helpers: `rlp kb migrate`, `rlp kb query "<SQL>"`,
     `rlp kb search <keyword>`, and `rlp kb why <entity>` all operate on the
     local POG databases.

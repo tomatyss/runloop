@@ -47,7 +47,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fmt;
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{fs, fs::File};
@@ -146,9 +146,9 @@ enum ErrorsFormat {
 
 #[derive(Args, Debug)]
 struct ReplayArgs {
-    /// Path to a previously recorded run trace (JSON).
-    #[arg(value_name = "TRACE_PATH")]
-    trace_path: String,
+    /// Trace identifier (`trace:<uuid>` or bare UUID) or path to a trace JSON file.
+    #[arg(value_name = "TRACE_ID|TRACE_PATH")]
+    trace_ref: String,
     /// Opening YAML to use when replaying the trace.
     #[arg(long, value_name = "OPENING_PATH")]
     opening: String,
@@ -286,6 +286,8 @@ enum CliError {
     InvalidParams(String),
     #[error("invalid trace: {0}")]
     InvalidTrace(String),
+    #[error("trace {0} not found in knowledge base")]
+    TraceNotFound(TraceId),
     #[error("opening run failed (trace {0})")]
     RunFailure(TraceId),
     #[error("replay detected mismatches")]
@@ -326,6 +328,40 @@ impl From<AgentRegistryError> for CliError {
 impl From<shell::ShellError> for CliError {
     fn from(err: shell::ShellError) -> Self {
         CliError::ShellIntegration(err.to_string())
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ReplaySource {
+    File(PathBuf),
+    TraceId(TraceId),
+}
+
+impl ReplaySource {
+    fn parse(raw: &str) -> Result<Self, CliError> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err(CliError::InvalidTrace(
+                "trace reference cannot be empty".to_string(),
+            ));
+        }
+        if trimmed.starts_with("trace:") {
+            return trimmed
+                .parse::<TraceId>()
+                .map(ReplaySource::TraceId)
+                .map_err(|err| CliError::InvalidTrace(err.to_string()));
+        }
+        if Path::new(trimmed).exists() {
+            return Ok(ReplaySource::File(trimmed.into()));
+        }
+        trimmed
+            .parse::<TraceId>()
+            .map(ReplaySource::TraceId)
+            .map_err(|err| {
+                CliError::InvalidTrace(format!(
+                    "expected trace:<uuid>, bare uuid, or readable file (got '{raw}'): {err}"
+                ))
+            })
     }
 }
 
@@ -484,9 +520,11 @@ async fn handle_run(args: RunArgs) -> Result<(), CliError> {
 
 async fn handle_replay(args: ReplayArgs) -> Result<(), CliError> {
     let config = Config::load()?;
-    let trace_data = fs::read_to_string(&args.trace_path)?;
-    let trace: RunTrace =
-        serde_json::from_str(&trace_data).map_err(|err| CliError::InvalidTrace(err.to_string()))?;
+    let replay_source = ReplaySource::parse(&args.trace_ref)?;
+    let trace = match replay_source {
+        ReplaySource::File(path) => load_trace_from_file(&path)?,
+        ReplaySource::TraceId(trace_id) => load_trace_from_kb(&config, trace_id)?,
+    };
 
     let opening_source = fs::read_to_string(&args.opening)?;
     let opening = parse_opening_str(&opening_source)?;
@@ -512,6 +550,20 @@ async fn handle_replay(args: ReplayArgs) -> Result<(), CliError> {
         }
         Err(CliError::ReplayFailure(report.mismatches.clone()))
     }
+}
+
+fn load_trace_from_file(path: &Path) -> Result<RunTrace, CliError> {
+    let trace_data = fs::read_to_string(path)?;
+    serde_json::from_str(&trace_data).map_err(|err| CliError::InvalidTrace(err.to_string()))
+}
+
+fn load_trace_from_kb(config: &Config, trace_id: TraceId) -> Result<RunTrace, CliError> {
+    let kb = KnowledgeBase::open(&config.kb)?;
+    catch_up_views(&kb)?;
+    let value = kb
+        .load_run_trace(&trace_id)?
+        .ok_or(CliError::TraceNotFound(trace_id))?;
+    serde_json::from_value(value).map_err(|err| CliError::InvalidTrace(err.to_string()))
 }
 
 async fn handle_kb(cmd: KbCommands) -> Result<(), CliError> {
@@ -980,9 +1032,10 @@ fn active_config_path(layers: &[ConfigLayer]) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use runloop_core::{AgentPorts, AgentSchemaBundle, EventId};
+    use runloop_core::{AgentPorts, AgentSchemaBundle, Config, EventId, OpeningId};
     use runloop_router::{Classification as RouterClassification, Route as RouterRoute};
     use serde_json::json;
+    use tempfile::{NamedTempFile, tempdir};
 
     fn event_with_payload(payload: JsonValue) -> EventRecord {
         EventRecord {
@@ -1038,6 +1091,71 @@ mod tests {
             pointer_to_field("/with/tone~1secondary"),
             "with.tone/secondary"
         );
+    }
+
+    #[test]
+    fn replay_source_parses_prefixed_trace_id() {
+        let trace_id = TraceId::new();
+        let parsed = ReplaySource::parse(&trace_id.to_string()).expect("parse trace id");
+        match parsed {
+            ReplaySource::TraceId(id) => assert_eq!(id, trace_id),
+            other => panic!("expected trace id, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn replay_source_prefers_existing_files() {
+        let tmp = NamedTempFile::new().expect("temp file");
+        let path_str = tmp.path().to_str().expect("path str");
+        let parsed = ReplaySource::parse(path_str).expect("parse file");
+        match parsed {
+            ReplaySource::File(path) => assert_eq!(path, PathBuf::from(path_str)),
+            other => panic!("expected file source, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn load_trace_from_kb_returns_persisted_trace() {
+        let temp = tempdir().expect("temp dir");
+        let mut config = Config::default();
+        config.kb.root_dir = temp.path().to_string_lossy().into_owned();
+
+        let trace_id = TraceId::new();
+        let opening_id = OpeningId::new();
+        let final_hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let run_trace = RunTrace {
+            trace_id,
+            opening_id,
+            nodes: Vec::new(),
+            final_hash: final_hash.into(),
+            success: true,
+        };
+        let trace_store =
+            TraceStore::open(&config.kb, "agent:test", Some("system".into())).expect("trace store");
+        trace_store
+            .record_run_trace(&run_trace)
+            .expect("record trace");
+        trace_store.flush().expect("flush views");
+
+        let loaded = load_trace_from_kb(&config, trace_id).expect("load trace");
+        assert_eq!(loaded.trace_id, trace_id);
+        assert_eq!(loaded.final_hash, run_trace.final_hash);
+    }
+
+    #[test]
+    fn load_trace_from_kb_surfaces_not_found() {
+        let temp = tempdir().expect("temp dir");
+        let mut config = Config::default();
+        config.kb.root_dir = temp.path().to_string_lossy().into_owned();
+
+        // Ensure KB exists so load run trace operates on a real database.
+        let trace_store =
+            TraceStore::open(&config.kb, "agent:test", Some("system".into())).expect("trace store");
+        trace_store.flush().expect("flush views");
+
+        let missing = TraceId::new();
+        let err = load_trace_from_kb(&config, missing).expect_err("expected error");
+        assert!(matches!(err, CliError::TraceNotFound(id) if id == missing));
     }
 
     #[test]
