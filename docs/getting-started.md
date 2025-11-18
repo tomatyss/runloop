@@ -75,18 +75,27 @@ gain real outputs; until then they serve as interface contracts.
    just deb
    ```
 
-   Artifacts land in `../runloop_<version>_<arch>.deb`.
+   Install `cargo-deb` first (`cargo install cargo-deb`). Artifacts land under
+   each crate’s `target/debian/` directory, e.g.
+   `crates/runloopd/target/debian/runloopd_<version>_<arch>.deb`.
 
 2. Install and start the daemon:
 
    ```bash
-   sudo apt install ../runloop_0.1.0~alpha1-1_amd64.deb
+   sudo apt install crates/runloopd/target/debian/runloopd_0.1.0_amd64.deb
    sudo systemctl status runloopd
    ```
 
-   The package installs `runloopd`, `rlp`, and `agtop`, writes the default
-   config to `/etc/runloop/config.yaml`, creates `/var/lib/runloop`, and starts
-   the `runloopd` systemd unit.
+   Install the CLI/TUI helpers separately if desired:
+
+   ```bash
+   sudo apt install crates/rlp/target/debian/rlp_0.1.0_amd64.deb
+   sudo apt install crates/agtop/target/debian/agtop_0.1.0_amd64.deb
+   ```
+
+   The daemon package writes the default config to `/etc/runloop/config.yaml`,
+   creates `/var/lib/runloop`, and enables (but does not automatically start)
+   the `runloopd` systemd unit so you can edit config before running it.
 
 3. Update `/etc/runloop/config.yaml` as needed, then run
    `sudo systemctl restart runloopd`. Purging the package removes the config,

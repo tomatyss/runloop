@@ -335,8 +335,9 @@ evolution.
     `security.confirm_external_actions`.
 
 - Explain routing: `rlp why "<prompt>"`
-- Replay: `rlp replay trace:<uuid> --opening examples/openings/compose_email.yaml`
-  (pass a JSON file path to replay ad-hoc captures).
+- Replay:
+  `rlp replay trace:<uuid> --opening examples/openings/compose_email.yaml` (pass
+  a JSON file path to replay ad-hoc captures).
   - KB: `rlp kb query ...`, `rlp kb why <id>` All commands produce structured
     output with sensible exit codes.
 - `rlp run` validates every node’s `with` payload against the signed manifest

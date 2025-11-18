@@ -34,3 +34,20 @@ uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 tempfile = "3"
+
+[package.metadata.deb]
+maintainer = "Runloop Authors <ops@runloop.media>"
+copyright = "2025 Runloop Authors"
+homepage = "https://github.com/runloop/runloop"
+license-file = "../../LICENSE"
+priority = "optional"
+section = "utils"
+depends = "$auto, ca-certificates"
+assets = [
+    ["../../README.md", "usr/share/doc/rlp/README.md", "644"],
+    ["../../docs/router-shell.md", "usr/share/doc/rlp/router-shell.md", "644"],
+    ["../../docs/ops.md", "usr/share/doc/rlp/ops.md", "644"],
+]
+extended-description = """
+The Runloop CLI submits openings, inspects the knowledge base, and drives router/shell integrations. It expects a reachable runloopd daemon (local socket or --local fallback).
+"""

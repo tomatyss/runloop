@@ -21,7 +21,9 @@ build-release:
 	@cargo build --workspace --release
 
 deb:
-	@packaging/systemd/build-deb.sh
+	@cargo deb -p runloopd
+	@cargo deb -p rlp
+	@cargo deb -p agtop
 
 test:
 	@cargo test --workspace

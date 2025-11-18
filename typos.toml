@@ -1,0 +1,3 @@
+[default.extend-words]
+# Allow the crate name used throughout docs and code.
+ratatui = "ratatui"
