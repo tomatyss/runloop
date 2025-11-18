@@ -576,10 +576,7 @@ impl RunRepository {
         opening_id: &OpeningId,
         records: &[NodeFinishedRecord],
     ) {
-        if let Err(err) = self
-            .trace_store
-            .record_nodes(trace_id, opening_id, records)
-        {
+        if let Err(err) = self.trace_store.record_nodes(trace_id, opening_id, records) {
             tracing::warn!(%err, "failed to persist node summaries");
         }
     }
@@ -809,7 +806,6 @@ async fn handle_run_submit(
         .launch(request_id, opening_yaml, agent_digests, req_key)
         .await
 }
-
 
 fn verify_agent_digests(
     registry: &AgentRegistry,
