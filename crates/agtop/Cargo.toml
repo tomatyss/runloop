@@ -7,7 +7,7 @@ edition = "2024"
 clap = { version = "4.5", features = ["derive"] }
 runloop-core = { path = "../core" }
 crossterm = "0.29"
-ratatui = "0.29"
+ratatui = "0.30.0-beta"
 tokio = { version = "1.38", features = ["rt-multi-thread", "macros", "time"] }
 anyhow = "1.0"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
