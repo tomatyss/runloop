@@ -48,13 +48,14 @@ Example NDJSON slice:
 rlp replay <trace_id|trace.json> --opening <opening.yaml>
 ```
 
-- Pass a `trace:<uuid>` (or bare UUID) to load the canonical `run.trace` payload from the KB. The
-  CLI syncs views before deserializing so recently recorded runs show up immediately.
-- Provide a filesystem path (`trace.json`) to keep the existing developer workflow of replaying
-  offline captures. If a string matches both a file and a UUID, prefix it with `trace:` to force the
-  KB lookup.
-- Replay reports per-node mismatches with recorded output hashes; exit code is non-zero when a node
-  diverges.
+- Pass a `trace:<uuid>` (or bare UUID) to load the canonical `run.trace` payload
+  from the KB. The CLI syncs views before deserializing so recently recorded
+  runs show up immediately.
+- Provide a filesystem path (`trace.json`) to keep the existing developer
+  workflow of replaying offline captures. If a string matches both a file and a
+  UUID, prefix it with `trace:` to force the KB lookup.
+- Replay reports per-node mismatches with recorded output hashes; exit code is
+  non-zero when a node diverges.
 
 ### `rlp why "<prompt>"`
 

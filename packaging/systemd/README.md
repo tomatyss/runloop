@@ -33,8 +33,8 @@ cargo deb -p rlp
 cargo deb -p agtop
 ```
 
-Artifacts land in each crate’s `target/debian/` directory. Copy them to your
-APT staging area or `dpkg -i` directly.
+Artifacts land in each crate’s `target/debian/` directory. Copy them to your APT
+staging area or `dpkg -i` directly.
 
 ## Installing
 
