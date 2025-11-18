@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS events (
   kind          TEXT NOT NULL,                 -- e.g. contact.upserted
   scope         TEXT NOT NULL,                 -- user|system|agent:<id>
   payload_json  TEXT NOT NULL,                 -- JCS canonical JSON blob
-  provenance_json TEXT NOT NULL,               -- JCS canonical JSON (model, inputs hash, etc.)
+  provenance_json TEXT NOT NULL,               -- JCS canonical JSON
+                                               -- (model inputs, hash, etc.)
   hash_blake3   BLOB NOT NULL UNIQUE           -- BLAKE3 digest of canonical envelope
 );
 
@@ -48,15 +49,27 @@ CREATE INDEX IF NOT EXISTS idx_events_actor_ts
 Normative JSON Schemas for the initial event kinds live under
 [`crates/kb/schemas/`](../crates/kb/schemas/):
 
-| Kind               | Schema                                                                              |
-| ------------------ | ----------------------------------------------------------------------------------- |
-| `contact.upserted` | [`contact.upserted.schema.json`](../crates/kb/schemas/contact.upserted.schema.json) |
-| `artifact.created` | [`artifact.created.schema.json`](../crates/kb/schemas/artifact.created.schema.json) |
-| `email.sent`       | [`email.sent.schema.json`](../crates/kb/schemas/email.sent.schema.json)             |
-| `run.started`      | [`run.started.schema.json`](../crates/kb/schemas/run.started.schema.json)           |
-| `run.finished`     | [`run.finished.schema.json`](../crates/kb/schemas/run.finished.schema.json)         |
-| `node.finished`    | [`node.finished.schema.json`](../crates/kb/schemas/node.finished.schema.json)       |
-| `run.trace`        | [`run.trace.schema.json`](../crates/kb/schemas/run.trace.schema.json)               |
+<!-- markdownlint-disable MD013 -->
+
+| Kind               | Schema                                            |
+| ------------------ | ------------------------------------------------- |
+| `contact.upserted` | [`contact.upserted.schema.json`][schema-contact]  |
+| `artifact.created` | [`artifact.created.schema.json`][schema-artifact] |
+| `email.sent`       | [`email.sent.schema.json`][schema-email]          |
+| `run.started`      | [`run.started.schema.json`][schema-run-started]   |
+| `run.finished`     | [`run.finished.schema.json`][schema-run-finished] |
+| `node.finished`    | [`node.finished.schema.json`][schema-node]        |
+| `run.trace`        | [`run.trace.schema.json`][schema-trace]           |
+
+<!-- markdownlint-enable MD013 -->
+
+[schema-contact]: ../crates/kb/schemas/contact.upserted.schema.json
+[schema-artifact]: ../crates/kb/schemas/artifact.created.schema.json
+[schema-email]: ../crates/kb/schemas/email.sent.schema.json
+[schema-run-started]: ../crates/kb/schemas/run.started.schema.json
+[schema-run-finished]: ../crates/kb/schemas/run.finished.schema.json
+[schema-node]: ../crates/kb/schemas/node.finished.schema.json
+[schema-trace]: ../crates/kb/schemas/run.trace.schema.json
 
 Validators MUST embed these schemas and enforce them at `StateDelta` ingestion
 time. `$id` versions bump on breaking changes; implementations SHOULD accept the
@@ -115,9 +128,17 @@ CREATE INDEX IF NOT EXISTS idx_edges_from_kind
 
 Supplemental tables:
 
-- `embeddings (artifact_id INTEGER PRIMARY KEY, dim INTEGER, embedding BLOB, meta JSON)`
+- `embeddings`:
+  - `artifact_id INTEGER PRIMARY KEY`
+  - `dim INTEGER`
+  - `embedding BLOB`
+  - `meta JSON`
 - `meta(schema_version TEXT, dirty INTEGER, ts DATETIME)` (mirrors ledger)
-- `snapshots(id INTEGER PRIMARY KEY, ts DATETIME, events_high_watermark INTEGER, comment TEXT)`
+- `snapshots`:
+  - `id INTEGER PRIMARY KEY`
+  - `ts DATETIME`
+  - `events_high_watermark INTEGER`
+  - `comment TEXT`
 
 ### 2.2 Rebuild process
 
@@ -135,12 +156,16 @@ vector store rebuild. Existing rows are truncated before replay.
 
 ## 4. Migration commands
 
+<!-- markdownlint-disable MD013 -->
+
 | Command                      | Purpose                                                |
 | ---------------------------- | ------------------------------------------------------ |
 | `rlp kb migrate [--inplace]` | Backup, migrate schema, replay views, rebuild vectors. |
 | `rlp kb verify`              | Hash, referential integrity, schema version checks.    |
 | `rlp kb backup`              | Consistent backup of both DBs.                         |
 | `rlp kb vacuum`              | Vacuum/ANALYZE databases (requires exclusive access).  |
+
+<!-- markdownlint-enable MD013 -->
 
 Migration sets `meta.dirty = 1` during execution; resets to `0` after a
 successful run.

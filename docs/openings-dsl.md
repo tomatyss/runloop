@@ -158,6 +158,8 @@ This compiles to the same IR as the YAML.
 
 ### 5.1 Top‑level keys
 
+<!-- markdownlint-disable MD013 -->
+
 | Key                       | Type        | Required | Meaning                                                    |
 | ------------------------- | ----------- | :------: | ---------------------------------------------------------- |
 | `version`                 | int         |    ✓     | DSL version (this doc = 0).                                |
@@ -171,6 +173,8 @@ This compiles to the same IR as the YAML.
 | `edges`                   | [Edge]      |    ✓     | Connections between node **ports**.                        |
 | `success`                 | SuccessExpr |    –     | Completion condition.                                      |
 | `artifacts.save`          | [PortRef]   |    –     | Ports whose outputs should be persisted in KB.             |
+
+<!-- markdownlint-enable MD013 -->
 
 ### 5.2 Node
 
@@ -314,7 +318,13 @@ evolution.
 ## 10) CLI integration
 
 - Run:
-  `rlp run examples/openings/compose_email.yaml --params '{"recipient":"john","topic":"Q4 plan"}' --trace-out trace.json`
+
+  ```bash
+  rlp run examples/openings/compose_email.yaml \
+    --params '{"recipient":"john","topic":"Q4 plan"}' \
+    --trace-out trace.json
+  ```
+
   - Executes the YAML plan via the openings engine, drives the canonical crew
     (contact resolver → context gatherer → writer → critic → mailer), prints
     node status, and writes an optional JSON trace for later replay. You need a
@@ -323,6 +333,7 @@ evolution.
     reads broker credentials from the environment, and mail send still requires
     human confirmation unless you opt out in
     `security.confirm_external_actions`.
+
 - Explain routing: `rlp why "<prompt>"`
 - Replay: `rlp replay trace.json --opening examples/openings/compose_email.yaml`
   - KB: `rlp kb query ...`, `rlp kb why <id>` All commands produce structured
@@ -415,20 +426,24 @@ Opening        := { version: Int, name: Ident, goals?: [Str], params?: Map,
                     policy?: Policy, nodes: [Node], edges: [Edge],
                     success?: Success, artifacts?: Artifacts }
 
-Policy         := { budget_tokens?: Int, timeout_ms?: Int, confirm_external?: Bool }
+Policy         := { budget_tokens?: Int, timeout_ms?: Int,
+                    confirm_external?: Bool }
 
 Node           := { id: Ident, use: Use, with?: Map, retry?: Retry,
-                    timeout_ms?: Int, budget_tokens?: Int, tags?: [Ident] }
+                    timeout_ms?: Int, budget_tokens?: Int,
+                    tags?: [Ident] }
 
 Use            := "agent:" Ident | "opening:" Ident
 
 Retry          := { max_attempts: Int, backoff_ms: Int }
 
 Edge           := { from: PortRef, to: PortRef }
-PortRef        := Ident "." Ident [ "==" (Bool | Int | Str) ]   # simple predicate suffix
+PortRef        := Ident "." Ident [ "==" (Bool | Int | Str) ]
+                  # simple predicate suffix
 
 Success        := { any_of?: [Expr] } | { all_of?: [Expr] }
-Expr           := Ident "." Ident "==" (Bool | Int | Str) | "exists(" PortRef ")"
+Expr           := Ident "." Ident "==" (Bool | Int | Str)
+                  | "exists(" PortRef ")"
 
 Artifacts      := { save?: [PortRef] }
 

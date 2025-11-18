@@ -30,10 +30,10 @@ pre-commit:
 	@scripts/pre-commit.sh
 
 markdownfmt:
-	@npx prettier --write '**/*.md'
+	@npx prettier --write 'docs/**/*.md'
 
 markdownlint: markdownfmt
-	@npx markdownlint-cli2 '**/*.md'
+	@npx markdownlint-cli2 'docs/**/*.md'
 
 doc:
 	@cargo doc --workspace --no-deps

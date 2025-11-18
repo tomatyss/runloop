@@ -134,6 +134,8 @@ Limitations (MVP):
 
 ## 5. Runtime toggles & troubleshooting
 
+<!-- markdownlint-disable MD013 -->
+
 | Toggle / Command                      | Effect                                                                          |
 | ------------------------------------- | ------------------------------------------------------------------------------- |
 | `RUNLOOP_ROUTER_DISABLE=1`            | Globally disable routing (shells fall back to normal behavior).                 |
@@ -141,6 +143,8 @@ Limitations (MVP):
 | `RUNLOOP_ROUTER_OPENING_PATH`         | Absolute path to the YAML opening to invoke for agent routes.                   |
 | `RUNLOOP_ROUTER_OPENING_PATH_DEFAULT` | Optional fallback path (defaults to `~/.runloop/openings/router-default.yaml`). |
 | `RUNLOOP_ROUTER_DEBUG=1` _(future)_   | Reserved for verbose logging (not yet implemented).                             |
+
+<!-- markdownlint-enable MD013 -->
 
 Common issues:
 

@@ -31,6 +31,8 @@ exec = false
 
 Supported keys:
 
+<!-- markdownlint-disable MD013 -->
+
 | Key        | Type                    | Default | Notes                                                                                   |
 | ---------- | ----------------------- | ------- | --------------------------------------------------------------------------------------- |
 | `fs`       | array of absolute paths | `[]`    | Paths are normalized; globs not allowed in v0.1.                                        |
@@ -41,6 +43,8 @@ Supported keys:
 | `secrets`  | array of secret IDs     | `[]`    | IDs follow `runloop/<scope>/<name>`.                                                    |
 | `model`    | bool                    | `false` | Allows requests to model broker.                                                        |
 | `exec`     | bool                    | `false` | Command execution on host; disabled in v0.1.                                            |
+
+<!-- markdownlint-enable MD013 -->
 
 Shorthand booleans (`kb_read = true`) expand to the full domain set at load
 time. Internally the runtime converts the configuration into bitsets per
