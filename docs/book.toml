@@ -3,7 +3,6 @@ title = "Runloop OS"
 description = "Runloop OS documentation: architecture, specs, and operations."
 authors = ["Runloop Maintainers"]
 language = "en"
-multilingual = false
 # Use the existing docs/ directory as the mdBook source
 src = "."
 
@@ -20,4 +19,3 @@ cname = ""
 
 [output.html.search]
 enable = true
-
