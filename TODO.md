@@ -375,9 +375,8 @@ draft artifact.
 - [x] `rlp why "<prompt>"` (table output by default, `--json` flag shared with
       other subcommands). _Shared renderer now enforces table-by-default when
       TTY; honors `--json/--table`/`--max-_`.\*
-- [ ] `rlp replay <trace_id>` (reads stored traces from KB; still accepts
-      `<trace.json>` for dev). _CLI replay still operates on explicit trace
-      files + `--opening`; KB lookups remain to do._
+- [x] `rlp replay <trace_id>` (reads stored traces from KB; still accepts
+      `<trace.json>` for dev).
 - [x] `rlp kb query "<sql>"` (table default + `--json`).
 - [x] `rlp kb why <entity_id>` (ditto formatting and provenance view). _Outputs
       ladder table with `--resolve` stub TBD._

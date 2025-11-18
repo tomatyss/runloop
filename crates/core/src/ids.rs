@@ -72,6 +72,16 @@ impl fmt::Display for TraceId {
     }
 }
 
+impl std::str::FromStr for TraceId {
+    type Err = uuid::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let trimmed = s.trim();
+        let uuid_str = trimmed.strip_prefix("trace:").unwrap_or(trimmed);
+        Uuid::parse_str(uuid_str).map(TraceId)
+    }
+}
+
 /// Identifier for a persisted knowledge base event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct EventId(pub i64);
@@ -91,5 +101,17 @@ mod tests {
         assert_eq!(AgentId::default().0, Uuid::nil());
         assert_eq!(OpeningId::default().0, Uuid::nil());
         assert_eq!(TraceId::default().0, Uuid::nil());
+    }
+
+    #[test]
+    fn trace_id_parses_with_and_without_prefix() {
+        let trace = TraceId::new();
+        let raw = trace.to_string();
+        let parsed_prefixed: TraceId = raw.parse().expect("prefixed trace parses");
+        assert_eq!(parsed_prefixed.0, trace.0);
+
+        let uuid_str = trace.0.to_string();
+        let parsed_uuid: TraceId = uuid_str.parse().expect("uuid parses");
+        assert_eq!(parsed_uuid.0, trace.0);
     }
 }
