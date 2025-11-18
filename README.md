@@ -81,6 +81,20 @@ cargo run -p rlp -- config path --all
 > NDJSON `RunEvent` records so monitors such as `agtop` can consume the same
 > schema (pipe `rlp run ... > run.ndjson` for live monitoring or feed stdin).
 
+### Agent shims (development)
+
+Until the wasm32-wasi toolchain lands, the canonical `compose_email` agents ship
+as lightweight Python shims under `agents/*/bin`. They let you exercise the DAG
+with real inputs while the runtime integration matures. These shims require
+Python 3.11+ and can be validated end-to-end via:
+
+```bash
+just test-agent-shims
+```
+
+That task runs the contact→context→writer→critic→mailer chain and ensures the
+produced artifacts exist on disk.
+
 ### Packages & images (daemon / system mode)
 
 When installed from a .deb or image, the service runs as **`runloop:runloop`**
@@ -342,9 +356,11 @@ Local‑first storage with:
     environment so the CLI secret resolver can read them. Mail send still runs
     as a dry-run and prompts for approval unless
     `security.confirm_external_actions=false`.
-  - Replay a recorded run with
-    `cargo run -p rlp -- replay trace.json --opening examples/openings/compose_email.yaml`;
-    mismatches are reported per node with output hashes.
+  - Replay a recorded run with either a stored trace ID or a JSON file:
+    `cargo run -p rlp -- replay trace:<trace_uuid> --opening examples/openings/compose_email.yaml`
+    pulls the canonical `run.trace` payload from the KB, while passing a file path (e.g.
+    `trace.json`) keeps the previous developer workflow. Mismatches are reported per node with
+    output hashes.
   - Knowledge base helpers: `rlp kb migrate`, `rlp kb query "<SQL>"`,
     `rlp kb search <keyword>`, and `rlp kb why <entity>` all operate on the
     local POG databases.

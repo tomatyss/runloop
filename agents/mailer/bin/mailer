@@ -1,3 +1,59 @@
-#!/usr/bin/env bash
-printf "%s\n" "mailer placeholder binary - replace with compiled WASM bundle."
-exit 1
+#!/usr/bin/env python3
+"""
+Mailer shim for compose_email.
+
+Simulates sending the drafted email and records an event JSON structure.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+import uuid
+
+
+def load_json(path: str) -> dict:
+    with open(path, "r", encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def maybe_confirm(require: bool, recipient: str, topic: str) -> None:
+    if not require:
+        return
+    prompt = f"Send '{topic}' email to {recipient}? [y/N]: "
+    answer = input(prompt).strip().lower()
+    if answer not in {"y", "yes"}:
+        raise SystemExit("send cancelled by operator")
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Simulate sending an email.")
+    parser.add_argument("--draft-json", required=True, help="Draft artifact JSON path.")
+    parser.add_argument("--contact-json", required=True, help="Resolved contact JSON path.")
+    parser.add_argument("--topic", required=True, help="Topic for the email.")
+    parser.add_argument(
+        "--require-confirm",
+        action="store_true",
+        help="Require interactive confirmation before sending.",
+    )
+    args = parser.parse_args(argv)
+
+    draft = load_json(args.draft_json)
+    contact = load_json(args.contact_json)
+    maybe_confirm(args.require_confirm, contact.get("email", "recipient"), args.topic)
+
+    result = {
+        "status": "sent",
+        "recipients": [contact.get("email")],
+        "topic": args.topic,
+        "message_id": f"msg-{uuid.uuid4().hex[:10]}",
+        "delivered_at_ms": int(time.time() * 1000),
+        "draft_path": draft.get("path"),
+    }
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
