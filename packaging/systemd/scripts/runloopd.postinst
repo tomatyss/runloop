@@ -1,6 +1,14 @@
 #!/bin/sh
 set -e
 
+is_systemd() {
+	if [ -d /run/systemd/system ]; then
+		return 0
+	else
+		return 1
+	fi
+}
+
 create_runloop_user() {
 	if ! getent group runloop >/dev/null 2>&1; then
 		addgroup --system --quiet runloop
@@ -39,9 +47,11 @@ case "$1" in
 		if command -v systemd-tmpfiles >/dev/null 2>&1; then
 			systemd-tmpfiles --create /usr/lib/tmpfiles.d/runloop.conf >/dev/null 2>&1 || true
 		fi
-	;;
+		if is_systemd; then
+			systemctl daemon-reload >/dev/null 2>&1 || true
+			systemctl enable runloopd.service >/dev/null 2>&1 || true
+		fi
+		;;
 esac
-
-#DEBHELPER#
 
 exit 0

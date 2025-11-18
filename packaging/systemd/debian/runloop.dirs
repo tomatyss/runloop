@@ -1,8 +1,0 @@
-etc/runloop
-usr/bin
-lib/systemd/system
-usr/lib/tmpfiles.d
-var/lib/runloop
-var/lib/runloop/pog
-var/lib/runloop/pog/vectors
-var/log/runloop

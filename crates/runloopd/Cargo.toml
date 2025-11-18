@@ -23,3 +23,25 @@ tempfile = "3.10"
 serde_json = { version = "1.0", features = ["preserve_order"] }
 uuid = { version = "1", features = ["v4"] }
 serde = { version = "1.0", features = ["derive"] }
+
+[package.metadata.deb]
+maintainer = "Runloop Authors <ops@runloop.media>"
+copyright = "2025 Runloop Authors"
+homepage = "https://github.com/runloop/runloop"
+license-file = "../../LICENSE"
+priority = "optional"
+section = "utils"
+depends = "$auto, adduser, systemd (>= 255), ca-certificates"
+assets = [
+    ["../../packaging/systemd/runloopd.service", "lib/systemd/system/runloopd.service", "644"],
+    ["../../packaging/systemd/tmpfiles.d/runloop.conf", "usr/lib/tmpfiles.d/runloop.conf", "644"],
+    ["../../packaging/systemd/config/config.yaml", "etc/runloop/config.yaml", "640"],
+    ["../../packaging/systemd/README.Debian", "usr/share/doc/runloopd/README.Debian", "644"],
+    ["../../README.md", "usr/share/doc/runloopd/README.md", "644"],
+    ["../../docs/ops.md", "usr/share/doc/runloopd/ops.md", "644"],
+]
+conf-files = ["etc/runloop/config.yaml"]
+maintainer-scripts = { postinst = "../../packaging/systemd/scripts/runloopd.postinst", prerm = "../../packaging/systemd/scripts/runloopd.prerm", postrm = "../../packaging/systemd/scripts/runloopd.postrm" }
+extended-description = """
+Runloop routes prompts through router+agent openings, schedules WASM agents via runloopd, and persists run and capability events. This package installs the daemon, default config, and systemd units for Debian trixie-class hosts.
+"""

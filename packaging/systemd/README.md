@@ -7,37 +7,39 @@ This directory houses the Debian 13 (trixie) packaging assets for Runloop:
 - `tmpfiles.d/runloop.conf` – runtime and state directories materialized via
   `systemd-tmpfiles`.
 - `config/config.yaml` – default system-mode configuration installed to
-  `/etc/runloop/config.yaml`.
-- `README.Debian` – admin notes, shipped under `/usr/share/doc/runloop/`.
-- `debian/` – control files copied to the repository root when building the
-  package (control, rules, maintainer scripts, etc.).
-- `build-deb.sh` – helper that syncs `debian/` into place, runs
-  `dpkg-buildpackage`, and cleans up.
+  `/etc/runloop/config.yaml` (marked as a conffile).
+- `README.Debian` – admin notes, shipped under `/usr/share/doc/runloopd/`.
+- `scripts/*.{postinst,prerm,postrm}` – maintainer scripts referenced directly
+  from the `cargo-deb` metadata.
+
+There is no `debian/` subtree anymore; `cargo-deb` drives the entire build.
 
 ## Building the package
 
 Prerequisites on Debian 13:
 
 ```bash
-sudo apt install build-essential debhelper-compat dh-cargo rustc cargo pkg-config \
-                 libssl-dev libsqlite3-dev systemd systemd-dev
+sudo apt install build-essential rustc cargo pkg-config libssl-dev libsqlite3-dev systemd
+cargo install cargo-deb
 ```
 
 Then, from the repo root:
 
 ```bash
 just deb
-# or directly:
-packaging/systemd/build-deb.sh
+# or to build an individual crate:
+cargo deb -p runloopd
+cargo deb -p rlp
+cargo deb -p agtop
 ```
 
-Artifacts land in the parent directory (e.g.,
-`../runloop_0.1.0~alpha1-1_amd64.deb`).
+Artifacts land in each crate’s `target/debian/` directory. Copy them to your
+APT staging area or `dpkg -i` directly.
 
 ## Installing
 
 ```bash
-sudo apt install ./../runloop_0.1.0~alpha1-1_amd64.deb
+sudo apt install crates/runloopd/target/debian/runloopd_0.1.0_amd64.deb
 sudo systemctl status runloopd
 ```
 

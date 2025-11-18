@@ -1,0 +1,24 @@
+[package]
+name = "runloop"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
+
+[package.metadata.deb]
+maintainer = "Runloop Authors <ops@runloop.media>"
+homepage = "https://github.com/runloop/runloop"
+license-file = "../../LICENSE"
+section = "utils"
+priority = "optional"
+depends = "runloopd, rlp, agtop"
+assets = [
+    ["../../README.md", "usr/share/doc/runloop/README.md", "644"],
+]
+extended-description = """
+Meta-package for Runloop that depends on the daemon (runloopd), CLI (rlp), and monitor (agtop). Installs a compatibility `runloop` shim that forwards commands to `rlp`.
+"""
