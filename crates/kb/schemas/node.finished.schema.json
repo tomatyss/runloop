@@ -1,0 +1,55 @@
+{
+  "$id": "https://runloop.local/schemas/node.finished.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "node.finished v1",
+  "type": "object",
+  "required": [
+    "trace_id",
+    "opening_id",
+    "node_id",
+    "status",
+    "attempt",
+    "duration_ms"
+  ],
+  "properties": {
+    "trace_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "opening_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "node_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["ok", "error", "skipped", "cancelled", "pending", "running"]
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "duration_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "outputs_hash": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "error": {
+      "type": ["string", "null"]
+    }
+  },
+  "additionalProperties": false
+}

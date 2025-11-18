@@ -3118,6 +3118,7 @@ dependencies = [
  "jsonschema",
  "parking_lot",
  "runloop-core",
+ "runloop-openings",
  "rusqlite",
  "serde",
  "serde_json",

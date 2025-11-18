@@ -10,7 +10,7 @@ use futures_util::StreamExt;
 use output::{
     Cell, OutputArgs, OutputMode, Table, display_value, print_json, print_table, summarize_json,
 };
-use run_events::{RunEventEmitter, emit_ndjson_from_run_event_env};
+use run_events::{RunEventEmitter, emit_ndjson_from_run_event_env, node_records_to_meta};
 use runloop_agent_registry::{
     AgentRegistry, AgentRegistryError, SchemaValidationError, digests_from, schema_property_names,
     validate_instance,
@@ -21,13 +21,13 @@ use runloop_agents_common::{
 use runloop_bus::{Bus, Subscription};
 use runloop_core::config::{ConfigLayer, ConfigSource};
 use runloop_core::content::{CT_CTRL_REQ, CT_CTRL_RESP, CT_RUN_EVENT};
-use runloop_core::{AgentDigest, AgentRef, Config, DescribedAgent, OpeningId, TraceId};
+use runloop_core::{AgentDigest, AgentRef, Config, DescribedAgent, TraceId};
 use runloop_core::{ControlRequest, ControlResponse, DescribeAgentsRequest, RunSubmitRequest};
 use runloop_executor_local::{
     ExecutorInitError, LocalExecutor, build_executor as build_local_executor, catch_up_views,
 };
 use runloop_kb::{
-    EventRecord, KbBackupReport, KnowledgeBase, Materializer, Provenance, StateDelta, VerifyReport,
+    EventRecord, KbBackupReport, KnowledgeBase, Materializer, TraceStore, VerifyReport,
 };
 use runloop_model_broker::SecretResolver;
 use runloop_openings::{
@@ -1624,65 +1624,6 @@ fn format_paths(paths: &[PathBuf]) -> String {
         .join(", ")
 }
 
-struct RunEventRecorder {
-    kb: KnowledgeBase,
-}
-
-impl RunEventRecorder {
-    fn new(config: &Config) -> Result<Self, CliError> {
-        let kb = KnowledgeBase::open(&config.kb)?;
-        kb.migrate()?;
-        Ok(Self { kb })
-    }
-
-    fn started(&self, trace_id: &TraceId, opening_id: &OpeningId) -> Result<(), CliError> {
-        self.record("run.started", trace_id, opening_id, "started")
-    }
-
-    fn finished(
-        &self,
-        trace_id: &TraceId,
-        opening_id: &OpeningId,
-        status: &str,
-    ) -> Result<(), CliError> {
-        self.record("run.finished", trace_id, opening_id, status)
-    }
-
-    fn record(
-        &self,
-        kind: &str,
-        trace_id: &TraceId,
-        opening_id: &OpeningId,
-        status: &str,
-    ) -> Result<(), CliError> {
-        let payload = json!({
-            "opening_id": opening_id.to_string(),
-            "status": status,
-        });
-        let provenance = Provenance {
-            trace_id: trace_id.to_string(),
-            opening_id: opening_id.to_string(),
-            agent_id: CLI_AGENT_ID.into(),
-            inputs_hash: None,
-            rationale: None,
-        };
-        self.kb.propose(StateDelta::new(
-            kind,
-            CLI_AGENT_ID,
-            Some("user".into()),
-            payload,
-            provenance,
-        ))?;
-        Ok(())
-    }
-
-    fn flush(&self) -> Result<(), CliError> {
-        let materializer = Materializer::new(self.kb.clone());
-        while materializer.sync()? {}
-        Ok(())
-    }
-}
-
 struct PreparedOpening {
     opening: Opening,
     _yaml: String,
@@ -1795,7 +1736,7 @@ async fn run_opening_locally(
         ..
     } = prepared;
     let executor = build_executor(config.clone())?;
-    let recorder = RunEventRecorder::new(config)?;
+    let trace_store = TraceStore::open(&config.kb, CLI_AGENT_ID, Some("user".into()))?;
     let runner = Runner::new(opening, executor);
     let mut emitter =
         RunEventEmitter::new(runner.trace_id(), runner.opening_id(), opening_name, params);
@@ -1804,7 +1745,7 @@ async fn run_opening_locally(
     let trace_id = runner.trace_id();
     let opening_id = runner.opening_id();
 
-    recorder.started(&trace_id, &opening_id)?;
+    trace_store.record_run_started(&trace_id, &opening_id)?;
     emitter.emit_run_started()?;
 
     let mut run_future = Box::pin(async move { runner.run().await });
@@ -1830,14 +1771,20 @@ async fn run_opening_locally(
 
     match result {
         Ok(report) => {
-            let node_summaries = emitter.emit_node_finishes(&report.trace)?;
+            let (node_meta, node_records) = emitter.emit_node_finishes(&report.trace)?;
             let run_status = if report.trace.success { "ok" } else { "error" };
-            emitter.emit_run_finished(run_status, node_summaries)?;
+            emitter.emit_run_finished(run_status, node_meta)?;
             if let Some(path) = trace_out {
                 let file = File::create(&path)?;
                 to_writer_pretty(file, &report.trace)?;
             }
-            recorder.finished(
+            trace_store.record_nodes(
+                &report.trace.trace_id,
+                &report.trace.opening_id,
+                &node_records,
+            )?;
+            trace_store.record_run_trace(&report.trace)?;
+            trace_store.record_run_finished(
                 &report.trace.trace_id,
                 &report.trace.opening_id,
                 if report.trace.success {
@@ -1846,7 +1793,7 @@ async fn run_opening_locally(
                     "failed"
                 },
             )?;
-            recorder.flush()?;
+            trace_store.flush()?;
             if report.trace.success {
                 Ok(())
             } else {
@@ -1854,10 +1801,12 @@ async fn run_opening_locally(
             }
         }
         Err(err) => {
-            let summaries = emitter.summarize_failure();
-            emitter.emit_run_finished("error", summaries)?;
-            recorder.finished(&trace_id, &opening_id, "failed")?;
-            recorder.flush()?;
+            let failure_records = emitter.summarize_failure();
+            let failure_meta = node_records_to_meta(&failure_records);
+            emitter.emit_run_finished("error", failure_meta)?;
+            trace_store.record_nodes(&trace_id, &opening_id, &failure_records)?;
+            trace_store.record_run_finished(&trace_id, &opening_id, "failed")?;
+            trace_store.flush()?;
             Err(CliError::Runner(err))
         }
     }
