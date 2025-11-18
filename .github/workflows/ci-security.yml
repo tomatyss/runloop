@@ -61,11 +61,15 @@ jobs:
         continue-on-error: true
 
   codeql:
-    name: CodeQL (Rust)
+    name: CodeQL (${{ matrix.language }})
     # Guard to avoid conflict with GitHub CodeQL Default setup.
     # Run this advanced job only when the repository variable CI_CODEQL_ADVANCED is explicitly set to 'true'.
     # If you enable this, disable Default setup in the GitHub UI first to avoid SARIF rejection.
-    if: ${{ vars.CI_CODEQL_ADVANCED == 'true' }}
+    if: ${{ vars.CI_CODEQL_ADVANCED == 'true' && (matrix.language != 'python' || hashFiles('**/*.py') != '' || hashFiles('**/*.pyi') != '' || hashFiles('**/*.pyw') != '') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [rust, python]
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -76,12 +80,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
-          languages: rust
+          languages: ${{ matrix.language }}
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
+        if: ${{ matrix.language != 'python' }}
+        uses: github/codeql-action/autobuild@v4
 
       - name: Analyze
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
