@@ -1,4 +1,5 @@
 use runloop_core::{OpeningId, TraceId};
+use runloop_kb::NodeFinishedRecord;
 use runloop_openings::{NodeState, RunEvent, RunTrace};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -161,8 +162,12 @@ impl RunEventEmitter {
         )
     }
 
-    pub fn emit_node_finishes(&mut self, trace: &RunTrace) -> io::Result<Vec<Value>> {
+    pub fn emit_node_finishes(
+        &mut self,
+        trace: &RunTrace,
+    ) -> io::Result<(Vec<Value>, Vec<NodeFinishedRecord>)> {
         let mut node_summaries = Vec::new();
+        let mut node_records = Vec::new();
         for node in &trace.nodes {
             let telemetry = self
                 .nodes
@@ -175,16 +180,16 @@ impl RunEventEmitter {
             let outputs_hash = node
                 .final_attempt
                 .as_ref()
-                .and_then(|attempt| attempt.output_hash.clone())
-                .unwrap_or_default();
-            let meta = json!({
-                "node": node.node_id,
-                "attempt": telemetry.attempt,
-                "status": status,
-                "duration_ms": telemetry.duration_ms(),
-                "outputs_hash": outputs_hash,
-                "error": telemetry.error,
-            });
+                .and_then(|attempt| attempt.output_hash.clone());
+            let record = NodeFinishedRecord {
+                node_id: node.node_id.clone(),
+                status: status.clone(),
+                attempt: telemetry.attempt,
+                duration_ms: telemetry.duration_ms(),
+                outputs_hash,
+                error: telemetry.error.clone(),
+            };
+            let meta = node_record_to_meta(&record);
             self.emit_record(
                 "node.finished",
                 level_for_status(&status),
@@ -192,8 +197,9 @@ impl RunEventEmitter {
                 meta.clone(),
             )?;
             node_summaries.push(meta);
+            node_records.push(record);
         }
-        Ok(node_summaries)
+        Ok((node_summaries, node_records))
     }
 
     pub fn emit_run_finished(&self, status: &str, node_summaries: Vec<Value>) -> io::Result<()> {
@@ -232,17 +238,16 @@ impl RunEventEmitter {
         stdout.flush()
     }
 
-    pub fn summarize_failure(&self) -> Vec<Value> {
+    pub fn summarize_failure(&self) -> Vec<NodeFinishedRecord> {
         self.nodes
             .iter()
-            .map(|(node_id, telemetry)| {
-                json!({
-                    "node": node_id,
-                    "attempt": telemetry.attempt,
-                    "status": telemetry.status.clone().unwrap_or_else(|| "error".into()),
-                    "duration_ms": telemetry.duration_ms(),
-                    "error": telemetry.error,
-                })
+            .map(|(node_id, telemetry)| NodeFinishedRecord {
+                node_id: node_id.clone(),
+                status: telemetry.status.clone().unwrap_or_else(|| "error".into()),
+                attempt: telemetry.attempt,
+                duration_ms: telemetry.duration_ms(),
+                outputs_hash: None,
+                error: telemetry.error.clone(),
             })
             .collect()
     }
@@ -299,6 +304,21 @@ fn status_for(state: &NodeState) -> String {
         NodeState::Pending => "pending".into(),
         NodeState::Running => "running".into(),
     }
+}
+
+pub fn node_record_to_meta(record: &NodeFinishedRecord) -> Value {
+    json!({
+        "node": record.node_id,
+        "attempt": record.attempt,
+        "status": record.status,
+        "duration_ms": record.duration_ms,
+        "outputs_hash": record.outputs_hash,
+        "error": record.error,
+    })
+}
+
+pub fn node_records_to_meta(records: &[NodeFinishedRecord]) -> Vec<Value> {
+    records.iter().map(node_record_to_meta).collect()
 }
 
 /// Emit a single NDJSON line from a daemon-provided CT_RUN_EVENT payload.

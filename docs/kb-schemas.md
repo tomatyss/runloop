@@ -55,6 +55,8 @@ Normative JSON Schemas for the initial event kinds live under
 | `email.sent`       | [`email.sent.schema.json`](../crates/kb/schemas/email.sent.schema.json)             |
 | `run.started`      | [`run.started.schema.json`](../crates/kb/schemas/run.started.schema.json)           |
 | `run.finished`     | [`run.finished.schema.json`](../crates/kb/schemas/run.finished.schema.json)         |
+| `node.finished`    | [`node.finished.schema.json`](../crates/kb/schemas/node.finished.schema.json)       |
+| `run.trace`        | [`run.trace.schema.json`](../crates/kb/schemas/run.trace.schema.json)               |
 
 Validators MUST embed these schemas and enforce them at `StateDelta` ingestion
 time. `$id` versions bump on breaking changes; implementations SHOULD accept the

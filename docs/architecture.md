@@ -126,9 +126,9 @@ or depends on. Paths refer to workspace members declared in `Cargo.toml`.
    messages over the bus; capability checks fire before any hostcall (FS/NET/
    TIME/Kb/Model) and denied calls generate `cap.audit` events.
 5. **Persistence & replay:** Ledger events (`run.started`, `run.finished`,
-   `artifact.created`, etc.) are recorded through `crates/kb`. Replays sourced
-   from the KB must deterministically regenerate the same outputs
-   (`rlp replay`).
+   `node.finished`, `run.trace`, `artifact.created`, etc.) are recorded through
+   `crates/kb`. Replays sourced from the KB must deterministically regenerate
+   the same outputs (`rlp replay`).
 6. **Observability:** Drops, TTL expirations, and dedupe hits publish structured
    diagnostics on `rlp/sys/drops`, while `tracing` spans feed OTLP exporters
    when enabled.
@@ -221,6 +221,7 @@ For deeper details, consult `README.md`, `docs/message-protocol.md`,
 
 ## KB Ownership (MVP)
 
-- For daemon-backed runs, `runloopd` records `run.started` and `run.finished` in
-  the KB. Node-level persistence is planned; the CLI records both start and
-  finish only in `--local` mode today.
+- For daemon-backed runs, `runloopd` records `run.started`, `run.finished`,
+  per-node `node.finished`, and the canonical `run.trace` payload so replay and
+  audit can run without re-contacting agents. Local CLI runs (`--local`) follow
+  the same path and flush the materializer before returning.

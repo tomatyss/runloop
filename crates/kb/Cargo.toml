@@ -17,3 +17,4 @@ blake3 = "1.5"
 jsonschema = "0.33"
 json-canon = "0.1"
 hex = "0.4"
+runloop-openings = { path = "../openings" }
