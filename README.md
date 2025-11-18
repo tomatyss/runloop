@@ -81,6 +81,20 @@ cargo run -p rlp -- config path --all
 > NDJSON `RunEvent` records so monitors such as `agtop` can consume the same
 > schema (pipe `rlp run ... > run.ndjson` for live monitoring or feed stdin).
 
+### Agent shims (development)
+
+Until the wasm32-wasi toolchain lands, the canonical `compose_email` agents ship
+as lightweight Python shims under `agents/*/bin`. They let you exercise the DAG
+with real inputs while the runtime integration matures. These shims require
+Python 3.11+ and can be validated end-to-end via:
+
+```bash
+just test-agent-shims
+```
+
+That task runs the contact→context→writer→critic→mailer chain and ensures the
+produced artifacts exist on disk.
+
 ### Packages & images (daemon / system mode)
 
 When installed from a .deb or image, the service runs as **`runloop:runloop`**

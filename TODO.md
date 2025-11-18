@@ -146,8 +146,20 @@ event to KB.
 - [x] Measure cold-start perf (50 idle agents, p50 < 40 ms) and document harness
       in `docs/perf.md`.
 
-**DoD:** Spawn 50 idle agents; p50 cold‑start < **40 ms**; stats show non‑zero
+**DoD:** Spawn 50 idle agents; p50 cold-start < **40 ms**; stats show non-zero
 RSS.
+
+### C4. Canonical agent bundles (WASM)
+
+- [ ] Replace the temporary Python native shims in `agents/*/bin/` with
+      wasm32-wasi artifacts built from the `crates/agents/*` crates.
+- [ ] Extend the build to copy the compiled `.wasm` files into each agent bundle
+      alongside refreshed BLAKE3 digests.
+- [ ] Wire the runtime/executor so `runloopd` launches the wasm agents with the
+      declared `policy.caps`, eliminating the in-process Rust fallbacks.
+
+**DoD:** `rlp run examples/openings/compose_email.yaml` succeeds via the runtime
+with wasm agents and no Python dependencies.
 
 ---
 
