@@ -55,7 +55,7 @@ Bulleted list with 2–3 sentences on why each was rejected.
 3. Once approved, merge the ADR and immediately link it from the relevant docs
    (`README.md`, `docs/architecture.md`, protocol specs, etc.).
 4. If an ADR becomes obsolete, create a follow-up ADR marked “Supersedes
-   <old-id>” and update the old file’s status to `Superseded` with a backlink.
+   OLD_ADR_ID” and update the old file’s status to `Superseded` with a backlink.
 
 ## Storage & Cross-References
 

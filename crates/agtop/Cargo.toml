@@ -13,3 +13,19 @@ anyhow = "1.0"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+
+[package.metadata.deb]
+maintainer = "Runloop Authors <ops@runloop.media>"
+copyright = "2025 Runloop Authors"
+homepage = "https://github.com/runloop/runloop"
+license-file = "../../LICENSE"
+priority = "optional"
+section = "utils"
+depends = "$auto, ca-certificates"
+assets = [
+    ["../../README.md", "usr/share/doc/agtop/README.md", "644"],
+    ["../../docs/tui.md", "usr/share/doc/agtop/tui.md", "644"],
+]
+extended-description = """
+agtop subscribes to Runloop bus topics to visualize live openings (logs, DAG status, traces, metrics). It complements rlp and requires runloopd to publish run events.
+"""

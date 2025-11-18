@@ -1,0 +1,37 @@
+#!/bin/sh
+set -e
+
+STATE_FILE="/run/runloopd.was-active"
+
+is_systemd() {
+	if [ -d /run/systemd/system ]; then
+		return 0
+	else
+		return 1
+	fi
+}
+
+remember_service_state() {
+	if is_systemd; then
+		if systemctl is-active --quiet runloopd.service >/dev/null 2>&1; then
+			touch "$STATE_FILE"
+		else
+			rm -f "$STATE_FILE"
+		fi
+	fi
+}
+
+stop_service() {
+	if is_systemd; then
+		systemctl --quiet stop runloopd.service >/dev/null 2>&1 || true
+	fi
+}
+
+case "$1" in
+	remove|upgrade|deconfigure)
+		remember_service_state
+		stop_service
+		;;
+esac
+
+exit 0

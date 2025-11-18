@@ -186,37 +186,42 @@ trait VectorStore {
 
 ## 4. Packaging targets _(informative)_
 
-### 4.1 Debian 13 (`trixie`) package
+### 4.1 Debian 13 (`trixie`) packages
 
 - Assets live under `packaging/systemd/` (systemd unit, tmpfiles definition,
-  default config, README, and Debian control files). `packaging/systemd/debian/`
-  is synced into the repo root during builds; do not create a top-level
-  `debian/` directory manually.
-- Build requirements: `build-essential`, `debhelper`, `dh-cargo`, `rustc`,
-  `cargo`, `pkg-config`, `libssl-dev`, `libsqlite3-dev`, `systemd-dev`. Use the
-  helper script or the Just target:
+  default config, README, maintainer scripts). `cargo-deb` consumes them
+  directly; no in-tree `debian/` directory is required.
+- Build requirements: `build-essential`, `cargo`, `rustc`, `pkg-config`,
+  `libssl-dev`, `libsqlite3-dev`, `systemd`, and `cargo-deb`
+  (`cargo install cargo-deb`). The `just deb` recipe runs the three builds in
+  sequence:
 
   ```bash
   just deb
-  # (runs packaging/systemd/build-deb.sh -> dpkg-buildpackage -us -uc -b)
+  # equivalent to:
+  cargo deb -p runloopd
+  cargo deb -p rlp
+  cargo deb -p agtop
   ```
 
-- Artifacts land in the parent directory (e.g.,
-  `../runloop_0.1.0~alpha1-1_amd64.deb`). Install via
-  `sudo apt install ./../runloop_<version>_<arch>.deb`.
-- Maintainer scripts create the `runloop` system user, chown `/var/lib/runloop`
-  and `/var/log/runloop`, install `/etc/runloop/config.yaml`, call
-  `systemd-tmpfiles --create`, and enable `runloopd.service`.
-- The service runs with `RUNLOOP_CONFIG=/etc/runloop/config.yaml` and writes its
-  socket to `/run/runloop/rmp.sock`. Restart after config changes:
-
-  ```bash
-  sudo systemctl restart runloopd
-  sudo systemctl status runloopd
-  ```
-
-- Purging the package (`sudo apt purge runloop`) removes `/etc/runloop`,
-  `/var/lib/runloop`, `/var/log/runloop`, and the `runloop` user/group.
+- Artifacts land under each crate’s `target/debian/` directory (e.g.,
+  `crates/runloopd/target/debian/runloopd_0.1.0_amd64.deb`). Install with
+  `sudo apt install crates/<crate>/target/debian/<pkg>_<ver>_<arch>.deb`.
+- `runloopd` package duties: install `/usr/bin/runloopd`, systemd service,
+  tmpfiles definition, `/etc/runloop/config.yaml` (as a conffile), and docs. The
+  maintainer scripts create the `runloop` system user, chown `/var/lib/runloop`
+  / `/var/log/runloop`, call `systemd-tmpfiles --create`, run
+  `systemctl daemon-reload`, and **enable but do not start** `runloopd.service`
+  on a first-time install so operators can edit config before launching.
+  Upgrades capture whether the daemon was running prior to `dpkg` stopping it
+  and automatically restart `runloopd.service` once the new bits are configured,
+  keeping CLI/agent traffic flowing with zero downtime.
+- The CLI (`rlp`) and monitor (`agtop`) ship as independent packages so they can
+  be updated without restarting the daemon; they just depend on
+  `ca-certificates` plus transitive Rust runtime libraries.
+- Purging the daemon package (`sudo apt purge runloopd`) removes `/etc/runloop`,
+  `/var/lib/runloop`, `/var/log/runloop`, and the `runloop` system user/group;
+  CLI/TUI packages only drop their binaries/docs.
 
 ### 4.2 Additional artifacts
 

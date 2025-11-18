@@ -14,7 +14,7 @@ members = [
   "crates/agtop",
   "crates/executor-local",
   "crates/sdk/runloop-sdk",
-  "crates/sdk/agent-shim", "crates/agents/common", "crates/agents/contact_resolver", "crates/agents/context_gatherer", "crates/agents/writer", "crates/agents/critic", "crates/agents/mailer", "crates/tools/b3sum",
+  "crates/sdk/agent-shim", "crates/agents/common", "crates/agents/contact_resolver", "crates/agents/context_gatherer", "crates/agents/writer", "crates/agents/critic", "crates/agents/mailer", "crates/tools/b3sum", "crates/runloop",
 ]
 resolver = "2"
 
