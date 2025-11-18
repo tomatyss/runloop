@@ -141,8 +141,20 @@ Test suites MUST pin at least one fixture for each entry above.
 
 ## 8. Example: frame hex dump
 
-A minimal `ErrorReport` frame with `schema_id = 0x000A` and body
-`{"type":"error.report.v1","payload":{"code":"tool.unavailable","message":"mailer offline"},"meta":{"opening_id":1234}}`:
+A minimal `ErrorReport` frame with `schema_id = 0x000A` and body:
+
+```json
+{
+  "type": "error.report.v1",
+  "payload": {
+    "code": "tool.unavailable",
+    "message": "mailer offline"
+  },
+  "meta": {
+    "opening_id": 1234
+  }
+}
+```
 
 ```text
 0000: 00 00 00 a0 52 4d 50 30 00 00 00 40 00 00 00 00
@@ -226,7 +238,17 @@ The control plane uses the same bus and framing:
   {
     "type": "toolresult.executor.agent.response.v1",
     "payload": {
-      "Completed": { "ports": {"out": [ {"schema_id": 0x00D1, "type": "artifact.draft.email.v1", "value": {...}} ] } }
+      "Completed": {
+        "ports": {
+          "out": [
+            {
+              "schema_id": 0x00D1,
+              "type": "artifact.draft.email.v1",
+              "value": { ... }
+            }
+          ]
+        }
+      }
     }
     // meta is currently omitted
   }
@@ -256,10 +278,16 @@ After `RunAccepted`, the daemon publishes a single unified stream of run events:
 - Payload shape:
 
 ```json
-{ "kind": "log|status|plan|trace|artifact|progress",
+{
+  "kind": "log|status|plan|trace|artifact|progress",
   "level": "info|warn|error"?,
   "message": "...",
-  "meta": { "ts_ms": <u64>, "run_id": "...", "node_id": "..."? , "span_id": "..."? }
+  "meta": {
+    "ts_ms": <u64>,
+    "run_id": "...",
+    "node_id": "..."?,
+    "span_id": "..."?
+  }
 }
 ```
 

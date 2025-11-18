@@ -37,10 +37,14 @@ different hardware, record the delta alongside the measurements.
 
 ## Representative Result (Illustrative)
 
+<!-- markdownlint-disable MD013 -->
+
 | Build                   | Median | P90   | Notes                                        |
 | ----------------------- | ------ | ----- | -------------------------------------------- |
 | debug (`cargo test`)    | 31 ms  | 36 ms | Debian 12, i7‑1185G7, governor `performance` |
 | release (`cargo bench`) | 24 ms  | 28 ms | Same host                                    |
+
+<!-- markdownlint-enable MD013 -->
 
 Numbers above are examples taken from the baseline lab node; they are not
 updated automatically. When recording new measurements, include hardware +

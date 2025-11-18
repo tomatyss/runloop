@@ -115,8 +115,10 @@ The POG consists of two SQLite files and a derived vector index.
 - `~/.runloop/pog/pog.sqlite` — materialized views (WAL, synchronous=NORMAL)
 - `~/.runloop/pog/vectors/` — HNSW index files (derived; safe to rebuild)
 - `runloopd` runs a background materializer that tails the ledger and updates
-  the views. Progress is tracked in
-  `pog.sqlite.materializer_state(id INTEGER PRIMARY KEY CHECK (id = 1), watermark INTEGER NOT NULL)`.
+  the views. Progress is tracked in the singleton row
+  `pog.sqlite.materializer_state` with columns:
+  - `id INTEGER PRIMARY KEY CHECK (id = 1)`
+  - `watermark INTEGER NOT NULL`
 
 ### 2.1 Migration workflow
 
@@ -144,8 +146,12 @@ Supporting commands:
 ### 2.2 Metadata tables
 
 Both databases include `meta(schema_version TEXT, dirty INTEGER, ts DATETIME)`.
-`pog.sqlite` also tracks
-`snapshots(id INTEGER PRIMARY KEY, ts DATETIME, events_high_watermark INTEGER, comment TEXT)`.
+`pog.sqlite` also tracks the `snapshots` table with columns:
+
+- `id INTEGER PRIMARY KEY`
+- `ts DATETIME`
+- `events_high_watermark INTEGER`
+- `comment TEXT`
 
 ### 2.3 Retention
 
@@ -214,10 +220,14 @@ trait VectorStore {
 
 ### 4.2 Additional artifacts
 
+<!-- markdownlint-disable MD013 -->
+
 | Artifact      | Location                | Status                                             |
 | ------------- | ----------------------- | -------------------------------------------------- |
 | Live ISO      | `packaging/live-build/` | Folders exist; scripts TBD after `.deb` packaging. |
 | Dev container | `packaging/container/`  | README tracks mounts, base image expectations.     |
+
+<!-- markdownlint-enable MD013 -->
 
 ## 5. Trust policy & agent signatures _(normative)_
 
@@ -245,12 +255,23 @@ agent.bundle/
 
 ```toml
 [anchors]
-runloop_release = "ed25519:ABCD…"
-dev = { key = "ed25519:DEAD…", allow_dev = true }
+runloop_release = "ed25519:ABCD..."
+dev = {
+  key = "ed25519:DEAD...",
+  allow_dev = true
+}
 
 [rules]
-runloop_release = { allow_caps = "any", allow_net = "any", allow_exec = false }
-dev = { allow_caps = ["kb_read", "kb_write"], allow_net = [], allow_exec = false }
+runloop_release = {
+  allow_caps = "any",
+  allow_net = "any",
+  allow_exec = false
+}
+dev = {
+  allow_caps = ["kb_read", "kb_write"],
+  allow_net = [],
+  allow_exec = false
+}
 ```
 
 - **Lifecycle:**
