@@ -16,6 +16,13 @@ members = [
   "crates/sdk/runloop-sdk",
   "crates/sdk/agent-shim", "crates/agents/common", "crates/agents/contact_resolver", "crates/agents/context_gatherer", "crates/agents/writer", "crates/agents/critic", "crates/agents/mailer", "crates/tools/b3sum",
 ]
+exclude = [
+  "crates/agents-wasm/contact_resolver",
+  "crates/agents-wasm/context_gatherer",
+  "crates/agents-wasm/writer",
+  "crates/agents-wasm/critic",
+  "crates/agents-wasm/mailer",
+]
 resolver = "2"
 
 [workspace.lints.rust]

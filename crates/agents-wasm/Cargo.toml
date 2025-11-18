@@ -1,0 +1,26 @@
+[workspace]
+members = [
+  "contact_resolver",
+  "context_gatherer",
+  "writer",
+  "critic",
+  "mailer",
+]
+resolver = "2"
+
+[workspace.package]
+license = "Apache-2.0"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+unused_extern_crates = "deny"
+unused_imports = "deny"
+missing_docs = "allow"
+
+[workspace.lints.clippy]
+pedantic = { level = "allow", priority = -1 }
+nursery = { level = "allow", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"
+todo = "warn"
+panic = "warn"

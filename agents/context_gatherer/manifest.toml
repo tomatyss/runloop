@@ -1,9 +1,9 @@
 [agent]
 name = "context_gatherer"
 version = "0.1.0"
-kind = "native-shim"
+kind = "wasm32-wasip1"
 
-entry_native = { path = "bin/context_gatherer", blake3 = "8efd3076c98814071c24454cc8dee843982843540ce44b76e2dd85f5e9e24761" }
+entry_wasm = { path = "bin/context_gatherer.wasm", blake3 = "0000000000000000000000000000000000000000000000000000000000000000" }
 
 [ports]
 in = ["intent.context.gather.v1"]

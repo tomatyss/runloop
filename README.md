@@ -81,19 +81,19 @@ cargo run -p rlp -- config path --all
 > NDJSON `RunEvent` records so monitors such as `agtop` can consume the same
 > schema (pipe `rlp run ... > run.ndjson` for live monitoring or feed stdin).
 
-### Agent shims (development)
+### Agent bundles (wasm)
 
-Until the wasm32-wasi toolchain lands, the canonical `compose_email` agents ship
-as lightweight Python shims under `agents/*/bin`. They let you exercise the DAG
-with real inputs while the runtime integration matures. These shims require
-Python 3.11+ and can be validated end-to-end via:
-
-```bash
-just test-agent-shims
-```
-
-That task runs the contact→context→writer→critic→mailer chain and ensures the
-produced artifacts exist on disk.
+The canonical `compose_email` agents now ship as wasm32-wasip1 bundles generated
+from the helper crates under `crates/agents-wasm/*` (kept outside the default
+workspace so host builds remain fast). Run `just build-agents-wasm` to
+cross-compile the binaries, copy them into `agents/*/bin/*.wasm`, and refresh
+the manifest digests. This command requires the `wasm32-wasip1` target to be
+installed (`rustup target add wasm32-wasip1`). Each bundle is a self-contained
+CLI that prints JSON to stdout, which the runtime captures when executing an
+opening. Use `just test-agents-wasm` to rebuild the bundles (if needed) and run
+`compose_email` end-to-end via `rlp --local` as a smoke test. When new bundles
+are produced, commit the `.wasm` artifacts plus their updated BLAKE3 digests so
+the manifests continue to verify.
 
 ### Packages & images (daemon / system mode)
 
@@ -140,7 +140,7 @@ version: 1
 
 runtime:
   base: "debian"
-  agent_container: "wasm32-wasi"
+  agent_container: "wasm32-wasip1"
 
 models:
   default: "local:llama3.1-8b"

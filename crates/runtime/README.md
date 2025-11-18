@@ -1,7 +1,7 @@
 # Runloop Runtime
 
 The `runloop-runtime` crate embeds Wasmtime and enforces the Runloop capability
-model when spawning wasm32-wasi agents. It is responsible for:
+model when spawning wasm32-wasip1 agents. It is responsible for:
 
 - Initialising the Wasmtime engine/linker with WASI imports gated by the active
   `Caps`.

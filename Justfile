@@ -26,8 +26,11 @@ deb:
 test:
 	@cargo test --workspace
 
-test-agent-shims:
-	@scripts/test_agent_shims.sh
+build-agents-wasm:
+	@scripts/build_agents_wasm.sh
+
+test-agents-wasm:
+	@scripts/test_agents_wasm.sh
 
 pre-commit:
 	@scripts/pre-commit.sh

@@ -151,15 +151,17 @@ RSS.
 
 ### C4. Canonical agent bundles (WASM)
 
-- [ ] Replace the temporary Python native shims in `agents/*/bin/` with
-      wasm32-wasi artifacts built from the `crates/agents/*` crates.
-- [ ] Extend the build to copy the compiled `.wasm` files into each agent bundle
-      alongside refreshed BLAKE3 digests.
-- [ ] Wire the runtime/executor so `runloopd` launches the wasm agents with the
-      declared `policy.caps`, eliminating the in-process Rust fallbacks.
+- [x] Replace the temporary native shims in `agents/*/bin/` with
+      wasm32-wasip1 artifacts built from the `crates/agents-wasm/*` crates
+      (`just build-agents-wasm`).
+- [x] Extend the build to copy the compiled `.wasm` files into each agent bundle
+      alongside refreshed BLAKE3 digests (`scripts/build_agents_wasm.sh`).
+- [x] Wire the runtime/executor so `runloopd` launches the wasm agents with the
+      declared `policy.caps`, eliminating the in-process fallbacks. Coverage:
+      `scripts/test_agents_wasm.sh` + `crates/executor-local/tests/compose_email.rs`.
 
 **DoD:** `rlp run examples/openings/compose_email.yaml` succeeds via the runtime
-with wasm agents and no Python dependencies.
+with wasm agents and no Python dependencies. ✅
 
 ---
 

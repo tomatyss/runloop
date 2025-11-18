@@ -3440,22 +3440,27 @@ name = "runloop-executor-local"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64",
  "runloop-agent-contact-resolver",
  "runloop-agent-context-gatherer",
  "runloop-agent-critic",
  "runloop-agent-mailer",
+ "runloop-agent-registry",
  "runloop-agent-writer",
  "runloop-agents-common",
  "runloop-core",
  "runloop-kb",
  "runloop-model-broker",
  "runloop-openings",
+ "runloop-runtime",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 2.0.17",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

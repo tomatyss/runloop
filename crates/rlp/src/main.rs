@@ -1414,7 +1414,8 @@ fn build_executor(config: Config) -> Result<Arc<LocalExecutor>, CliError> {
         config.security.confirm_external_actions,
     ));
     let secrets = Arc::new(CliSecretResolver);
-    let executor = build_local_executor(config, confirmation, secrets)?;
+    let registry = Arc::new(AgentRegistry::new(config.agents.search_dirs.clone()));
+    let executor = build_local_executor(config, confirmation, secrets, registry)?;
     Ok(executor)
 }
 

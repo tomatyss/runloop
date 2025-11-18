@@ -188,9 +188,9 @@ impl Config {
                 self.version
             )));
         }
-        if self.runtime.agent_container != "wasm32-wasi" {
+        if self.runtime.agent_container != "wasm32-wasip1" {
             return Err(Error::Config(format!(
-                "runtime.agent_container must be \"wasm32-wasi\" for MVP (found {})",
+                "runtime.agent_container must be \"wasm32-wasip1\" for MVP (found {})",
                 self.runtime.agent_container
             )));
         }
@@ -753,7 +753,7 @@ fn default_runtime_base() -> String {
     "debian".into()
 }
 fn default_agent_container() -> String {
-    "wasm32-wasi".into()
+    "wasm32-wasip1".into()
 }
 fn default_runtime_workdir() -> String {
     "~/.runloop".into()
@@ -1287,7 +1287,7 @@ mod tests {
             r#"
 version: 1
 runtime:
-  agent_container: "wasm32-wasi"
+  agent_container: "wasm32-wasip1"
 kb:
   root_dir: "~/.custom-pog"
 security:
@@ -1359,7 +1359,7 @@ kb:
             r#"
 version: 1
 runtime:
-  agent_container: "wasm32-wasi"
+  agent_container: "wasm32-wasip1"
   sockets_dir: "~/.runloop/run"
 "#
         )

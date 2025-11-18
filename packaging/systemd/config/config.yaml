@@ -2,7 +2,7 @@ version: 1
 
 runtime:
   base: "debian"
-  agent_container: "wasm32-wasi"
+  agent_container: "wasm32-wasip1"
   sockets_dir: "/run/runloop"
 
 kb:

@@ -1,5 +1,6 @@
 # Build artifacts
 /target/
+crates/agents-wasm/target/
 /debian/
 **/*.rs.bk
 
