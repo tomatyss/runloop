@@ -26,6 +26,9 @@ deb:
 test:
 	@cargo test --workspace
 
+test-agent-shims:
+	@scripts/test_agent_shims.sh
+
 pre-commit:
 	@scripts/pre-commit.sh
 

@@ -3,7 +3,7 @@ name = "writer"
 version = "0.1.0"
 kind = "native-shim"
 
-entry_native = { path = "bin/writer", blake3 = "1539f9d04dd2c2fccdeb49758c6892cc0598e95d35adba3cbcd13e4d4f7202d5" }
+entry_native = { path = "bin/writer", blake3 = "344e5e56f2da6255e26a77216b4137087d0aef2c556fa841aafd4afb2ac86a52" }
 
 [ports]
 in = ["intent.draft.email.v1"]

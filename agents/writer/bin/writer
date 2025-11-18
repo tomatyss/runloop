@@ -1,3 +1,94 @@
-#!/usr/bin/env bash
-printf "%s\n" "writer placeholder binary - replace with compiled WASM bundle."
-exit 1
+#!/usr/bin/env python3
+"""
+Writer shim for the compose_email sample.
+
+Produces a markdown draft using simple templating and saves it under the
+requested artifacts directory (defaults to ./artifacts/drafts).
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import textwrap
+import uuid
+from pathlib import Path
+
+
+def load_json(path: str) -> dict:
+    with open(path, "r", encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def ensure_dir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def render_body(recipient: dict, topic: str, tone: str, context: dict | None) -> str:
+    greeting = "Hi"
+    if tone == "formal":
+        greeting = "Hello"
+    elif tone == "enthusiastic":
+        greeting = "Hey"
+    lines = [f"{greeting} {recipient.get('name', 'there')},", ""]
+    lines.append(f"I wanted to follow up about {topic}.")
+    if context and context.get("snippets"):
+        lines.append("")
+        lines.append("Key updates:")
+        for snippet in context["snippets"]:
+            lines.append(f"- {snippet.get('excerpt', 'n/a')}")
+    lines.append("")
+    lines.append("Let me know if you have any questions or if you'd like to chat more.")
+    lines.append("")
+    lines.append("Best,")
+    lines.append("Runloop Agent")
+    return "\n".join(lines)
+
+
+def write_artifact(body: str, directory: Path) -> Path:
+    ensure_dir(directory)
+    filename = f"draft-{uuid.uuid4().hex[:12]}.md"
+    path = directory / filename
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Generate a markdown draft.")
+    parser.add_argument("--recipient-json", required=True, help="Resolved contact JSON.")
+    parser.add_argument("--context-json", help="Context bundle JSON.")
+    parser.add_argument("--topic", required=True, help="Email topic.")
+    parser.add_argument(
+        "--tone",
+        default="neutral-friendly",
+        choices=["neutral-friendly", "formal", "enthusiastic"],
+        help="Tone for the draft.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=os.environ.get("RUNLOOP_ARTIFACTS_DIR", "./artifacts/drafts"),
+        help="Directory where the markdown artifact should be stored.",
+    )
+    args = parser.parse_args(argv)
+
+    recipient = load_json(args.recipient_json)
+    context = load_json(args.context_json) if args.context_json else None
+    body = render_body(recipient, args.topic, args.tone, context)
+    artifact_path = write_artifact(body, Path(args.output_dir))
+    result = {
+        "type": "draft_email.md",
+        "path": str(artifact_path),
+        "body_md": body,
+        "word_count": len(body.split()),
+        "rationale": f"Draft generated for {recipient.get('name','recipient')} about {args.topic}",
+        "citations": [
+            snippet.get("event_id") for snippet in (context or {}).get("snippets", [])
+        ],
+    }
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -3,7 +3,7 @@ name = "mailer"
 version = "0.1.0"
 kind = "native-shim"
 
-entry_native = { path = "bin/mailer", blake3 = "978fadba5829d46ad6843482b96c28a51516e7a352bf269f56c802d7dad1b927" }
+entry_native = { path = "bin/mailer", blake3 = "a71ab878012dc901d4ece0fd9abed8409d97e8b277924798da73a8d3314eefec" }
 
 [ports]
 in = ["intent.send.mail.v1"]

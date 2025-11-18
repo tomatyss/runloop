@@ -1,3 +1,56 @@
-#!/usr/bin/env bash
-printf "%s\n" "critic placeholder binary - replace with compiled WASM bundle."
-exit 1
+#!/usr/bin/env python3
+"""
+Critic shim for compose_email.
+
+Performs lightweight checks on the draft artifact and outputs review JSON.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+
+def load_draft(path: str) -> dict:
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    if "body_md" not in data and "path" in data:
+        body_path = Path(data["path"])
+        if body_path.is_file():
+            data["body_md"] = body_path.read_text(encoding="utf-8")
+    return data
+
+
+def review(draft: dict) -> dict:
+    body = draft.get("body_md", "")
+    suggestions = []
+    ok = True
+    if len(body.split()) < 40:
+        ok = False
+        suggestions.append("Add more detail so the recipient has clear next steps.")
+    if "follow up" not in body.lower():
+        ok = False
+        suggestions.append("Explicitly mention that this is a follow-up on the topic.")
+    summary = "Draft looks good overall." if ok else "Draft needs adjustments."
+    return {
+        "ok": ok,
+        "notes": {
+            "summary": summary,
+            "suggestions": suggestions,
+        },
+    }
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Review a draft artifact JSON.")
+    parser.add_argument("--draft-json", required=True, help="Draft artifact JSON path.")
+    args = parser.parse_args(argv)
+    draft = load_draft(args.draft_json)
+    result = review(draft)
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
