@@ -18,7 +18,10 @@
   - `model` (broker usage)
   - `exec` (disabled in v0.1)
 - The runtime enforces capability checks at hostcall boundaries and records
-  denials in structured logs.
+  denials as `cap.audit` ledger events (and structured logs) when
+  `security.caps.audit_on_deny` is `true` (default). Operators may also enable
+  `security.caps.audit_on_allow` to persist allow decisions for high-scrutiny
+  agents.
 - _Implementation status:_ the `runloop-runtime` crate embeds Wasmtime, enforces
   capability checks for every exposed hostcall, and records denials as
   `cap.audit` events via the knowledge base (see

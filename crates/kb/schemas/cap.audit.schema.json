@@ -1,0 +1,58 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://runloop.dev/schemas/cap.audit.schema.json",
+  "title": "capability audit event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "agent",
+    "cap",
+    "op",
+    "target",
+    "args_hash",
+    "decision",
+    "severity",
+    "reason"
+  ],
+  "properties": {
+    "agent": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Logical agent identifier (agent:<uuid> or shim label)."
+    },
+    "cap": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Capability family label (e.g., time.now, kb.read)."
+    },
+    "op": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Hostcall or operation invoked when the audit fired."
+    },
+    "target": {
+      "type": "string",
+      "description": "Target resource string (path, host, namespace)."
+    },
+    "args_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "BLAKE3 hash of the serialized hostcall arguments (hex)."
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["allow", "deny"],
+      "description": "Audit decision captured at the enforcement boundary."
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["info", "warn", "error"],
+      "description": "Severity level for downstream filtering."
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Short code explaining the decision (e.g., cap_missing)."
+    }
+  }
+}

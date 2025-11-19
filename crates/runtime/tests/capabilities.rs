@@ -3,7 +3,8 @@ use std::io::Write;
 use std::sync::Arc;
 
 use runloop_kb::{CapAuditRecord, KnowledgeBase};
-use runloop_runtime::{AgentIdentity, AgentSpec, Error, RuntimeBuilder};
+use runloop_runtime::{AgentIdentity, AgentSpec, AuditPolicy, Error, RuntimeBuilder};
+use serde_json::Value;
 
 fn write_wasm(path: &std::path::Path) {
     let wasm = wat::parse_str(
@@ -74,6 +75,63 @@ fn time_capability_denied_records_audit() {
     );
     assert_eq!(audits[0].severity, runloop_kb::AuditSeverity::Warn);
 
+    let rows = kb
+        .query_events("SELECT payload_json FROM events WHERE kind = 'cap.audit'")
+        .expect("query events");
+    assert_eq!(rows.rows.len(), 1, "ledger should contain cap.audit");
+    let payload_raw = rows.rows[0]
+        .as_object()
+        .and_then(|row| row.get("payload_json"))
+        .and_then(Value::as_str)
+        .expect("payload string");
+    let payload_json: Value = serde_json::from_str(payload_raw).expect("payload parses as json");
+    assert_eq!(
+        payload_json.get("cap"),
+        Some(&Value::String("time.now".into()))
+    );
+    assert_eq!(
+        payload_json.get("decision"),
+        Some(&Value::String("deny".into()))
+    );
+
     let stats = runtime.hostcall_stats();
     assert!(stats.denied() >= 1);
+}
+
+#[test]
+fn audit_policy_can_disable_persistence() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let wasm_path = temp.path().join("agent.wasm");
+    let policy_path = temp.path().join("policy.caps");
+    write_wasm(&wasm_path);
+    write_policy(&policy_path);
+
+    let kb = Arc::new(KnowledgeBase::new());
+    let runtime = RuntimeBuilder::new()
+        .knowledge_base(kb.clone())
+        .audit_policy(AuditPolicy::new(false, false))
+        .build()
+        .expect("runtime");
+
+    let spec = AgentSpec::builder(AgentIdentity::new("cap-deny"), &wasm_path)
+        .policy_path(&policy_path)
+        .build()
+        .expect("spec");
+
+    let _ = runtime.spawn(spec);
+
+    let audits: Vec<CapAuditRecord> = kb.cap_audits();
+    assert!(
+        audits.is_empty(),
+        "in-memory audit snapshot should be empty when disabled"
+    );
+
+    let rows = kb
+        .query_events("SELECT payload_json FROM events WHERE kind = 'cap.audit'")
+        .expect("query events");
+    assert_eq!(
+        rows.rows.len(),
+        0,
+        "ledger should not record cap.audit when disabled"
+    );
 }

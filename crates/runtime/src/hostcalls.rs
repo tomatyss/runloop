@@ -6,6 +6,7 @@ use crate::audit::{AuditCategory, AuditSink};
 use crate::caps::{CapabilitySet, Caps, NetLocation};
 use crate::error::{CapDeniedInfo, CapKind, Error};
 use crate::ready::ReadyEmitter;
+use crate::runtime::AuditPolicy;
 use crate::secrets::SecretProvider;
 use anyhow::anyhow;
 use parking_lot::Mutex;
@@ -42,6 +43,7 @@ pub(crate) struct HostState {
     async_handle: Option<TokioHandle>,
     ready: ReadyEmitter,
     last_denial: Arc<Mutex<Option<CapDeniedInfo>>>,
+    audit_policy: AuditPolicy,
 }
 
 impl HostState {
@@ -57,6 +59,7 @@ impl HostState {
         identity: String,
         async_handle: Option<TokioHandle>,
         ready: ReadyEmitter,
+        audit_policy: AuditPolicy,
     ) -> Self {
         Self {
             caps,
@@ -72,11 +75,23 @@ impl HostState {
             async_handle,
             ready,
             last_denial: Arc::new(Mutex::new(None)),
+            audit_policy,
         }
     }
 
-    fn allow(&self) {
+    fn allow(&self, cap: &str, op: &str, target: &str, args: &[u8]) {
         self.hostcall_stats.allowed.fetch_add(1, Ordering::Relaxed);
+        self.record_cap_audit(
+            AuditDecision::Allow,
+            CapAuditDetails {
+                cap,
+                op,
+                target,
+                args,
+                reason: "granted",
+                severity: AuditSeverity::Info,
+            },
+        );
     }
 
     fn deny(&self, cap: &str, op: &str, target: &str, args: &[u8], reason: &str) -> WasmtimeError {
@@ -148,18 +163,17 @@ impl HostState {
                 self.identity, cap, op, target, reason
             ),
         );
-        let record = CapAuditRecord::new(
-            self.trace_id,
-            self.agent_id,
-            cap,
-            op,
-            target,
-            args,
+        self.record_cap_audit(
             AuditDecision::Deny,
-            reason,
-            AuditSeverity::Warn,
+            CapAuditDetails {
+                cap,
+                op,
+                target,
+                args,
+                reason,
+                severity: AuditSeverity::Warn,
+            },
         );
-        self.kb.record_cap_audit(record);
         let info = CapDeniedInfo {
             cap: CapKind::from_label(cap),
             op: op.to_string(),
@@ -170,9 +184,27 @@ impl HostState {
         *self.last_denial.lock() = Some(info);
     }
 
+    fn record_cap_audit(&self, decision: AuditDecision, details: CapAuditDetails<'_>) {
+        if !self.audit_policy.should_emit(decision) {
+            return;
+        }
+        let record = CapAuditRecord::new(
+            self.trace_id,
+            self.agent_id,
+            details.cap,
+            details.op,
+            details.target,
+            details.args,
+            decision,
+            details.reason,
+            details.severity,
+        );
+        self.kb.record_cap_audit(record);
+    }
+
     fn ensure_time(&self, op: &str) -> Result<(), WasmtimeError> {
         if self.caps.time {
-            self.allow();
+            self.allow("time.now", op, "", &[]);
             Ok(())
         } else {
             Err(self.deny("time.now", op, "", &[], "cap_missing"))
@@ -215,13 +247,13 @@ impl HostState {
                 "host_not_permitted",
             ));
         }
-        self.allow();
+        self.allow("net.http", "http_request", host, host.as_bytes());
         Ok(())
     }
 
     fn ensure_kb_read(&self, namespace: &str) -> Result<(), WasmtimeError> {
         if permits_namespace(&self.caps.kb_read, namespace) {
-            self.allow();
+            self.allow("kb.read", "kb_read", namespace, namespace.as_bytes());
             Ok(())
         } else {
             Err(self.deny(
@@ -236,7 +268,7 @@ impl HostState {
 
     fn ensure_kb_write(&self, namespace: &str) -> Result<(), WasmtimeError> {
         if permits_namespace(&self.caps.kb_write, namespace) {
-            self.allow();
+            self.allow("kb.write", "kb_write", namespace, namespace.as_bytes());
             Ok(())
         } else {
             Err(self.deny(
@@ -251,7 +283,7 @@ impl HostState {
 
     fn ensure_model(&self) -> Result<(), WasmtimeError> {
         if self.caps.model {
-            self.allow();
+            self.allow("model.use", "model_complete", "", &[]);
             Ok(())
         } else {
             Err(self.deny("model.use", "model_complete", "", &[], "cap_missing"))
@@ -260,7 +292,12 @@ impl HostState {
 
     fn ensure_secret(&self, secret_id: &str) -> Result<(), WasmtimeError> {
         if self.caps.permits_secret(secret_id) {
-            self.allow();
+            self.allow(
+                "secrets.get",
+                "resolve_secret",
+                secret_id,
+                secret_id.as_bytes(),
+            );
             Ok(())
         } else {
             Err(self.deny(
@@ -275,12 +312,21 @@ impl HostState {
 
     fn ensure_exec(&self) -> Result<(), WasmtimeError> {
         if self.caps.exec {
-            self.allow();
+            self.allow("exec.spawn", "exec_spawn", "", &[]);
             Ok(())
         } else {
             Err(self.deny("exec.spawn", "exec_spawn", "", &[], "cap_missing"))
         }
     }
+}
+
+struct CapAuditDetails<'a> {
+    cap: &'a str,
+    op: &'a str,
+    target: &'a str,
+    args: &'a [u8],
+    reason: &'a str,
+    severity: AuditSeverity,
 }
 
 /// Mailbox message envelope (header + body bytes).
@@ -681,6 +727,7 @@ mod tests {
     use super::*;
     use crate::audit::AuditSink;
     use crate::caps::Caps;
+    use crate::runtime::AuditPolicy;
     use crate::secrets::SecretStore;
     use bytes::Bytes;
     use rmp_serde::{from_slice as rmp_from_slice, to_vec as rmp_to_vec};
@@ -793,6 +840,7 @@ mod tests {
             "probe".to_string(),
             None,
             ReadyEmitter::noop(),
+            AuditPolicy::default(),
         ));
 
         let store_data = StoreData {
@@ -856,6 +904,7 @@ mod tests {
             "model".to_string(),
             None,
             ReadyEmitter::noop(),
+            AuditPolicy::default(),
         ));
 
         let store_data = StoreData {
