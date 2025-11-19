@@ -6,9 +6,18 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[link(wasm_import_module = "runloop")]
-extern "C" {
-    fn notify_ready();
+#[allow(unsafe_code)]
+mod host {
+    #[link(wasm_import_module = "runloop")]
+    unsafe extern "C" {
+        fn notify_ready();
+    }
+
+    pub(super) fn signal_ready() {
+        // SAFETY: the host runtime injects `notify_ready` with no parameters,
+        // so calling it cannot violate any memory safety invariants.
+        unsafe { notify_ready() };
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -54,7 +63,7 @@ struct MailerOutput {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    unsafe { notify_ready() };
+    host::signal_ready();
     let draft: DraftInput = decode_json(&cli.draft_base64, "draft")?;
     let contact: ContactInput = decode_json(&cli.contact_base64, "contact")?;
     let review: ReviewInput = decode_json(&cli.review_base64, "review")?;

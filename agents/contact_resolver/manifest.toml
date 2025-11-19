@@ -3,7 +3,7 @@ name = "contact_resolver"
 version = "0.1.0"
 kind = "wasm32-wasip1"
 
-entry_wasm = { path = "bin/contact_resolver.wasm", blake3 = "0000000000000000000000000000000000000000000000000000000000000000" }
+entry_wasm = { path = "bin/contact_resolver.wasm", blake3 = "cda616e33107003fc2050b6e8aa6aaffecd3472adaa46d6fe05009538a5fe478" }
 
 [ports]
 in = ["intent.contact.lookup.v1"]

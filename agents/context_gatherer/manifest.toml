@@ -3,7 +3,7 @@ name = "context_gatherer"
 version = "0.1.0"
 kind = "wasm32-wasip1"
 
-entry_wasm = { path = "bin/context_gatherer.wasm", blake3 = "0000000000000000000000000000000000000000000000000000000000000000" }
+entry_wasm = { path = "bin/context_gatherer.wasm", blake3 = "0103f7f7226e9019f7cc703f3c25973cce7485dad02e41881bec8a701e7b001e" }
 
 [ports]
 in = ["intent.context.gather.v1"]
