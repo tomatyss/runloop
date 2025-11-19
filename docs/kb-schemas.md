@@ -60,6 +60,7 @@ Normative JSON Schemas for the initial event kinds live under
 | `run.finished`     | [`run.finished.schema.json`][schema-run-finished] |
 | `node.finished`    | [`node.finished.schema.json`][schema-node]        |
 | `run.trace`        | [`run.trace.schema.json`][schema-trace]           |
+| `cap.audit`        | [`cap.audit.schema.json`][schema-cap-audit]       |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -70,6 +71,7 @@ Normative JSON Schemas for the initial event kinds live under
 [schema-run-finished]: ../crates/kb/schemas/run.finished.schema.json
 [schema-node]: ../crates/kb/schemas/node.finished.schema.json
 [schema-trace]: ../crates/kb/schemas/run.trace.schema.json
+[schema-cap-audit]: ../crates/kb/schemas/cap.audit.schema.json
 
 Validators MUST embed these schemas and enforce them at `StateDelta` ingestion
 time. `$id` versions bump on breaking changes; implementations SHOULD accept the
@@ -184,3 +186,9 @@ successful run.
   lands.
 - Alternate backends (e.g., `redb`) behind feature flags without changing the
   logical schema.
+`cap.audit` events capture per-hostcall capability decisions. Each payload
+stores the agent label, capability family (e.g., `time.now`), operation name,
+target string, the BLAKE3 hash of the serialized arguments (`args_hash` hex),
+decision (`allow|deny`), severity, and a short `reason` code. Events are
+written whenever the runtime's audit policy enables the corresponding decision
+stream (see `security.caps.audit_on_allow` / `audit_on_deny` in config).

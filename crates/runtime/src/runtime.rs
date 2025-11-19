@@ -38,13 +38,39 @@ use crate::stats::{AgentStats, read_stats};
 use runloop_bus::{Bus, Message};
 use runloop_core::config::BrokerConfig;
 use runloop_core::ids::AgentId;
-use runloop_kb::KnowledgeBase;
+use runloop_kb::{AuditDecision, KnowledgeBase};
 use runloop_model_broker::{Broker, SecretResolver};
 
 const METRIC_READY_LATENCY: &str = "runloop.runtime.spawn.ready_latency_ms";
 const METRIC_READY_TIMEOUTS: &str = "runloop.runtime.spawn.ready_timeouts_total";
 const METRIC_READY_FAILURES: &str = "runloop.runtime.spawn.failures_total";
 const DEFAULT_READY_TIMEOUT_MS: u64 = 5_000;
+
+/// Controls when capability audit events are persisted.
+#[derive(Clone, Copy, Debug)]
+pub struct AuditPolicy {
+    pub on_allow: bool,
+    pub on_deny: bool,
+}
+
+impl AuditPolicy {
+    pub const fn new(on_allow: bool, on_deny: bool) -> Self {
+        Self { on_allow, on_deny }
+    }
+
+    pub fn should_emit(&self, decision: AuditDecision) -> bool {
+        match decision {
+            AuditDecision::Allow => self.on_allow,
+            AuditDecision::Deny => self.on_deny,
+        }
+    }
+}
+
+impl Default for AuditPolicy {
+    fn default() -> Self {
+        Self::new(false, true)
+    }
+}
 
 /// Runtime embedding for agent Wasm modules.
 pub struct Runtime {
@@ -63,6 +89,7 @@ struct RuntimeInner {
     bus: Option<Bus>,
     async_spawner: Option<AsyncSpawner>,
     ready_timeout: Duration,
+    audit_policy: AuditPolicy,
 }
 
 struct AsyncSpawner {
@@ -150,6 +177,7 @@ pub struct RuntimeBuilder {
     audit_capacity: usize,
     async_handle: Option<TokioHandle>,
     ready_timeout: Duration,
+    audit_policy: AuditPolicy,
 }
 
 impl RuntimeBuilder {
@@ -168,6 +196,7 @@ impl RuntimeBuilder {
             audit_capacity: 512,
             async_handle: None,
             ready_timeout: default_ready_timeout(),
+            audit_policy: AuditPolicy::default(),
         }
     }
 
@@ -197,6 +226,12 @@ impl RuntimeBuilder {
     #[must_use]
     pub fn bus(mut self, bus: Bus) -> Self {
         self.bus = Some(bus);
+        self
+    }
+
+    #[must_use]
+    pub fn audit_policy(mut self, policy: AuditPolicy) -> Self {
+        self.audit_policy = policy;
         self
     }
 
@@ -261,6 +296,7 @@ impl RuntimeBuilder {
             bus: self.bus,
             async_spawner,
             ready_timeout: self.ready_timeout,
+            audit_policy: self.audit_policy,
         };
 
         Ok(Runtime {
@@ -346,6 +382,7 @@ impl Runtime {
                 .as_ref()
                 .map(|spawner| spawner.handle()),
             ready_emitter.clone(),
+            self.inner.audit_policy,
         ));
 
         let process = Arc::new(AgentProcess {
