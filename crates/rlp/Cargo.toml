@@ -2,6 +2,7 @@
 name = "rlp"
 version = "0.1.0"
 edition = "2024"
+homepage = "https://github.com/runloop/runloop"
 
 [dependencies]
 runloop-core = { path = "../core" }
@@ -38,7 +39,6 @@ tempfile = "3"
 [package.metadata.deb]
 maintainer = "Runloop Authors <ops@runloop.media>"
 copyright = "2025 Runloop Authors"
-homepage = "https://github.com/runloop/runloop"
 license-file = "../../LICENSE"
 priority = "optional"
 section = "utils"

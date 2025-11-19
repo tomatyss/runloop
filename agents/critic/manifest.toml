@@ -3,7 +3,7 @@ name = "critic"
 version = "0.1.0"
 kind = "wasm32-wasip1"
 
-entry_wasm = { path = "bin/critic.wasm", blake3 = "0000000000000000000000000000000000000000000000000000000000000000" }
+entry_wasm = { path = "bin/critic.wasm", blake3 = "90aa54596905f9fed788dbc182ec63c77f336e18dec05215642e35d01d45ea86" }
 
 [ports]
 in = ["artifact.draft.email.v1"]

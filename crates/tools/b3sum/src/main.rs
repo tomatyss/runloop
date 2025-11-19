@@ -9,7 +9,8 @@ fn main() -> io::Result<()> {
         std::process::exit(1);
     }
     for (path, hash) in hash_inputs(paths)? {
-        println!("{path}\t{hash}");
+        // Match upstream b3sum CLI by printing digest first for compatibility.
+        println!("{hash}  {path}");
     }
     Ok(())
 }

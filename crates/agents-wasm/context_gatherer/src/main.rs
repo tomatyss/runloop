@@ -5,9 +5,18 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 
-#[link(wasm_import_module = "runloop")]
-extern "C" {
-    fn notify_ready();
+#[allow(unsafe_code)]
+mod host {
+    #[link(wasm_import_module = "runloop")]
+    unsafe extern "C" {
+        fn notify_ready();
+    }
+
+    pub(super) fn signal_ready() {
+        // SAFETY: the host runtime injects `notify_ready` with no parameters,
+        // so calling it cannot violate any memory safety invariants.
+        unsafe { notify_ready() };
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -42,7 +51,7 @@ struct ContextBundle {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    unsafe { notify_ready() };
+    host::signal_ready();
     let contact = cli
         .contact_base64
         .as_deref()
