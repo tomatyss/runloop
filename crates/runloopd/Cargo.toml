@@ -2,6 +2,7 @@
 name = "runloopd"
 version = "0.1.0"
 edition = "2024"
+homepage = "https://github.com/runloop/runloop"
 
 [dependencies]
 runloop-core = { path = "../core" }
@@ -27,7 +28,6 @@ serde = { version = "1.0", features = ["derive"] }
 [package.metadata.deb]
 maintainer = "Runloop Authors <ops@runloop.media>"
 copyright = "2025 Runloop Authors"
-homepage = "https://github.com/runloop/runloop"
 license-file = "../../LICENSE"
 priority = "optional"
 section = "utils"
@@ -41,7 +41,7 @@ assets = [
     ["../../docs/ops.md", "usr/share/doc/runloopd/ops.md", "644"],
 ]
 conf-files = ["etc/runloop/config.yaml"]
-maintainer-scripts = { postinst = "../../packaging/systemd/scripts/runloopd.postinst", prerm = "../../packaging/systemd/scripts/runloopd.prerm", postrm = "../../packaging/systemd/scripts/runloopd.postrm" }
+maintainer-scripts = "../../packaging/systemd/scripts/runloopd"
 extended-description = """
 Runloop routes prompts through router+agent openings, schedules WASM agents via runloopd, and persists run and capability events. This package installs the daemon, default config, and systemd units for Debian trixie-class hosts.
 """

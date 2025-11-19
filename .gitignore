@@ -2,6 +2,7 @@
 /target/
 crates/agents-wasm/target/
 /debian/
+agents/**/bin/
 **/*.rs.bk
 
 # Tooling cache
