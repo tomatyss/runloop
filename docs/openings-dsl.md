@@ -327,12 +327,13 @@ evolution.
 
   - Executes the YAML plan via the openings engine, drives the canonical crew
     (contact resolver → context gatherer → writer → critic → mailer), prints
-    node status, and writes an optional JSON trace for later replay. You need a
-    writable KB path plus a configured model broker; if no provider is reachable
-    the writer falls back to the heuristic template. The CLI secret resolver
-    reads broker credentials from the environment, and mail send still requires
-    human confirmation unless you opt out in
-    `security.confirm_external_actions`.
+    node status, and writes an optional JSON trace for later replay—even when
+    the run is submitted to `runloopd` (the CLI fetches the persisted
+    `run.trace` from the KB once available). You need a writable KB path plus a
+    configured model broker; if no provider is reachable the writer falls back
+    to the heuristic template. The CLI secret resolver reads broker credentials
+    from the environment, and mail send still requires human confirmation unless
+    you opt out in `security.confirm_external_actions`.
 
 - Explain routing: `rlp why "<prompt>"`
 - Replay:

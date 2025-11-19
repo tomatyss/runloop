@@ -25,8 +25,10 @@ rlp run <opening.yaml> [--params '{"key":"value"}'] [--trace-out trace.json] [--
   `trace_id`, `run_id`, `opening_id`, `kind`, `level`, `message`, and a `meta`
   object with kind-specific fields (`params`, `node`, `chunk`, `status`,
   `duration_ms`, etc.).
-- **`--trace-out`** writes the `RunTrace` produced by the executor (daemon trace
-  export TBD). Successful runs persist `run.started` / `run.finished` into the
+- **`--trace-out`** writes the `RunTrace` recorded by the executor. When routed
+  through the daemon the CLI waits for the canonical `run.trace` row to hit the
+  KB and then saves it locally, so the flag behaves the same in local and
+  daemon modes. Successful runs persist `run.started` / `run.finished` into the
   KB even when executed locally, so later replay/debug tooling can target the
   same IDs.
 

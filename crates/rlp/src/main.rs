@@ -515,7 +515,26 @@ async fn handle_run(args: RunArgs) -> Result<(), CliError> {
     };
     validate_opening_params(&prepared.opening, &descriptors, args.errors_format)?;
     let digests = digests_from(&descriptors);
-    client.run(prepared, digests).await
+    let trace_out = args.trace_out.clone();
+    let outcome = client.run(prepared, digests).await?;
+    if let Some(path) = trace_out.as_deref()
+        && let Err(err) = write_daemon_trace(&config, outcome.trace_id, path).await
+    {
+        match err {
+            CliError::TraceNotFound(_) => {
+                eprintln!(
+                    "warning: daemon finished before the canonical trace was materialized; \
+                     rerun with --trace-out if you need the replay file"
+                );
+            }
+            other => return Err(other),
+        }
+    }
+    if outcome.success {
+        Ok(())
+    } else {
+        Err(CliError::RunFailure(outcome.trace_id))
+    }
 }
 
 async fn handle_replay(args: ReplayArgs) -> Result<(), CliError> {
@@ -564,6 +583,32 @@ fn load_trace_from_kb(config: &Config, trace_id: TraceId) -> Result<RunTrace, Cl
         .load_run_trace(&trace_id)?
         .ok_or(CliError::TraceNotFound(trace_id))?;
     serde_json::from_value(value).map_err(|err| CliError::InvalidTrace(err.to_string()))
+}
+
+async fn write_daemon_trace(
+    config: &Config,
+    trace_id: TraceId,
+    trace_path: &Path,
+) -> Result<(), CliError> {
+    const MAX_ATTEMPTS: usize = 15;
+    const BASE_DELAY_MS: u64 = 200;
+    let kb = KnowledgeBase::open(&config.kb)?;
+    for attempt in 0..MAX_ATTEMPTS {
+        catch_up_views(&kb)?;
+        if let Some(value) = kb.load_run_trace(&trace_id)? {
+            let trace: RunTrace = serde_json::from_value(value)
+                .map_err(|err| CliError::InvalidTrace(err.to_string()))?;
+            let file = File::create(trace_path)?;
+            to_writer_pretty(file, &trace)?;
+            return Ok(());
+        }
+        if attempt + 1 == MAX_ATTEMPTS {
+            break;
+        }
+        let delay = BASE_DELAY_MS.saturating_mul((attempt as u64) + 1);
+        time::sleep(Duration::from_millis(delay)).await;
+    }
+    Err(CliError::TraceNotFound(trace_id))
 }
 
 async fn handle_kb(cmd: KbCommands) -> Result<(), CliError> {
@@ -1476,6 +1521,11 @@ struct DaemonClient {
     socket_display: String,
 }
 
+struct RunOutcome {
+    trace_id: TraceId,
+    success: bool,
+}
+
 impl DaemonClient {
     async fn connect(config: &Config) -> Result<Self, CliError> {
         let path = resolve_socket_path(config).await?;
@@ -1526,7 +1576,7 @@ impl DaemonClient {
         mut self,
         prepared: PreparedOpening,
         digests: Vec<AgentDigest>,
-    ) -> Result<(), CliError> {
+    ) -> Result<RunOutcome, CliError> {
         let request_id = TraceId::new();
         let submit = ControlRequest::RunSubmit(RunSubmitRequest {
             request_id,
@@ -1598,11 +1648,11 @@ impl DaemonClient {
             }
         }
 
-        match final_success {
-            Some(true) => Ok(()),
-            Some(false) => Err(CliError::RunFailure(accept.trace_id)),
-            None => Err(CliError::RunFailure(accept.trace_id)),
-        }
+        let success = final_success.unwrap_or(false);
+        Ok(RunOutcome {
+            trace_id: accept.trace_id,
+            success,
+        })
     }
 
     async fn send_request(
