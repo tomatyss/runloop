@@ -350,12 +350,13 @@ Local‑first storage with:
     `cargo run -p rlp -- run examples/openings/compose_email.yaml --params '{"recipient":"john","topic":"Q4 plan"}' --trace-out trace.json`.
     The command now drives the full compose-email stack (contact resolver →
     context gatherer → writer → critic → mailer), prints per-node status, and
-    optionally writes a replayable trace. Make sure `runloop.json` points to a
-    writable KB folder, that the model broker has at least one provider (or rely
-    on the writer's heuristic fallback), and export any provider secrets to the
-    environment so the CLI secret resolver can read them. Mail send still runs
-    as a dry-run and prompts for approval unless
-    `security.confirm_external_actions=false`.
+    writes a replayable trace whether the run executes inline or via the daemon
+    (daemon mode pulls the canonical `run.trace` from the KB once it is
+    persisted). Make sure `runloop.json` points to a writable KB folder, that
+    the model broker has at least one provider (or rely on the writer's
+    heuristic fallback), and export any provider secrets to the environment so
+    the CLI secret resolver can read them. Mail send still runs as a dry-run and
+    prompts for approval unless `security.confirm_external_actions=false`.
   - Replay a recorded run with either a stored trace ID or a JSON file:
     `cargo run -p rlp -- replay trace:<trace_uuid> --opening examples/openings/compose_email.yaml`
     pulls the canonical `run.trace` payload from the KB, while passing a file

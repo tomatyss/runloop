@@ -391,9 +391,10 @@ draft artifact.
 
 - [x] `rlp run`: surface invalid agent param types (validated against agent
       `manifest.toml` schemas; openings may carry temporary hints).
-- [ ] `rlp run`: `--trace-out` writes the daemon-provided trace
-      (side-effect-free replayer). _Flag currently dumps the inline runner’s
-      trace when using `--local`; needs daemon plumbing once UDS flow lands._
+- [x] `rlp run`: `--trace-out` writes the daemon-provided trace
+      (side-effect-free replayer). _CLI now fetches the canonical `run.trace`
+      from the KB after daemon-backed runs so traces are saved consistently in
+      either mode._
 
 ### I2. TUI monitor (`agtop`)
 
