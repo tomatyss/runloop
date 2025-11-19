@@ -69,7 +69,8 @@ Governance & repo hygiene run in parallel (see Phase G below).
 - **RMP v0 freeze**: header/body schemas finalized (`magic="RMP0"`,
   `header_version=0`, `header_len=64`, reserved flags/words zeroed, TTL & dedupe
   rules, schema ↔ body kind cross-checks, MsgPack envelope).
-- **Agent packaging 0.1**: `manifest.toml`, `policy.caps`, `tools.json`, signing
+- **Agent packaging 0.1**: `manifest.toml`, `policy.caps`, `tools.json`
+  (documented in `docs/tool-attachments.md`), signing
   model.
 - **Openings DSL 0.1**: grammar (EBNF) + replay semantics + examples.
 - **POG data model 0.1**: entities (`Identity`, `Account`, `Contact`,
@@ -264,7 +265,7 @@ Governance & repo hygiene run in parallel (see Phase G below).
 /agent/
 manifest.toml       # name, version, entrypoint, schemas, caps
 policy.caps
-tools.json          # external tool contracts
+tools.json          # external tool contracts (see docs/tool-attachments.md)
 agent.wasm
 LICENSE
 README.md
