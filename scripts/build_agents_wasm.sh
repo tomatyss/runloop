@@ -30,9 +30,12 @@ for agent in "${AGENTS[@]}"; do
   mkdir -p "$dest_dir"
   cp "$src" "$dest"
   rm -f "$dest_dir/.gitkeep"
-  digest="$(cargo run -q -p b3sum -- "$dest" | awk -F $'\t' '{print $2}')"
+  digest="$(cargo run -q -p b3sum -- "$dest" | awk '/^[0-9a-f]{64}([[:space:]]|$)/ { print $1; exit }')"
   if [[ -z "$digest" ]]; then
     echo "failed to compute blake3 digest for $dest" >&2
+    exit 1
+  elif [[ ! "$digest" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "received malformed blake3 digest '$digest' for $dest" >&2
     exit 1
   fi
   perl -0pi -e "s#entry_wasm = \\{.*?\\}#entry_wasm = { path = \"bin/${agent}.wasm\", blake3 = \"$digest\" }#s" \
