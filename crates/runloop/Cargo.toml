@@ -2,6 +2,7 @@
 name = "runloop"
 version = "0.1.0"
 edition = "2024"
+homepage = "https://github.com/runloop/runloop"
 license.workspace = true
 
 [dependencies]
@@ -11,7 +12,6 @@ workspace = true
 
 [package.metadata.deb]
 maintainer = "Runloop Authors <ops@runloop.media>"
-homepage = "https://github.com/runloop/runloop"
 license-file = "../../LICENSE"
 section = "utils"
 priority = "optional"
