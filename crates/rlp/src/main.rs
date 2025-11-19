@@ -517,17 +517,17 @@ async fn handle_run(args: RunArgs) -> Result<(), CliError> {
     let digests = digests_from(&descriptors);
     let trace_out = args.trace_out.clone();
     let outcome = client.run(prepared, digests).await?;
-    if let Some(path) = trace_out.as_deref() {
-        if let Err(err) = write_daemon_trace(&config, outcome.trace_id, path).await {
-            match err {
-                CliError::TraceNotFound(_) => {
-                    eprintln!(
-                        "warning: daemon finished before the canonical trace was materialized; \
-                         rerun with --trace-out if you need the replay file"
-                    );
-                }
-                other => return Err(other),
+    if let Some(path) = trace_out.as_deref()
+        && let Err(err) = write_daemon_trace(&config, outcome.trace_id, path).await
+    {
+        match err {
+            CliError::TraceNotFound(_) => {
+                eprintln!(
+                    "warning: daemon finished before the canonical trace was materialized; \
+                     rerun with --trace-out if you need the replay file"
+                );
             }
+            other => return Err(other),
         }
     }
     if outcome.success {
