@@ -21,6 +21,7 @@
 
 - [Tools](tools.md)
   - [Router & Shell Integration](router-shell.md)
+  - [Tool Attachments](tool-attachments.md)
   - [TUI](tui.md)
 
 - [Contributor Guide](contributor-guide.md)

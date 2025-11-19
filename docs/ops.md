@@ -250,11 +250,16 @@ Runloop enforces signatures on agent bundles before install/launch.
 agent.bundle/
 ├─ manifest.toml       # includes digests of contents
 ├─ policy.caps
+├─ tools.json          # optional host tool attachments
 ├─ agent.wasm
 ├─ schemas/… (optional)
 ├─ SBOM/spdx.json (optional)
 └─ SIGNATURES/manifest.sig
 ```
+
+- **Tool attachments:** When present, `tools.json` MUST follow the schema in
+  `docs/tool-attachments.md`; its digest appears in `manifest.toml` so the
+  signature covers attachment metadata alongside binaries.
 
 - **Trust policy file:** `~/.runloop/trust-policy.toml`
 

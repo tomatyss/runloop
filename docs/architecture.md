@@ -100,6 +100,8 @@ or depends on. Paths refer to workspace members declared in `Cargo.toml`.
 - Includes shared SDK layers (`crates/sdk/runloop-sdk`, `crates/sdk/agent-shim`)
   so native and WASM agents speak RMP consistently until the pure WASM path is
   complete.
+- Optional host tool attachments live in `tools.json` alongside each manifest;
+  see `docs/tool-attachments.md` for the schema emitted by `rlp agent scaffold`.
 
 ### Observability & Ops (`crates/agtop`, `docs/ops.md`, `docs/perf.md`)
 
