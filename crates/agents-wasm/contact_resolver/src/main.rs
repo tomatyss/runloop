@@ -5,9 +5,18 @@ use clap::Parser;
 use serde::Serialize;
 use uuid::Uuid;
 
-#[link(wasm_import_module = "runloop")]
-extern "C" {
-    fn notify_ready();
+#[allow(unsafe_code)]
+mod host {
+    #[link(wasm_import_module = "runloop")]
+    unsafe extern "C" {
+        fn notify_ready();
+    }
+
+    pub(super) fn signal_ready() {
+        // SAFETY: the host runtime injects `notify_ready` with no parameters,
+        // so calling it cannot violate any memory safety invariants.
+        unsafe { notify_ready() };
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -34,7 +43,7 @@ struct ContactEntry<'a> {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    unsafe { notify_ready() };
+    host::signal_ready();
     let contact = resolve(&cli.query)?;
     println!("{}", serde_json::to_string_pretty(&contact)?);
     Ok(())
