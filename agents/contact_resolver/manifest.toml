@@ -1,9 +1,9 @@
 [agent]
 name = "contact_resolver"
 version = "0.1.0"
-kind = "native-shim"
+kind = "wasm32-wasip1"
 
-entry_native = { path = "bin/contact_resolver", blake3 = "89e6f1fe99b70d441c1a78949ce2193e50553f75bba636461b5f67a8a9cc7dfb" }
+entry_wasm = { path = "bin/contact_resolver.wasm", blake3 = "0000000000000000000000000000000000000000000000000000000000000000" }
 
 [ports]
 in = ["intent.contact.lookup.v1"]

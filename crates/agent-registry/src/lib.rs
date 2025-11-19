@@ -11,6 +11,30 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[derive(Clone, Debug)]
+pub struct AgentBinary {
+    pub path: PathBuf,
+    pub blake3: String,
+}
+
+impl AgentBinary {
+    fn from_entry(base: &Path, entry: &EntrySpec) -> Self {
+        Self {
+            path: base.join(&entry.path),
+            blake3: entry.blake3.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AgentBundle {
+    pub described: DescribedAgent,
+    pub manifest_dir: PathBuf,
+    pub wasm_entry: Option<AgentBinary>,
+    pub native_entry: Option<AgentBinary>,
+    pub policy_path: Option<PathBuf>,
+}
+
 /// Registry that discovers agent manifests from configured search directories.
 #[derive(Clone, Debug)]
 pub struct AgentRegistry {
@@ -41,7 +65,34 @@ impl AgentRegistry {
     /// Describe a single agent reference.
     pub fn describe(&self, reference: &AgentRef) -> Result<DescribedAgent, AgentRegistryError> {
         let manifest_path = self.find_manifest(reference)?;
-        self.load_manifest(reference, &manifest_path)
+        let (_, described) = self.load_manifest(reference, &manifest_path)?;
+        Ok(described)
+    }
+
+    /// Load the full bundle metadata (entries + policy path) for a reference.
+    pub fn bundle(&self, reference: &AgentRef) -> Result<AgentBundle, AgentRegistryError> {
+        let manifest_path = self.find_manifest(reference)?;
+        let manifest_dir = manifest_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let (doc, described) = self.load_manifest(reference, &manifest_path)?;
+        let wasm_entry = doc
+            .entry_wasm
+            .as_ref()
+            .map(|entry| AgentBinary::from_entry(&manifest_dir, entry));
+        let native_entry = doc
+            .entry_native
+            .as_ref()
+            .map(|entry| AgentBinary::from_entry(&manifest_dir, entry));
+        let policy_path = doc.caps.as_ref().map(|caps| manifest_dir.join(&caps.file));
+        Ok(AgentBundle {
+            described,
+            manifest_dir,
+            wasm_entry,
+            native_entry,
+            policy_path,
+        })
     }
 
     /// Describe a set of references, deduplicating by canonical spec while preserving order.
@@ -82,7 +133,7 @@ impl AgentRegistry {
         &self,
         reference: &AgentRef,
         path: &Path,
-    ) -> Result<DescribedAgent, AgentRegistryError> {
+    ) -> Result<(ManifestDoc, DescribedAgent), AgentRegistryError> {
         let raw = fs::read_to_string(path).map_err(|source| AgentRegistryError::Io {
             path: path.to_path_buf(),
             source,
@@ -92,16 +143,14 @@ impl AgentRegistry {
                 path: path.to_path_buf(),
                 source,
             })?;
-        let ManifestDoc {
-            agent,
-            ports,
-            schemas,
-        } = doc;
+        let agent_section = doc.agent.clone();
+        let ports_section = doc.ports.clone();
+        let schemas_section = doc.schemas.clone();
         let AgentSection {
             name,
             version,
             variant: agent_variant,
-        } = agent;
+        } = agent_section;
         if name != reference.name {
             return Err(AgentRegistryError::Mismatch {
                 reference: reference.clone(),
@@ -122,20 +171,21 @@ impl AgentRegistry {
         let variant = reference.variant.clone().or_else(|| agent_variant.clone());
         let descriptor_ref = AgentRef::new(name, variant);
         let digest = hash(raw.as_bytes()).to_hex().to_string();
-        let schema = schemas
+        let schema = schemas_section
             .map(|section| section.into_bundle())
             .unwrap_or_default();
         let ports = AgentPorts {
-            inputs: ports.inputs,
-            outputs: ports.outputs,
+            inputs: ports_section.inputs,
+            outputs: ports_section.outputs,
         };
-        Ok(DescribedAgent {
+        let described = DescribedAgent {
             reference: descriptor_ref,
             version,
             digest,
             schema,
             ports,
-        })
+        };
+        Ok((doc, described))
     }
 }
 
@@ -176,16 +226,22 @@ fn candidate_roots(reference: &AgentRef) -> Vec<PathBuf> {
     roots
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 struct ManifestDoc {
     agent: AgentSection,
     #[serde(default)]
     ports: PortsSection,
     #[serde(default)]
     schemas: Option<SchemasSection>,
+    #[serde(default)]
+    entry_native: Option<EntrySpec>,
+    #[serde(default)]
+    entry_wasm: Option<EntrySpec>,
+    #[serde(default)]
+    caps: Option<CapsSection>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 struct AgentSection {
     name: String,
     version: String,
@@ -193,7 +249,7 @@ struct AgentSection {
     variant: Option<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 struct PortsSection {
     #[serde(default, rename = "in")]
     inputs: Vec<String>,
@@ -201,7 +257,7 @@ struct PortsSection {
     outputs: Vec<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 struct SchemasSection {
     #[serde(default)]
     with: Option<JsonValue>,
@@ -211,6 +267,17 @@ impl SchemasSection {
     fn into_bundle(self) -> AgentSchemaBundle {
         AgentSchemaBundle { with: self.with }
     }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct EntrySpec {
+    path: String,
+    blake3: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct CapsSection {
+    file: String,
 }
 
 #[cfg(test)]

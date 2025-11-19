@@ -46,6 +46,16 @@ See the tree in `README.md` for directories. Key docs:
    cat ~/.runloop/trust-policy.toml
    ```
 
+6. Build the wasm agent bundles and run the smoke test:
+
+   ```bash
+   just build-agents-wasm
+   just test-agents-wasm
+   ```
+
+   These helpers compile the wasm32-wasip1 binaries under `agents/*/bin/` and
+   exercise `compose_email` end-to-end via `rlp --local`.
+
 ## Common operational commands
 
 - `rlp kb migrate|verify|backup|vacuum`

@@ -1,9 +1,9 @@
 [agent]
 name = "critic"
 version = "0.1.0"
-kind = "native-shim"
+kind = "wasm32-wasip1"
 
-entry_native = { path = "bin/critic", blake3 = "43b6d5928f600b7610d344edd95bf3bb8aaf4a11b1259819b55366f126b671d2" }
+entry_wasm = { path = "bin/critic.wasm", blake3 = "0000000000000000000000000000000000000000000000000000000000000000" }
 
 [ports]
 in = ["artifact.draft.email.v1"]

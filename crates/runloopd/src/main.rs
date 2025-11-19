@@ -61,8 +61,8 @@ async fn main() -> Result<(), Error> {
         config.security.confirm_external_actions,
     ));
     let secrets: Arc<dyn SecretResolver> = Arc::new(DaemonSecretResolver);
-    let local_executor =
-        build_executor(config.clone(), confirmation, secrets).map_err(|e| match e {
+    let local_executor = build_executor(config.clone(), confirmation, secrets, registry.clone())
+        .map_err(|e| match e {
             ExecutorInitError::Config(err) => err,
             other => Error::Runtime(other.to_string()),
         })?;
@@ -1152,7 +1152,8 @@ edges:
         ));
         let secrets: Arc<dyn SecretResolver> = Arc::new(DaemonSecretResolver);
         let local_executor =
-            build_executor(config.clone(), confirmation, secrets).expect("build executor");
+            build_executor(config.clone(), confirmation, secrets, registry.clone())
+                .expect("build executor");
         let dispatcher = Arc::new(AgentDispatcher::new(bus.clone(), local_executor));
         let (ready_tx, ready_rx) = oneshot::channel();
         let (ctrl_shutdown_tx, ctrl_shutdown_rx) = oneshot::channel();

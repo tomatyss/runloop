@@ -8,20 +8,25 @@ name = "runloop_executor_local"
 
 [dependencies]
 async-trait = "0.1"
+base64 = { version = "0.21", default-features = false, features = ["std"] }
+runloop-agent-contact-resolver = { path = "../agents/contact_resolver" }
+runloop-agent-context-gatherer = { path = "../agents/context_gatherer" }
+runloop-agent-critic = { path = "../agents/critic" }
+runloop-agent-mailer = { path = "../agents/mailer" }
+runloop-agent-registry = { path = "../agent-registry" }
+runloop-agent-writer = { path = "../agents/writer" }
+runloop-agents-common = { path = "../agents/common" }
 runloop-core = { path = "../core" }
 runloop-kb = { path = "../kb" }
 runloop-model-broker = { path = "../model-broker" }
 runloop-openings = { path = "../openings" }
-runloop-agents-common = { path = "../agents/common" }
-runloop-agent-contact-resolver = { path = "../agents/contact_resolver" }
-runloop-agent-context-gatherer = { path = "../agents/context_gatherer" }
-runloop-agent-writer = { path = "../agents/writer" }
-runloop-agent-critic = { path = "../agents/critic" }
-runloop-agent-mailer = { path = "../agents/mailer" }
+runloop-runtime = { path = "../runtime" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha2 = "0.10"
 thiserror = "2.0"
-tokio = { version = "1.38", features = ["rt", "macros"] }
+tokio = { version = "1.38", features = ["rt", "time", "macros"] }
+uuid = { version = "1.8", features = ["v4"] }
 
 [dev-dependencies]
 tempfile = "3.10"

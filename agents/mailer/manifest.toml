@@ -1,9 +1,9 @@
 [agent]
 name = "mailer"
 version = "0.1.0"
-kind = "native-shim"
+kind = "wasm32-wasip1"
 
-entry_native = { path = "bin/mailer", blake3 = "a71ab878012dc901d4ece0fd9abed8409d97e8b277924798da73a8d3314eefec" }
+entry_wasm = { path = "bin/mailer.wasm", blake3 = "0000000000000000000000000000000000000000000000000000000000000000" }
 
 [ports]
 in = ["intent.send.mail.v1"]

@@ -46,7 +46,7 @@ fn collect_snippets(ctx: &AgentContext, req: &ContextRequest) -> AgentResult<Vec
          ORDER BY id DESC \
          LIMIT 5"
     );
-    let rows = ctx.kb().query(&sql)?.rows;
+    let rows = ctx.kb().query_events(&sql)?.rows;
     let mut snippets = Vec::new();
     for row in rows {
         if let Some(snippet) = row_to_snippet(row, &req.topic) {
@@ -107,7 +107,7 @@ fn summarise_payload(payload: &str, topic: &str) -> String {
 
 fn payload_like_clause(term: &str) -> String {
     format!(
-        "LOWER(payload_json) LIKE '%{}%' ESCAPE '\\\\'",
+        "LOWER(payload_json) LIKE '%{}%' ESCAPE '\\'",
         normalize_like_pattern(term)
     )
 }
@@ -151,7 +151,7 @@ mod tests {
         let clause = payload_like_clause("John_Doe 50%");
         assert_eq!(
             clause,
-            "LOWER(payload_json) LIKE '%john\\_doe 50\\%%' ESCAPE '\\\\'"
+            "LOWER(payload_json) LIKE '%john\\_doe 50\\%%' ESCAPE '\\'"
         );
     }
 }

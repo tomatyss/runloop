@@ -397,6 +397,25 @@ impl KnowledgeBase {
         })
     }
 
+    /// Execute a read-only SQL query against the ledger events database.
+    pub fn query_events(&self, sql: &str) -> Result<QueryResult, Error> {
+        let conn = self.events.lock();
+        let mut stmt = conn.prepare(sql)?;
+        if !stmt.readonly() {
+            return Err(Error::QueryNotReadOnly);
+        }
+        let column_names = stmt
+            .column_names()
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+        let rows = collect_rows(&mut stmt, &column_names)?;
+        Ok(QueryResult {
+            columns: column_names,
+            rows,
+        })
+    }
+
     /// Perform a keyword search across common domains (contacts, artifacts, events, runs).
     pub fn search(&self, keyword: &str) -> Result<Vec<SearchHit>, Error> {
         let like = format!("%{}%", keyword);
@@ -1501,6 +1520,29 @@ mod tests {
         let kb = KnowledgeBase::new();
         let err = kb
             .query("DELETE FROM contacts")
+            .expect_err("mutations not allowed");
+        assert!(matches!(err, Error::QueryNotReadOnly));
+    }
+
+    #[test]
+    fn query_events_returns_rows() {
+        let kb = KnowledgeBase::new();
+        let delta = contact_delta("Context Seed", "context@example.com", 0.7);
+        kb.propose(delta).expect("insert contact event");
+        let result = kb
+            .query_events("SELECT id, kind FROM events ORDER BY id ASC")
+            .expect("query events succeeds");
+        assert!(
+            !result.rows.is_empty(),
+            "expected at least one row from events query"
+        );
+    }
+
+    #[test]
+    fn query_events_rejects_mutation() {
+        let kb = KnowledgeBase::new();
+        let err = kb
+            .query_events("DELETE FROM events")
             .expect_err("mutations not allowed");
         assert!(matches!(err, Error::QueryNotReadOnly));
     }
