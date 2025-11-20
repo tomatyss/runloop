@@ -12,6 +12,11 @@ out = ["state.mail.result.v1"]
 [caps]
 file = "policy.caps"
 
+[artifacts.tools]
+path = "tools.json"
+blake3 = "62c56dc05fea3039501e5d21bc43f268757dbc7ccd1d8d7abd03f64607e6f547"
+version = 1
+
 [schemas.with]
 type = "object"
 additionalProperties = false
