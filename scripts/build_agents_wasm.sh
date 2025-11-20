@@ -38,7 +38,15 @@ update_tools_block() {
   perl -0pi -e '
     my $digest = $ENV{TOOLS_DIGEST};
     my $path = $ENV{TOOLS_PATH};
-    my $replaced = s#\[artifacts\.tools\]\npath = "[^"]*"\nblake3 = "[0-9a-f]{64}"\n(?:version = \d+\n)?#[artifacts.tools]\npath = "$path"\nblake3 = "$digest"\nversion = 1\n#sm;
+    my $replaced = 0;
+    s{
+      ^\[artifacts\.tools\]\n
+      (?:[^\n]*\n)*?
+      (?=^\[|\z)
+    }{
+      $replaced = 1;
+      "[artifacts.tools]\npath = \"$path\"\nblake3 = \"$digest\"\nversion = 1\n"
+    }gexm;
     if (!$replaced) {
       $_ .= "\n[artifacts.tools]\npath = \"$path\"\nblake3 = \"$digest\"\nversion = 1\n";
     }
