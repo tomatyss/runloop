@@ -1077,7 +1077,7 @@ fn active_config_path(layers: &[ConfigLayer]) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use runloop_core::{AgentPorts, AgentSchemaBundle, Config, EventId, OpeningId};
+    use runloop_core::{AgentArtifacts, AgentPorts, AgentSchemaBundle, Config, EventId, OpeningId};
     use runloop_router::{Classification as RouterClassification, Route as RouterRoute};
     use serde_json::json;
     use tempfile::{NamedTempFile, tempdir};
@@ -1237,6 +1237,7 @@ edges:
                 })),
             },
             ports: AgentPorts::default(),
+            artifacts: AgentArtifacts::default(),
         };
         let critic_descriptor = DescribedAgent {
             reference: AgentRef::new("critic", None),
@@ -1244,6 +1245,7 @@ edges:
             digest: "def456".into(),
             schema: AgentSchemaBundle::default(),
             ports: AgentPorts::default(),
+            artifacts: AgentArtifacts::default(),
         };
 
         let err = validate_opening_params(

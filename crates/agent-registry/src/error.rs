@@ -23,4 +23,6 @@ pub enum AgentRegistryError {
     Mismatch { reference: AgentRef, detail: String },
     #[error("schema error for {reference}: {detail}")]
     Schema { reference: AgentRef, detail: String },
+    #[error("artifact error for {reference}: {detail}")]
+    Artifact { reference: AgentRef, detail: String },
 }

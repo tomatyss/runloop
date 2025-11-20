@@ -94,6 +94,21 @@ pub struct AgentSchemaBundle {
     pub with: Option<JsonValue>,
 }
 
+/// Optional artifacts declared by agent manifests (digests are required for signing).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentArtifacts {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<AgentArtifactDigest>,
+}
+
+/// Digest assertion for an attachment artifact (e.g., tools.json).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentArtifactDigest {
+    pub path: String,
+    pub blake3: String,
+    pub version: u32,
+}
+
 /// Summary provided by the daemon for a resolved agent manifest.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DescribedAgent {
@@ -104,4 +119,6 @@ pub struct DescribedAgent {
     pub schema: AgentSchemaBundle,
     #[serde(default)]
     pub ports: AgentPorts,
+    #[serde(default)]
+    pub artifacts: AgentArtifacts,
 }

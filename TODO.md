@@ -400,9 +400,9 @@ draft artifact.
       optional tool attachments (`tools.json`, see `docs/tool-attachments.md`),
       and emits a new `crates/agents-wasm/<name>`
       crate plus `agents/<name>/manifest.toml`, `policy.caps`, and a starter
-      opening node wiring (trajectories/crossings). Include prompts for
-      available openings/structures so users can extend DSL plans without manual
-      file edits; document generated artifacts in `docs/`.
+      opening YAML (current nodes/edges DSL). Include prompts for available
+      openings/structures so users can extend DSL plans without manual file
+      edits; document generated artifacts in `docs/`.
 
 ### I2. TUI monitor (`agtop`)
 
