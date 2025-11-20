@@ -20,6 +20,7 @@ use rusqlite::{Connection, OpenFlags, Row, Statement, Transaction, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use thiserror::Error;
+use tracing::warn;
 
 pub use trace_store::{NodeFinishedRecord, TraceStore};
 
@@ -570,14 +571,37 @@ impl KnowledgeBase {
         Ok(None)
     }
 
-    /// Record a capability audit decision (in-memory only, for compatibility with existing tests).
+    /// Record a capability audit decision (persisted to the ledger).
     pub fn record_cap_audit(&self, record: CapAuditRecord) {
+        if let Err(err) = self.persist_cap_audit(record.clone()) {
+            warn!(%err, "cap.audit persistence failed");
+        }
         self.cap_audits.lock().push(record);
     }
 
     /// Snapshot audit events for diagnostics/tests.
     pub fn cap_audits(&self) -> Vec<CapAuditRecord> {
         self.cap_audits.lock().clone()
+    }
+
+    fn persist_cap_audit(&self, record: CapAuditRecord) -> Result<(), Error> {
+        let payload = cap_audit_payload(&record);
+        let provenance = Provenance {
+            trace_id: record.trace_id.to_string(),
+            opening_id: "opening:none".into(),
+            agent_id: record.agent_id.to_string(),
+            inputs_hash: None,
+            rationale: Some("capability audit".into()),
+        };
+        let delta = StateDelta::new(
+            "cap.audit",
+            record.agent_id.to_string(),
+            Some("system".into()),
+            payload,
+            provenance,
+        );
+        self.propose(delta)?;
+        Ok(())
     }
 }
 
@@ -648,6 +672,10 @@ static EMBEDDED_SCHEMAS: &[(&str, &str)] = &[
     (
         "run.trace",
         include_str!("../schemas/run.trace.schema.json"),
+    ),
+    (
+        "cap.audit",
+        include_str!("../schemas/cap.audit.schema.json"),
     ),
 ];
 
@@ -1701,6 +1729,15 @@ pub enum AuditDecision {
     Deny,
 }
 
+impl AuditDecision {
+    fn as_str(&self) -> &'static str {
+        match self {
+            AuditDecision::Allow => "allow",
+            AuditDecision::Deny => "deny",
+        }
+    }
+}
+
 /// Severity marker for audit entries.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -1708,6 +1745,16 @@ pub enum AuditSeverity {
     Info,
     Warn,
     Error,
+}
+
+impl AuditSeverity {
+    fn as_str(&self) -> &'static str {
+        match self {
+            AuditSeverity::Info => "info",
+            AuditSeverity::Warn => "warn",
+            AuditSeverity::Error => "error",
+        }
+    }
 }
 
 /// Canonical capability audit record (stored as JCS JSON in future revisions).
@@ -1754,6 +1801,23 @@ impl CapAuditRecord {
             severity,
         }
     }
+
+    fn args_hash_hex(&self) -> String {
+        hex::encode(self.args_hash)
+    }
+}
+
+fn cap_audit_payload(record: &CapAuditRecord) -> Value {
+    json!({
+        "agent": record.agent_id.to_string(),
+        "cap": record.cap,
+        "op": record.op,
+        "target": record.target,
+        "args_hash": record.args_hash_hex(),
+        "decision": record.decision.as_str(),
+        "severity": record.severity.as_str(),
+        "reason": record.reason,
+    })
 }
 
 /// Provenance metadata attached to ledger events.

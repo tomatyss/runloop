@@ -27,7 +27,7 @@ use runloop_openings::{
     Executor, Node, NodeExecution, NodeExecutionRequest, NodeInputs, NodeKind, NodeOutputs,
     RunnerError,
 };
-use runloop_runtime::{AgentIdentity, AgentSpec, Runtime, RuntimeBuilder};
+use runloop_runtime::{AgentIdentity, AgentSpec, AuditPolicy, Runtime, RuntimeBuilder};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
@@ -60,9 +60,14 @@ pub fn build_executor(
     seed_contact(&kb)?;
 
     let broker = Arc::new(Broker::new(config.models.broker.clone(), secret_resolver)?);
+    let audit_policy = AuditPolicy::new(
+        config.security.caps.audit_on_allow,
+        config.security.caps.audit_on_deny,
+    );
     let runtime = RuntimeBuilder::new()
         .knowledge_base(Arc::new(kb.clone()))
         .model_broker(broker.clone())
+        .audit_policy(audit_policy)
         .build()?;
 
     Ok(Arc::new(LocalExecutor::new(

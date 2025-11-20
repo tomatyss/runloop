@@ -19,6 +19,56 @@ openings. It presents four panes plus a status bar:
 Artifacts remain out of scope for Epic I and will follow in the Observability
 epic.
 
+## Layout snapshots (ASCII)
+
+### Live run (streaming)
+
+```text
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ agtop • mode:user • opening:compose_email (trace 63f1…) • pane:Log • tokens   │
+│ agents_running:3 • bus_queue_depth:1 • CONFIRM STATUS: clear                  │
+├───────────────────────────────┬──────────────────────────────────────────────┤
+│ LOG (rlp/runs/<id>/events)    │ PLAN (DAG from run events)                    │
+│ [12:01:03] writer ▸ draft ok  │ contacts ✔  context ✔  draft ✱  review …      │
+│ [12:01:05] critic warn retry  │ edges animate attempts / retries              │
+│ …                             │                                               │
+├───────────────────────────────┼──────────────────────────────────────────────┤
+│ agtop metrics (rlp/sys/*)     │ TRACE (rlp/runs/<id>/events kind=trace)       │
+│ agents_running:3  rss:420MB   │ [12:01:02] CLI → router → contact_resolver    │
+│ msgs_sent:134 drops:0         │ [12:01:04] writer → critic                    │
+│ bus_queue_depth:1 cache_hits:4│ … ladder scroll                               │
+└───────────────────────────────┴──────────────────────────────────────────────┘
+```
+
+Keyed areas:
+
+- Status bar mirrors the “Status Bar” contract and surfaces confirm state.
+- Log/Plan panes share the unified stream; left = textual events, right = DAG
+  view.
+- Metrics pane aggregates global/per-agent gauges; Trace pane renders the
+  ladder.
+
+### Confirmation prompt visible
+
+```text
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ … CONFIRM STATUS: PENDING (action.proposal 27ac…)                            │
+├───────────────────────────────┬──────────────────────────────────────────────┤
+│ LOG …                         │ PLAN …                                       │
+├───────────────────────────────┴──────────────────────────────────────────────┤
+│                          CONFIRMATION REQUIRED                               │
+│  Agent mailer proposed sending draft v3 to `john@example.com`                │
+│  Enter=approve • Esc=reject • (.) pause stream • [?] help                    │
+│  meta{opening_id:draft.send, ttl_ms:15000, trace_id:63f1…}                   │
+├───────────────────────────────┬──────────────────────────────────────────────┤
+│ agtop metrics …              │ TRACE …                                       │
+└───────────────────────────────┴──────────────────────────────────────────────┘
+```
+
+When a confirmation dialog is focused the log/plan panes keep buffering events,
+but input focus moves to the overlay; decisions publish `action.decision` via
+the UI/TUI capability described in “Confirmations”.
+
 ## Status Bar
 
 Always-on, single line:

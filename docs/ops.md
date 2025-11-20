@@ -323,6 +323,9 @@ See `docs/security-model.md` for secret-store details. Ops tasks:
   `runloop_broker_cache_hits_total`, and `runloop_broker_errors_total{kind=*}`
   counters for dashboards.
 - `agtop` pane + `rlp trace` rely on the metrics exported by agents.
+- Capability audit volume is gated by `security.caps.audit_on_allow` and
+  `security.caps.audit_on_deny`; the latter defaults to `true` so denied
+  hostcalls land in the KB as `cap.audit` events.
 
 ## 8. Message bus topics _(normative)_
 

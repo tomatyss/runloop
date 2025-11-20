@@ -441,9 +441,9 @@ freeze updates.
 
 ### J3. Audit log (caps)
 
-- [ ] KB event `cap.audit {agent,cap,args_hash,decision}` on deny and
+- [x] KB event `cap.audit {agent,cap,args_hash,decision}` on deny and
       (optionally) allow.
-- [ ] Config toggle to limit volume.
+- [x] Config toggle to limit volume.
 
 **DoD:** Attempted forbidden FS write produces an audit event.
 
