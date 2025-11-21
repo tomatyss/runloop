@@ -9,7 +9,10 @@ pub mod error;
 pub mod ids;
 pub mod trace;
 
-pub use agents::{AgentDigest, AgentPorts, AgentRef, AgentSchemaBundle, DescribedAgent};
+pub use agents::{
+    AgentArtifactDigest, AgentArtifacts, AgentDigest, AgentPorts, AgentRef, AgentSchemaBundle,
+    DescribedAgent,
+};
 pub use config::{Config, ConfigLayer, ConfigOverride, ConfigSource};
 pub use content::{
     CT_ACTION_DECISION, CT_ACTION_REQUEST, CT_AGENT_HELLO, CT_AGENT_LOG_LINE, CT_ARTIFACT,

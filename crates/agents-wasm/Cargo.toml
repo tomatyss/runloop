@@ -1,11 +1,6 @@
 [workspace]
-members = [
-  "contact_resolver",
-  "context_gatherer",
-  "writer",
-  "critic",
-  "mailer",
-]
+members = ["*"]
+exclude = ["target"]
 resolver = "2"
 
 [workspace.package]

@@ -3,7 +3,10 @@ pub mod schema;
 
 use blake3::hash;
 pub use error::AgentRegistryError;
-use runloop_core::{AgentDigest, AgentPorts, AgentRef, AgentSchemaBundle, DescribedAgent};
+use runloop_core::{
+    AgentArtifactDigest, AgentArtifacts, AgentDigest, AgentPorts, AgentRef, AgentSchemaBundle,
+    DescribedAgent,
+};
 pub use schema::{SchemaValidationError, SchemaViolation, validate_instance};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
@@ -33,6 +36,25 @@ pub struct AgentBundle {
     pub wasm_entry: Option<AgentBinary>,
     pub native_entry: Option<AgentBinary>,
     pub policy_path: Option<PathBuf>,
+    pub tools: Option<AgentArtifact>,
+}
+
+/// Non-executable artifact bundled with an agent (e.g., tools.json).
+#[derive(Clone, Debug)]
+pub struct AgentArtifact {
+    pub path: PathBuf,
+    pub blake3: String,
+    pub version: u32,
+}
+
+impl AgentArtifact {
+    fn from_entry(base: &Path, entry: &ArtifactSpec) -> Self {
+        Self {
+            path: base.join(&entry.path),
+            blake3: entry.blake3.clone(),
+            version: entry.version.unwrap_or(1),
+        }
+    }
 }
 
 /// Registry that discovers agent manifests from configured search directories.
@@ -86,12 +108,18 @@ impl AgentRegistry {
             .as_ref()
             .map(|entry| AgentBinary::from_entry(&manifest_dir, entry));
         let policy_path = doc.caps.as_ref().map(|caps| manifest_dir.join(&caps.file));
+        let tools = doc
+            .artifacts
+            .as_ref()
+            .and_then(|artifacts| artifacts.tools.as_ref())
+            .map(|entry| AgentArtifact::from_entry(&manifest_dir, entry));
         Ok(AgentBundle {
             described,
             manifest_dir,
             wasm_entry,
             native_entry,
             policy_path,
+            tools,
         })
     }
 
@@ -146,6 +174,7 @@ impl AgentRegistry {
         let agent_section = doc.agent.clone();
         let ports_section = doc.ports.clone();
         let schemas_section = doc.schemas.clone();
+        let artifacts_section = doc.artifacts.clone().unwrap_or_default();
         let AgentSection {
             name,
             version,
@@ -174,6 +203,27 @@ impl AgentRegistry {
         let schema = schemas_section
             .map(|section| section.into_bundle())
             .unwrap_or_default();
+        let tools_digest = artifacts_section
+            .tools
+            .as_ref()
+            .map(|spec| {
+                let version = spec.version.unwrap_or(1);
+                if version != 1 {
+                    return Err(AgentRegistryError::Artifact {
+                        reference: reference.clone(),
+                        detail: format!("unsupported tools.json version {version} (supported: 1)"),
+                    });
+                }
+                Ok(AgentArtifactDigest {
+                    path: spec.path.clone(),
+                    blake3: spec.blake3.clone(),
+                    version,
+                })
+            })
+            .transpose()?;
+        let artifacts = AgentArtifacts {
+            tools: tools_digest,
+        };
         let ports = AgentPorts {
             inputs: ports_section.inputs,
             outputs: ports_section.outputs,
@@ -184,6 +234,7 @@ impl AgentRegistry {
             digest,
             schema,
             ports,
+            artifacts,
         };
         Ok((doc, described))
     }
@@ -239,6 +290,8 @@ struct ManifestDoc {
     entry_wasm: Option<EntrySpec>,
     #[serde(default)]
     caps: Option<CapsSection>,
+    #[serde(default)]
+    artifacts: Option<ArtifactsSection>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -278,6 +331,20 @@ struct EntrySpec {
 #[derive(Clone, Debug, Deserialize)]
 struct CapsSection {
     file: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct ArtifactsSection {
+    #[serde(default)]
+    tools: Option<ArtifactSpec>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ArtifactSpec {
+    path: String,
+    blake3: String,
+    #[serde(default)]
+    version: Option<u32>,
 }
 
 #[cfg(test)]
@@ -358,6 +425,78 @@ out = []
         assert!(
             msg.contains("variant mismatch"),
             "expected mismatch detail, got {msg}"
+        );
+    }
+
+    #[test]
+    fn bundle_exposes_tools_attachment() {
+        let tmp = tempdir().expect("tmp dir");
+        write_manifest(
+            tmp.path(),
+            r#"[agent]
+name = "writer"
+version = "1.0.0"
+
+[ports]
+in = []
+out = []
+
+[artifacts.tools]
+path = "tools.json"
+blake3 = "abcdef"
+version = 1
+"#,
+        );
+        let registry = AgentRegistry::new([tmp.path().to_path_buf()]);
+        let bundle = registry
+            .bundle(&AgentRef::new("writer", None))
+            .expect("bundle with tools");
+        let tools = bundle.tools.expect("tools attachment present");
+        assert!(tools.path.ends_with("tools.json"));
+        assert_eq!(tools.blake3, "abcdef");
+        assert_eq!(tools.version, 1);
+        assert_eq!(
+            bundle
+                .described
+                .artifacts
+                .tools
+                .as_ref()
+                .expect("digest")
+                .blake3,
+            "abcdef"
+        );
+    }
+
+    #[test]
+    fn unsupported_tools_version_rejected() {
+        let tmp = tempdir().expect("tmp dir");
+        write_manifest(
+            tmp.path(),
+            r#"[agent]
+name = "writer"
+version = "1.0.0"
+
+[arts]
+noop = true
+
+[ports]
+in = []
+out = []
+
+[artifacts.tools]
+path = "tools.json"
+blake3 = "abcdef"
+version = 99
+"#,
+        );
+        let registry = AgentRegistry::new([tmp.path().to_path_buf()]);
+        let err = registry
+            .describe(&AgentRef::new("writer", None))
+            .expect_err("unsupported tools version");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("unsupported tools.json version"),
+            "expected tools version error, got {msg}"
         );
     }
 

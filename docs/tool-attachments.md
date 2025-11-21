@@ -26,6 +26,15 @@ metadata; no new `[tools]` tables are added to the manifest.
 - `tools` — ordered list of attachments available to the agent. Missing or empty
   means the agent has no attachments.
 
+Each bundle’s `manifest.toml` must include a digest for the attachment:
+
+```toml
+[artifacts.tools]
+path = "tools.json"
+blake3 = "<64-hex-digest>"
+version = 1
+```
+
 ## 2. Tool entry schema
 
 - `id` (string, required) – stable identifier such as `mail.smtp_send`. Payload
