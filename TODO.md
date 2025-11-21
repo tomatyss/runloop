@@ -425,9 +425,9 @@ freeze updates.
 
 ### J1. Tracing
 
-- [ ] Use `tracing` crate; span per crossing; include `trace_id`, `opening_id`,
+- [x] Use `tracing` crate; span per crossing; include `trace_id`, `opening_id`,
       `agent_id`.
-- [ ] `runloop trace <id>` prints ladder: timestamps, sender→receiver, type,
+- [x] `runloop trace <id>` prints ladder: timestamps, sender→receiver, type,
       bytes.
 
 **DoD:** Run a composed opening and print its ladder with ≥5 steps.

@@ -138,6 +138,8 @@ pub struct RunTrace {
     #[serde(default)]
     pub opening_id: OpeningId,
     pub nodes: Vec<NodeTrace>,
+    #[serde(default)]
+    pub ladder: Vec<LadderHop>,
     pub final_hash: String,
     pub success: bool,
 }
@@ -167,6 +169,22 @@ pub enum RunEvent {
     Completed {
         trace: RunTrace,
     },
+}
+
+/// Single hop in the ladder view used by `rlp trace`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LadderHop {
+    pub ts_ms: u64,
+    pub topic: String,
+    pub schema_id: u16,
+    pub frame_len: u32,
+    pub body_len: u32,
+    pub from: String,
+    pub to: String,
+    #[serde(default)]
+    pub msg_id: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 pub struct Runner<E>
@@ -591,6 +609,7 @@ where
             trace_id: self.trace_id,
             opening_id: self.opening_id,
             nodes: node_traces,
+            ladder: Vec::new(),
             final_hash,
             success: final_success,
         };

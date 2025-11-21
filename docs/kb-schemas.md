@@ -185,10 +185,10 @@ successful run.
 - Additional views (`policies`, `runs`, `cost_usage`) after the model broker
   lands.
 - Alternate backends (e.g., `redb`) behind feature flags without changing the
-  logical schema.
-`cap.audit` events capture per-hostcall capability decisions. Each payload
-stores the agent label, capability family (e.g., `time.now`), operation name,
-target string, the BLAKE3 hash of the serialized arguments (`args_hash` hex),
-decision (`allow|deny`), severity, and a short `reason` code. Events are
-written whenever the runtime's audit policy enables the corresponding decision
-stream (see `security.caps.audit_on_allow` / `audit_on_deny` in config).
+  logical schema. `cap.audit` events capture per-hostcall capability decisions.
+  Each payload stores the agent label, capability family (e.g., `time.now`),
+  operation name, target string, the BLAKE3 hash of the serialized arguments
+  (`args_hash` hex), decision (`allow|deny`), severity, and a short `reason`
+  code. Events are written whenever the runtime's audit policy enables the
+  corresponding decision stream (see `security.caps.audit_on_allow` /
+  `audit_on_deny` in config).

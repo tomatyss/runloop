@@ -74,9 +74,9 @@ kb_write = ["drafts"]   # restrict writes to the drafts domain
   vs. base policy.
 - During agent launch, Runloop logs both base and effective capability sets for
   auditing.
-- Capability decisions are surfaced in structured logs (`cap_allow` /
-  `cap_deny` events) and, when enabled via `security.caps.audit_on_*`, persisted
-  to the knowledge base as `cap.audit` events for replay.
+- Capability decisions are surfaced in structured logs (`cap_allow` / `cap_deny`
+  events) and, when enabled via `security.caps.audit_on_*`, persisted to the
+  knowledge base as `cap.audit` events for replay.
 
 ## 5. Future additions
 

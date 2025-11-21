@@ -15,7 +15,7 @@ use runloop_core::{
 use runloop_executor_local::{ExecutorInitError, build_executor};
 use runloop_kb::{KnowledgeBase, Materializer, NodeFinishedRecord, TraceStore};
 use runloop_model_broker::SecretResolver;
-use runloop_openings::{NodeState, RunEvent, RunTrace, Runner, parse_opening_str};
+use runloop_openings::{LadderHop, NodeState, RunEvent, RunTrace, Runner, parse_opening_str};
 use runloop_rmp::{Header, decode_payload, encode_payload};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -629,25 +629,35 @@ impl RunStreamer {
         let mut run_future = Box::pin(async move { runner.run().await });
         let composer = EventComposer::new(trace_id, opening_id);
         let mut tracker = NodeTracker::new();
+        let mut ladder = LadderRecorder::new("runloopd");
         tokio::task::yield_now().await;
         sleep(Duration::from_millis(20)).await;
-        let _ = publish_to_topic(&bus, &topic, trace_key, composer.started()).await;
+        let _ = publish_to_topic(
+            &bus,
+            &topic,
+            trace_key,
+            composer.started(),
+            Some(&mut ladder),
+        )
+        .await;
         loop {
             tokio::select! {
                 res = &mut run_future => {
                     match res {
                         Ok(report) => {
-                            let success = report.trace.success;
+                            let mut trace = report.trace;
+                            let success = trace.success;
                             let payload = composer.finished(success);
-                            let _ = publish_to_topic(&bus, &topic, trace_key, payload).await;
-                            let nodes = node_records_from_trace(&report.trace);
+                            let _ = publish_to_topic(&bus, &topic, trace_key, payload, Some(&mut ladder)).await;
+                            trace.ladder = ladder.take();
+                            let nodes = node_records_from_trace(&trace);
                             repository.record_nodes(composer.trace_id(), composer.opening_id(), &nodes);
-                            repository.record_run_trace(&report.trace);
+                            repository.record_run_trace(&trace);
                             repository.record_finished(composer.trace_id(), composer.opening_id(), if success { "finished" } else { "failed" });
                         }
                         Err(err) => {
                             let payload = composer.failure(&err.to_string());
-                            let _ = publish_to_topic(&bus, &topic, trace_key, payload).await;
+                            let _ = publish_to_topic(&bus, &topic, trace_key, payload, Some(&mut ladder)).await;
                             let failure_records = tracker.summarize();
                             repository.record_nodes(composer.trace_id(), composer.opening_id(), &failure_records);
                             repository.record_finished(composer.trace_id(), composer.opening_id(), "failed");
@@ -660,7 +670,7 @@ impl RunStreamer {
                         Some(event) => {
                             tracker.handle(&event);
                             if let Some(payload) = composer.event_payload(event) {
-                                let _ = publish_to_topic(&bus, &topic, trace_key, payload).await;
+                                let _ = publish_to_topic(&bus, &topic, trace_key, payload, Some(&mut ladder)).await;
                             }
                         }
                         None => break,
@@ -850,7 +860,12 @@ async fn publish_to_topic(
     topic: &str,
     trace_key: u128,
     payload: serde_json::Value,
+    ladder: Option<&mut LadderRecorder>,
 ) -> Result<(), Error> {
+    let kind = payload
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     let header = Header {
         schema_id: CT_RUN_EVENT,
         created_at_ms: current_millis(),
@@ -859,6 +874,9 @@ async fn publish_to_topic(
         ..Header::default()
     };
     let body = encode_payload(CT_RUN_EVENT, &payload, None)?;
+    if let Some(recorder) = ladder {
+        recorder.record(topic, &header, body.len(), kind.as_deref());
+    }
     let msg = Message::new(header, Bytes::from(body)).map_err(|e| Error::Bus(e.to_string()))?;
     bus.publish(topic, msg)
         .await
@@ -888,6 +906,39 @@ fn node_records_from_trace(trace: &RunTrace) -> Vec<NodeFinishedRecord> {
             }
         })
         .collect()
+}
+
+struct LadderRecorder {
+    entries: Vec<LadderHop>,
+    from: String,
+}
+
+impl LadderRecorder {
+    fn new(from: impl Into<String>) -> Self {
+        Self {
+            entries: Vec::new(),
+            from: from.into(),
+        }
+    }
+
+    fn record(&mut self, topic: &str, header: &Header, body_len: usize, kind: Option<&str>) {
+        let frame_len = 64u32.saturating_add(body_len as u32);
+        self.entries.push(LadderHop {
+            ts_ms: header.created_at_ms,
+            topic: topic.to_string(),
+            schema_id: header.schema_id,
+            frame_len,
+            body_len: body_len as u32,
+            from: self.from.clone(),
+            to: topic.to_string(),
+            msg_id: header.msg_id,
+            kind: kind.map(|s| s.to_string()),
+        });
+    }
+
+    fn take(self) -> Vec<LadderHop> {
+        self.entries
+    }
 }
 
 struct NodeTracker {
