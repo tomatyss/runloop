@@ -1,6 +1,7 @@
+use runloop_core::content::CT_RUN_EVENT;
 use runloop_core::{OpeningId, TraceId};
 use runloop_kb::NodeFinishedRecord;
-use runloop_openings::{NodeState, RunEvent, RunTrace};
+use runloop_openings::{LadderHop, NodeState, RunEvent, RunTrace};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_json::{Value, json};
@@ -16,6 +17,8 @@ pub struct RunEventEmitter {
     params: Value,
     nodes: HashMap<String, NodeTelemetry>,
     run_started: Instant,
+    ladder: Vec<LadderHop>,
+    msg_counter: u64,
 }
 
 struct NodeTelemetry {
@@ -60,10 +63,12 @@ impl RunEventEmitter {
             params,
             nodes: HashMap::new(),
             run_started: Instant::now(),
+            ladder: Vec::new(),
+            msg_counter: 1,
         }
     }
 
-    pub fn emit_run_started(&self) -> io::Result<()> {
+    pub fn emit_run_started(&mut self) -> io::Result<()> {
         self.emit_record(
             "run.started",
             "info",
@@ -144,7 +149,12 @@ impl RunEventEmitter {
         }
     }
 
-    fn handle_log_line(&self, node_id: String, level: String, message: String) -> io::Result<()> {
+    fn handle_log_line(
+        &mut self,
+        node_id: String,
+        level: String,
+        message: String,
+    ) -> io::Result<()> {
         let severity = level.to_ascii_lowercase();
         let kind = if severity == "error" || severity == "warn" {
             "node.stderr"
@@ -202,7 +212,11 @@ impl RunEventEmitter {
         Ok((node_summaries, node_records))
     }
 
-    pub fn emit_run_finished(&self, status: &str, node_summaries: Vec<Value>) -> io::Result<()> {
+    pub fn emit_run_finished(
+        &mut self,
+        status: &str,
+        node_summaries: Vec<Value>,
+    ) -> io::Result<()> {
         self.emit_record(
             "run.finished",
             level_for_status(status),
@@ -217,7 +231,7 @@ impl RunEventEmitter {
         )
     }
 
-    fn emit_record<M>(&self, kind: &str, level: &str, message: M, meta: Value) -> io::Result<()>
+    fn emit_record<M>(&mut self, kind: &str, level: &str, message: M, meta: Value) -> io::Result<()>
     where
         M: Into<String>,
     {
@@ -235,7 +249,28 @@ impl RunEventEmitter {
         let mut stdout = io::stdout();
         stdout.write_all(&line)?;
         stdout.write_all(b"\n")?;
-        stdout.flush()
+        stdout.flush()?;
+
+        let frame_len = 64u32.saturating_add(line.len() as u32);
+        let hop = LadderHop {
+            ts_ms: record.ts_ms,
+            topic: "local/run".into(),
+            schema_id: CT_RUN_EVENT,
+            frame_len,
+            body_len: line.len() as u32,
+            from: record
+                .meta
+                .get("node")
+                .and_then(Value::as_str)
+                .unwrap_or("runner")
+                .to_string(),
+            to: "cli".into(),
+            msg_id: self.msg_counter,
+            kind: Some(kind.to_string()),
+        };
+        self.msg_counter = self.msg_counter.saturating_add(1);
+        self.ladder.push(hop);
+        Ok(())
     }
 
     pub fn summarize_failure(&self) -> Vec<NodeFinishedRecord> {
@@ -250,6 +285,10 @@ impl RunEventEmitter {
                 error: telemetry.error.clone(),
             })
             .collect()
+    }
+
+    pub fn take_ladder(self) -> Vec<LadderHop> {
+        self.ladder
     }
 }
 
@@ -451,5 +490,21 @@ mod tests {
         assert_eq!(value.get("run_id").unwrap(), "trace:abc");
         assert!(value.get("meta").is_some());
         assert_eq!(value.get("opening_name").unwrap(), "compose_email");
+    }
+
+    #[test]
+    fn emitter_captures_ladder_hops() {
+        let mut emitter = RunEventEmitter::new(
+            TraceId::new(),
+            OpeningId::new(),
+            "test".into(),
+            serde_json::json!({ "topic": "demo" }),
+        );
+        emitter.emit_run_started().expect("emit started");
+        let ladder = emitter.take_ladder();
+        assert!(!ladder.is_empty());
+        let hop = &ladder[0];
+        assert_eq!(hop.schema_id, CT_RUN_EVENT);
+        assert!(hop.frame_len >= hop.body_len);
     }
 }

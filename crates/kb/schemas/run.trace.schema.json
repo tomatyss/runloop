@@ -20,6 +20,12 @@
     "success": {
       "type": "boolean"
     },
+    "ladder": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ladder_hop"
+      }
+    },
     "nodes": {
       "type": "array",
       "items": {
@@ -107,6 +113,22 @@
         "error": {
           "type": ["string", "null"]
         }
+      },
+      "additionalProperties": false
+    },
+    "ladder_hop": {
+      "type": "object",
+      "required": ["ts_ms", "topic", "schema_id", "frame_len", "body_len", "from", "to", "msg_id"],
+      "properties": {
+        "ts_ms": { "type": "integer", "minimum": 0 },
+        "topic": { "type": "string", "minLength": 1 },
+        "schema_id": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "frame_len": { "type": "integer", "minimum": 0 },
+        "body_len": { "type": "integer", "minimum": 0 },
+        "from": { "type": "string", "minLength": 1 },
+        "to": { "type": "string", "minLength": 1 },
+        "msg_id": { "type": "integer", "minimum": 0 },
+        "kind": { "type": ["string", "null"] }
       },
       "additionalProperties": false
     },

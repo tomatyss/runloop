@@ -109,6 +109,11 @@ Always-on, single line:
   `ui|tui` may send `action.decision`. For daemon-backed runs the CLI defers to
   the TUI (no inline prompt); `agtop` surfaces dialogs and publishes the
   decision.
+- **Ladder (trace pane):** `rlp trace <id>` and the TUI consume ladder hops
+  emitted on the run stream and persisted in `run.trace.ladder`. Each hop
+  captures `{ts_ms, from, to, schema_id, frame_len, body_len, msg_id, kind}`.
+  Live streams are merged with the persisted ladder; `--include-control` /
+  `--include-drops` opt into control-plane and drop notices when debugging.
 
 ## UX Principles
 

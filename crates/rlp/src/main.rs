@@ -31,7 +31,7 @@ use runloop_kb::{
 };
 use runloop_model_broker::SecretResolver;
 use runloop_openings::{
-    NodeKind, Opening, ReplayMismatch, RunReport, RunTrace, Runner, RunnerError,
+    LadderHop, NodeKind, Opening, ReplayMismatch, RunReport, RunTrace, Runner, RunnerError,
     SchemaHintFragment, parse_opening_str, replay,
 };
 use runloop_rmp::{Header, decode_payload, encode_payload};
@@ -43,13 +43,13 @@ use shell::{
     DisableRequest, EnableRequest, ShellAction, ShellEditResult, ShellFlavor,
     disable as disable_shell, enable as enable_shell,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::env;
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant as StdInstant, SystemTime, UNIX_EPOCH};
 use std::{fs, fs::File};
 use thiserror::Error;
 use tokio::time::Duration;
@@ -74,6 +74,7 @@ enum Commands {
     Why(WhyArgs),
     Run(RunArgs),
     Replay(ReplayArgs),
+    Trace(TraceArgs),
     #[command(subcommand)]
     Kb(KbCommands),
     #[command(subcommand)]
@@ -152,6 +153,24 @@ struct ReplayArgs {
     /// Opening YAML to use when replaying the trace.
     #[arg(long, value_name = "OPENING_PATH")]
     opening: String,
+}
+
+#[derive(Args, Debug)]
+struct TraceArgs {
+    /// Trace identifier (`trace:<uuid>` or bare UUID) or path to a trace JSON file.
+    #[arg(value_name = "TRACE_ID|TRACE_PATH")]
+    trace_ref: String,
+    /// Include control-plane frames (CT_CTRL_REQ/RESP) when available.
+    #[arg(long)]
+    include_control: bool,
+    /// Include drop notices from rlp/sys/drops when available.
+    #[arg(long)]
+    include_drops: bool,
+    /// Display timestamps relative to the first hop.
+    #[arg(long)]
+    relative: bool,
+    #[command(flatten)]
+    output: OutputArgs,
 }
 
 #[derive(Subcommand, Debug)]
@@ -399,6 +418,10 @@ async fn run() -> Result<i32, CliError> {
             handle_replay(args).await?;
             Ok(0)
         }
+        Commands::Trace(args) => {
+            handle_trace(args).await?;
+            Ok(0)
+        }
         Commands::Kb(cmd) => {
             handle_kb(cmd).await?;
             Ok(0)
@@ -583,6 +606,193 @@ fn load_trace_from_kb(config: &Config, trace_id: TraceId) -> Result<RunTrace, Cl
         .load_run_trace(&trace_id)?
         .ok_or(CliError::TraceNotFound(trace_id))?;
     serde_json::from_value(value).map_err(|err| CliError::InvalidTrace(err.to_string()))
+}
+
+async fn handle_trace(args: TraceArgs) -> Result<(), CliError> {
+    let config = Config::load()?;
+    let source = ReplaySource::parse(&args.trace_ref)?;
+    let (mut trace, trace_id_opt) = match source {
+        ReplaySource::File(path) => (load_trace_from_file(&path)?, None),
+        ReplaySource::TraceId(trace_id) => (load_trace_from_kb(&config, trace_id)?, Some(trace_id)),
+    };
+
+    // Best-effort live enrichment (hybrid).
+    if let Some(trace_id) = trace_id_opt
+        && let Ok(live) =
+            collect_live_ladder(&config, trace_id, args.include_control, args.include_drops).await
+    {
+        trace.ladder = merge_ladders(trace.ladder.clone(), live);
+    }
+
+    let ladder = sorted_ladder(&trace.ladder, args.relative);
+
+    if ladder.is_empty() {
+        println!("no ladder entries captured for this trace");
+        return Ok(());
+    }
+
+    let settings = args.output.resolve();
+    match (args.output.json, args.output.table) {
+        (true, _) => {
+            let mut trace_json = trace.clone();
+            trace_json.ladder = ladder;
+            let value = to_value(&trace_json)?;
+            print_json(&value)?;
+        }
+        (_, true) => {
+            let mut table = Table::new(vec![
+                "ts_ms".into(),
+                "from→to".into(),
+                "kind".into(),
+                "schema".into(),
+                "frame_bytes".into(),
+            ]);
+            for hop in ladder {
+                table.add_row(vec![
+                    Cell::number(hop.ts_ms.to_string()),
+                    Cell::text(format!("{} → {}", hop.from, hop.to)),
+                    Cell::text(hop.kind.unwrap_or_else(|| "-".into())),
+                    Cell::text(format!("{}", hop.schema_id)),
+                    Cell::number(hop.frame_len.to_string()),
+                ]);
+            }
+            print_table(&table, &settings)?;
+        }
+        _ => {
+            render_ladder_text(&ladder);
+        }
+    }
+    Ok(())
+}
+
+fn sorted_ladder(ladder: &[LadderHop], relative: bool) -> Vec<LadderHop> {
+    let mut hops = ladder.to_vec();
+    hops.sort_by(|a, b| {
+        a.ts_ms
+            .cmp(&b.ts_ms)
+            .then_with(|| a.msg_id.cmp(&b.msg_id))
+            .then_with(|| a.topic.cmp(&b.topic))
+    });
+    if relative && let Some(first) = hops.first().cloned() {
+        let base = first.ts_ms;
+        for hop in &mut hops {
+            hop.ts_ms = hop.ts_ms.saturating_sub(base);
+        }
+    }
+    hops
+}
+
+fn render_ladder_text(ladder: &[LadderHop]) {
+    for hop in ladder {
+        let kind = hop.kind.as_deref().unwrap_or("-");
+        println!(
+            "[{}] {} -> {} | {} (schema {}) | frame={}B body={}B",
+            hop.ts_ms, hop.from, hop.to, kind, hop.schema_id, hop.frame_len, hop.body_len
+        );
+    }
+}
+
+fn merge_ladders(mut persisted: Vec<LadderHop>, live: Vec<LadderHop>) -> Vec<LadderHop> {
+    let mut seen: HashSet<u64> = persisted.iter().map(|h| h.msg_id).collect();
+    for hop in live {
+        if hop.msg_id != 0 && seen.contains(&hop.msg_id) {
+            continue;
+        }
+        seen.insert(hop.msg_id);
+        persisted.push(hop);
+    }
+    persisted
+}
+
+async fn collect_live_ladder(
+    config: &Config,
+    trace_id: TraceId,
+    include_control: bool,
+    include_drops: bool,
+) -> Result<Vec<LadderHop>, CliError> {
+    let path = resolve_socket_path(config).await?;
+    let bus = Bus::connect(&path)
+        .await
+        .map_err(|_| CliError::DaemonUnreachable(path.display().to_string()))?;
+
+    let mut subs: Vec<(String, Subscription)> = Vec::new();
+    let run_topic = format!("rlp/runs/{}/events", trace_id);
+    subs.push((
+        run_topic.clone(),
+        bus.subscribe(&run_topic)
+            .await
+            .map_err(|_| CliError::DaemonUnreachable(path.display().to_string()))?,
+    ));
+    if include_control {
+        subs.push((
+            "rlp/ctrl".into(),
+            bus.subscribe("rlp/ctrl")
+                .await
+                .map_err(|_| CliError::DaemonUnreachable(path.display().to_string()))?,
+        ));
+    }
+    if include_drops {
+        subs.push((
+            "rlp/sys/drops".into(),
+            bus.subscribe("rlp/sys/drops")
+                .await
+                .map_err(|_| CliError::DaemonUnreachable(path.display().to_string()))?,
+        ));
+    }
+
+    let deadline = StdInstant::now() + Duration::from_millis(1500);
+    let mut hops = Vec::new();
+    while StdInstant::now() < deadline && !subs.is_empty() {
+        let mut dead_indices = Vec::new();
+        for (idx, (topic, sub)) in subs.iter_mut().enumerate() {
+            match time::timeout(Duration::from_millis(50), sub.next()).await {
+                Ok(Some(msg)) => {
+                    let is_run = topic.starts_with("rlp/runs/");
+                    let is_ctrl = include_control
+                        && topic == "rlp/ctrl"
+                        && msg.header.trace_id == uuid_to_u128(trace_id.0);
+                    let is_drop = include_drops
+                        && topic == "rlp/sys/drops"
+                        && msg.header.trace_id == uuid_to_u128(trace_id.0);
+                    if (is_run || is_ctrl || is_drop)
+                        && let Some(hop) = ladder_from_message(topic, &msg)
+                    {
+                        hops.push(hop);
+                    }
+                }
+                Ok(None) => dead_indices.push(idx),
+                Err(_) => {}
+            }
+        }
+        if !dead_indices.is_empty() {
+            for idx in dead_indices.into_iter().rev() {
+                subs.swap_remove(idx);
+            }
+        }
+    }
+    Ok(hops)
+}
+
+fn ladder_from_message(topic: &str, msg: &runloop_bus::Message) -> Option<LadderHop> {
+    let kind = decode_payload::<serde_json::Value>(msg.header.schema_id, &msg.body)
+        .ok()
+        .and_then(|env| {
+            env.payload
+                .get("kind")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        });
+    Some(LadderHop {
+        ts_ms: msg.header.created_at_ms,
+        topic: topic.to_string(),
+        schema_id: msg.header.schema_id,
+        frame_len: 64u32.saturating_add(msg.body.len() as u32),
+        body_len: msg.body.len() as u32,
+        from: "daemon".into(),
+        to: topic.to_string(),
+        msg_id: msg.header.msg_id,
+        kind,
+    })
 }
 
 async fn write_daemon_trace(
@@ -1172,6 +1382,7 @@ mod tests {
             trace_id,
             opening_id,
             nodes: Vec::new(),
+            ladder: Vec::new(),
             final_hash: final_hash.into(),
             success: true,
         };
@@ -1940,33 +2151,27 @@ async fn run_opening_locally(
 
     match result {
         Ok(report) => {
-            let (node_meta, node_records) = emitter.emit_node_finishes(&report.trace)?;
-            let run_status = if report.trace.success { "ok" } else { "error" };
+            let mut trace = report.trace;
+            let (node_meta, node_records) = emitter.emit_node_finishes(&trace)?;
+            let run_status = if trace.success { "ok" } else { "error" };
             emitter.emit_run_finished(run_status, node_meta)?;
+            trace.ladder = emitter.take_ladder();
             if let Some(path) = trace_out {
                 let file = File::create(&path)?;
-                to_writer_pretty(file, &report.trace)?;
+                to_writer_pretty(file, &trace)?;
             }
-            trace_store.record_nodes(
-                &report.trace.trace_id,
-                &report.trace.opening_id,
-                &node_records,
-            )?;
-            trace_store.record_run_trace(&report.trace)?;
+            trace_store.record_nodes(&trace.trace_id, &trace.opening_id, &node_records)?;
+            trace_store.record_run_trace(&trace)?;
             trace_store.record_run_finished(
-                &report.trace.trace_id,
-                &report.trace.opening_id,
-                if report.trace.success {
-                    "finished"
-                } else {
-                    "failed"
-                },
+                &trace.trace_id,
+                &trace.opening_id,
+                if trace.success { "finished" } else { "failed" },
             )?;
             trace_store.flush()?;
-            if report.trace.success {
+            if trace.success {
                 Ok(())
             } else {
-                Err(CliError::RunFailure(report.trace.trace_id))
+                Err(CliError::RunFailure(trace.trace_id))
             }
         }
         Err(err) => {

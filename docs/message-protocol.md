@@ -83,6 +83,9 @@ Body bytes are encoded as a MsgPack map of the form:
   `header_version` and, if necessary, `header_len`.
 - Implementations MAY cache `header_len`, but they MUST still compare the actual
   field to `64` and reject anything else.
+- **Ladder bytes (rlp trace):** ladder hops render `frame_len` exactly as
+  transmitted (`header_len + body_len`) and fall back to `64 + body_len` when a
+  pre-serialized frame length is unavailable (e.g., synthetic local runs).
 
 ## 4. TTL & expiry handling
 

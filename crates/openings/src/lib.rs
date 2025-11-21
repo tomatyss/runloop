@@ -12,9 +12,9 @@ pub use parser::{
 pub use parser::{Error, parse_opening_str};
 pub use replay::{ReplayMismatch, ReplayReport, replay};
 pub use runner::{
-    Executor, NodeAttemptRecord, NodeAttemptTrace, NodeExecution, NodeExecutionRequest, NodeInputs,
-    NodeOutputs, NodeRecord, NodeState, NodeTrace, RunEvent, RunReport, RunTrace, Runner,
-    RunnerError,
+    Executor, LadderHop, NodeAttemptRecord, NodeAttemptTrace, NodeExecution, NodeExecutionRequest,
+    NodeInputs, NodeOutputs, NodeRecord, NodeState, NodeTrace, RunEvent, RunReport, RunTrace,
+    Runner, RunnerError,
 };
 
 #[cfg(test)]
