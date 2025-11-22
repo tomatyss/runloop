@@ -3288,6 +3288,7 @@ dependencies = [
  "tokio",
  "tracing",
  "unicode-width 0.1.14",
+ "url",
  "uuid",
 ]
 

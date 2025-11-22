@@ -1,7 +1,9 @@
+mod agent;
 mod output;
 mod run_events;
 mod shell;
 
+use agent::{AgentCommands, handle_agent};
 use async_trait::async_trait;
 use bytes::Bytes;
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -80,6 +82,8 @@ enum Commands {
     Config(ConfigCommands),
     #[command(subcommand)]
     Shell(ShellCommands),
+    #[command(subcommand)]
+    Agent(AgentCommands),
 }
 
 #[derive(Args, Debug)]
@@ -304,6 +308,8 @@ enum CliError {
     AcceptTimeout,
     #[error("shell integration error: {0}")]
     ShellIntegration(String),
+    #[error("agent scaffold error: {0}")]
+    AgentScaffold(String),
     #[error("run rejected: {code} — {message}")]
     RunRejected { code: String, message: String },
     #[error("parameter validation failed")]
@@ -328,6 +334,12 @@ impl From<AgentRegistryError> for CliError {
 impl From<shell::ShellError> for CliError {
     fn from(err: shell::ShellError) -> Self {
         CliError::ShellIntegration(err.to_string())
+    }
+}
+
+impl From<agent::ScaffoldError> for CliError {
+    fn from(err: agent::ScaffoldError) -> Self {
+        CliError::AgentScaffold(err.to_string())
     }
 }
 
@@ -409,6 +421,11 @@ async fn run() -> Result<i32, CliError> {
         }
         Commands::Shell(cmd) => {
             handle_shell(cmd).await?;
+            Ok(0)
+        }
+        Commands::Agent(cmd) => {
+            let config = Config::load()?;
+            handle_agent(cmd, &config)?;
             Ok(0)
         }
     }
