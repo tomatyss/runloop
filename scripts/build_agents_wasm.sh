@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -n "${RUNLOOP_WORKSPACE_ROOT:-}" ]]; then
+  ROOT="$(cd "${RUNLOOP_WORKSPACE_ROOT}" && pwd)"
+else
+  ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
 WASM_TARGET="wasm32-wasip1"
 TARGET_DIR="$ROOT/target/$WASM_TARGET/release"
 export CARGO_TARGET_DIR="$ROOT/target"

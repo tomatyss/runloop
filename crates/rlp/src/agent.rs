@@ -6,6 +6,7 @@ use runloop_agent_registry::{
 };
 use runloop_core::Config;
 use serde_json::json;
+use std::env;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -47,7 +48,7 @@ pub struct ScaffoldArgs {
     /// KB write domains (comma-separated, empty = false).
     #[arg(long = "cap-kb-write", value_delimiter = ',')]
     pub cap_kb_write: Vec<String>,
-    /// Root directory for agent bundles (defaults to first agents.search_dirs entry).
+    /// Root directory for agent bundles (defaults to workspace ./agents via RUNLOOP_WORKSPACE_ROOT or nearest Cargo.toml, else first agents.search_dirs entry).
     #[arg(long = "root", value_name = "PATH")]
     pub root_dir: Option<PathBuf>,
     /// Root directory for wasm agent crates (defaults to crates/agents-wasm).
@@ -174,23 +175,70 @@ fn validate_name(name: &str) -> Result<(), ScaffoldError> {
 }
 
 fn resolve_agent_root(root: &Option<PathBuf>, config: &Config) -> PathBuf {
+    resolve_agent_root_with_cwd(root, config, None)
+}
+
+fn resolve_agent_root_with_cwd(
+    root: &Option<PathBuf>,
+    config: &Config,
+    cwd: Option<&Path>,
+) -> PathBuf {
     if let Some(dir) = root {
         return expand_tilde(dir.clone());
     }
-    config
-        .agents
-        .search_dirs
-        .first()
-        .map(PathBuf::from)
-        .map(expand_tilde)
-        .unwrap_or_else(|| PathBuf::from("agents"))
+    if let Some(workspace) = workspace_root(cwd) {
+        return workspace.join("agents");
+    }
+    preferred_config_agent_dir(config).unwrap_or_else(|| PathBuf::from("agents"))
 }
 
 fn resolve_crate_root(root: &Option<PathBuf>) -> PathBuf {
-    root.as_ref()
+    resolve_crate_root_with_cwd(root, None)
+}
+
+fn resolve_crate_root_with_cwd(root: &Option<PathBuf>, cwd: Option<&Path>) -> PathBuf {
+    if let Some(dir) = root {
+        return expand_tilde(dir.clone());
+    }
+    if let Some(workspace) = workspace_root(cwd) {
+        return workspace.join("crates/agents-wasm");
+    }
+    PathBuf::from("crates/agents-wasm")
+}
+
+fn preferred_config_agent_dir(config: &Config) -> Option<PathBuf> {
+    config
+        .agents
+        .search_dirs
+        .iter()
         .map(PathBuf::from)
         .map(expand_tilde)
-        .unwrap_or_else(|| PathBuf::from("crates/agents-wasm"))
+        .next()
+}
+
+fn workspace_root(cwd: Option<&Path>) -> Option<PathBuf> {
+    if cwd.is_none() {
+        if let Some(env_root) = env::var_os("RUNLOOP_WORKSPACE_ROOT") {
+            let expanded = expand_tilde(PathBuf::from(env_root));
+            if expanded.is_dir() {
+                return Some(expanded);
+            }
+        }
+    }
+    walk_for_workspace_root(cwd)
+}
+
+fn walk_for_workspace_root(cwd: Option<&Path>) -> Option<PathBuf> {
+    let mut dir = cwd.map(PathBuf::from).or_else(|| env::current_dir().ok())?;
+    loop {
+        if dir.join("Cargo.toml").is_file() {
+            return Some(dir);
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    None
 }
 
 fn expand_tilde(path: PathBuf) -> PathBuf {
@@ -846,6 +894,46 @@ mod tests {
     use super::*;
     use runloop_core::Config;
     use tempfile::tempdir;
+
+    #[test]
+    fn resolve_defaults_to_workspace_agents_dir() {
+        let temp = tempdir().expect("temp");
+        fs::write(temp.path().join("Cargo.toml"), "").expect("cargo file");
+        fs::create_dir_all(temp.path().join("crates/agents-wasm")).expect("crate dir");
+
+        let config = Config::default();
+        let agent_root = resolve_agent_root_with_cwd(&None, &config, Some(temp.path()));
+        let crate_root = resolve_crate_root_with_cwd(&None, Some(temp.path()));
+        assert_eq!(agent_root, temp.path().join("agents"));
+        assert_eq!(crate_root, temp.path().join("crates/agents-wasm"));
+    }
+
+    #[test]
+    fn resolve_falls_back_to_config_dir_when_no_workspace() {
+        let temp = tempdir().expect("temp");
+        let agents_root = temp.path().join("custom-agents");
+        fs::create_dir_all(&agents_root).expect("agents root");
+
+        let mut config = Config::default();
+        config.agents.search_dirs = vec![agents_root.to_string_lossy().into_owned()];
+
+        let agent_root = resolve_agent_root_with_cwd(&None, &config, Some(temp.path()));
+        let crate_root = resolve_crate_root_with_cwd(&None, Some(temp.path()));
+        assert_eq!(agent_root, agents_root);
+        assert_eq!(crate_root, PathBuf::from("crates/agents-wasm"));
+    }
+
+    #[test]
+    fn resolve_prefers_config_dir_even_if_missing() {
+        let temp = tempdir().expect("temp");
+        let agents_root = temp.path().join("custom-agents");
+
+        let mut config = Config::default();
+        config.agents.search_dirs = vec![agents_root.to_string_lossy().into_owned()];
+
+        let agent_root = resolve_agent_root_with_cwd(&None, &config, Some(temp.path()));
+        assert_eq!(agent_root, agents_root);
+    }
 
     #[test]
     fn scaffold_creates_bundle_and_crate() {
