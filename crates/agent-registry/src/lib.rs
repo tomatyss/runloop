@@ -13,6 +13,9 @@ use serde_json::Value as JsonValue;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+pub use tools::{Budget, Observability, ToolEntry, ToolsDoc, Transport, load_tools};
+
+mod tools;
 
 #[derive(Clone, Debug)]
 pub struct AgentBinary {
@@ -240,6 +243,15 @@ impl AgentRegistry {
     }
 }
 
+/// Compute the BLAKE3 hex digest for a file (convenience helper shared with tooling).
+pub fn digest_file_hex(path: &Path) -> Result<String, AgentRegistryError> {
+    let bytes = fs::read(path).map_err(|source| AgentRegistryError::IoPath {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(hash(&bytes).to_hex().to_string())
+}
+
 /// Collect digest assertions for descriptors (used by control-plane submissions).
 pub fn digests_from(described: &[DescribedAgent]) -> Vec<AgentDigest> {
     described
@@ -351,8 +363,9 @@ struct ArtifactSpec {
 mod tests {
     use super::*;
     use runloop_core::AgentRef;
+    use std::io::Write;
     use std::path::{Path, PathBuf};
-    use tempfile::tempdir;
+    use tempfile::{NamedTempFile, tempdir};
 
     fn write_manifest(root: &Path, manifest: &str) -> PathBuf {
         let agent_dir = root.join("writer");
@@ -512,5 +525,13 @@ version = 99
         assert!(props.contains("alpha"));
         assert!(props.contains("beta"));
         assert_eq!(props.len(), 2);
+    }
+
+    #[test]
+    fn digest_file_hex_computes_hash() {
+        let mut tmp = NamedTempFile::new().expect("tmp file");
+        tmp.write_all(b"abc123").expect("write content");
+        let digest = digest_file_hex(tmp.path()).expect("digest");
+        assert_eq!(digest.len(), 64);
     }
 }

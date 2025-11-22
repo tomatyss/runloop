@@ -7,6 +7,12 @@ use thiserror::Error;
 pub enum AgentRegistryError {
     #[error("agent manifest not found for {reference}")]
     NotFound { reference: AgentRef },
+    #[error("{path}: {source}")]
+    IoPath {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("failed to read manifest {path}: {source}")]
     Io {
         path: PathBuf,
@@ -25,4 +31,9 @@ pub enum AgentRegistryError {
     Schema { reference: AgentRef, detail: String },
     #[error("artifact error for {reference}: {detail}")]
     Artifact { reference: AgentRef, detail: String },
+    #[error("tools.json error: {detail}")]
+    Tools {
+        reference: Option<AgentRef>,
+        detail: String,
+    },
 }

@@ -395,7 +395,7 @@ draft artifact.
       (side-effect-free replayer). _CLI now fetches the canonical `run.trace`
       from the KB after daemon-backed runs so traces are saved consistently in
       either mode._
-- [ ] `rlp agent scaffold` interactive wizard that walks through provider
+- [x] `rlp agent scaffold` interactive wizard that walks through provider
       selection (model broker route + secrets), capability grants (fs/net/kb),
       optional tool attachments (`tools.json`, see `docs/tool-attachments.md`),
       and emits a new `crates/agents-wasm/<name>`
