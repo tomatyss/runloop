@@ -1683,6 +1683,7 @@ mod tests {
             trace_id,
             opening_id,
             nodes: vec![node],
+            ladder: Vec::new(),
             final_hash: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".into(),
             success: true,
         }
