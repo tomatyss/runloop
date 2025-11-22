@@ -44,8 +44,8 @@ fi
 
 if maybe_skip "MARKDOWN" "RUNLOOP_PRECOMMIT_MARKDOWN" "0"; then
   if command -v npx >/dev/null 2>&1; then
-    log "Linting markdown (npx markdownlint-cli2 \".github/**/*.md\")"
-    npx markdownlint-cli2 ".github/**/*.md"
+    log "Linting markdown (npx markdownlint-cli2 \"docs/**/*.md\")"
+    npx markdownlint-cli2 "docs/**/*.md"
   else
     log "Skipping markdownlint (npx not found; install Node.js/npm or export RUNLOOP_PRECOMMIT_MARKDOWN=1)"
   fi

@@ -217,12 +217,12 @@ fn preferred_config_agent_dir(config: &Config) -> Option<PathBuf> {
 }
 
 fn workspace_root(cwd: Option<&Path>) -> Option<PathBuf> {
-    if cwd.is_none() {
-        if let Some(env_root) = env::var_os("RUNLOOP_WORKSPACE_ROOT") {
-            let expanded = expand_tilde(PathBuf::from(env_root));
-            if expanded.is_dir() {
-                return Some(expanded);
-            }
+    if cwd.is_none()
+        && let Some(env_root) = env::var_os("RUNLOOP_WORKSPACE_ROOT")
+    {
+        let expanded = expand_tilde(PathBuf::from(env_root));
+        if expanded.is_dir() {
+            return Some(expanded);
         }
     }
     walk_for_workspace_root(cwd)
