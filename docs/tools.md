@@ -9,8 +9,8 @@ Reference material for the developer tooling that ships with Runloop.
 
 ## Agent scaffold
 
-`rlp agent scaffold <name>` runs an interactive wizard (unless `--non-interactive`)
-to bootstrap a wasm agent skeleton:
+`rlp agent scaffold <name>` runs an interactive wizard (unless
+`--non-interactive`) to bootstrap a wasm agent skeleton:
 
 - Prompts for model/provider route + secret hints, capability grants
   (fs/net/kb), and optional tool attachments (`tools.json` entries).
@@ -19,10 +19,10 @@ to bootstrap a wasm agent skeleton:
   README, and `bin/.gitkeep`.
 - Drops a companion crate in `crates/agents-wasm/<name>/` with a stub `main.rs`
   that signals readiness and prints placeholder JSON.
-- Generates a starter opening YAML (under `examples/openings/`) wired to the
-  new agent with a single node and `exists(node.out)` success condition.
-- Digests are computed for `tools.json`; `entry_wasm` stays zeroed until `just
-  build-agents-wasm` rebuilds the `.wasm` and updates the manifest.
+- Generates a starter opening YAML (under `examples/openings/`) wired to the new
+  agent with a single node and `exists(node.out)` success condition.
+- Digests are computed for `tools.json`; `entry_wasm` stays zeroed until
+  `just build-agents-wasm` rebuilds the `.wasm` and updates the manifest.
 
 Flags:
 
@@ -30,8 +30,8 @@ Flags:
   `agents.search_dirs` entry from config).
 - `--crates-dir <path>` overrides the wasm crate root (defaults to
   `crates/agents-wasm`).
-- `--opening-path <path>` writes the starter opening to a custom location (defaults
-  to `examples/openings/<name>.yaml` when generated).
+- `--opening-path <path>` writes the starter opening to a custom location
+  (defaults to `examples/openings/<name>.yaml` when generated).
 - `--model`, `--cap-fs`, `--cap-net`, `--cap-kb-read`, `--cap-kb-write` seed
   wizard values or bypass prompts when `--non-interactive`.
 - `--model-secret` overrides the provider secret id in non-interactive mode.

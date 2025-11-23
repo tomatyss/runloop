@@ -504,13 +504,15 @@ cleanly.
 
 ### M1. Golden corpus
 
-- [ ] `tests/golden/compose_email/inputs.json` variants (recipient
-      known/unknown, long/short topics).
-- [ ] Expected outputs (properties, not exact strings): recipient email equals,
-      word count range, citations present.
 
-**DoD:** `cargo test -- --ignored golden` runs opening end‑to‑end (with
-`NullProvider`) and checks properties.
+
+- [x] `tests/golden/compose_email/inputs.json` variants (recipient known/unknown, long/short topics).
+
+- [x] Expected outputs (properties, not exact strings): recipient email equals, word count range, citations present.
+
+
+
+**DoD:** `cargo test --package runloop-executor-local --test golden -- --ignored` runs opening end‑to‑end (with `NullProvider`) and checks properties.
 
 ### M2. Router corpus
 
