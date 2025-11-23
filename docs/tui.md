@@ -6,7 +6,8 @@
 ## Overview
 
 `agtop` is a ratatui-based monitor that subscribes to the Runloop bus for live
-openings. It presents four panes plus a status bar:
+openings (or replays NDJSON from stdin/files). It presents four panes plus a
+status bar:
 
 1. **Log** – streaming log lines (from unified `CT_RUN_EVENT` stream).
 2. **Plan** – DAG state (node status, attempts) derived from `RunEvent` nodes in
@@ -89,7 +90,8 @@ Always-on, single line:
 - `q` – quit.
 - `?` – help overlay (lists panes, keys, topic names).
 - `/` – filter/search within the active pane (e.g., log substring, node id).
-- `.` – pause/resume live updates (locks pane for inspection).
+- `.` – pause/resume live updates (events buffer while paused and apply on
+  resume).
 - `!` – clear active pane buffer.
 - `Enter` – when a confirmation prompt is focused, approve; `Esc` rejects
   (mirrors CLI confirmation semantics).
@@ -104,7 +106,9 @@ Always-on, single line:
 - **Metrics:** `rlp/sys/metrics` (global) + `rlp/agents/<agent_id>/metrics` (per
   agent). Minimum gauges/counters (Epic J prerequisites): `agents_running`,
   `rss_total`, `bus_queue_depth`, `msgs_sent`, `msgs_dropped`, `cap_denied`,
-  `broker_calls`, `cache_hits`.
+  `broker_calls`, `cache_hits`. Status bar surfaces `agents_running` and
+  `bus_queue_depth` when present. Subscribe to per-agent metrics with
+  `--monitor-agents` until auto-discovery is added.
 - **Confirmations:** Agents emit `action.proposal`. Only publishers with kind
   `ui|tui` may send `action.decision`. For daemon-backed runs the CLI defers to
   the TUI (no inline prompt); `agtop` surfaces dialogs and publishes the
