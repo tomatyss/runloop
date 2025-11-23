@@ -355,8 +355,10 @@ Local‑first storage with:
     persisted). Make sure `runloop.json` points to a writable KB folder, that
     the model broker has at least one provider (or rely on the writer's
     heuristic fallback), and export any provider secrets to the environment so
-    the CLI secret resolver can read them. Mail send still runs as a dry-run and
-    prompts for approval unless `security.confirm_external_actions=false`.
+    the CLI secret resolver can read them (either the exact `secret_id` or its
+    upper-snake variant such as `RUNLOOP_MODELS_GEMINI`). Mail send still runs
+    as a dry-run and prompts for approval unless
+    `security.confirm_external_actions=false`.
   - Replay a recorded run with either a stored trace ID or a JSON file:
     `cargo run -p rlp -- replay trace:<trace_uuid> --opening examples/openings/compose_email.yaml`
     pulls the canonical `run.trace` payload from the KB, while passing a file

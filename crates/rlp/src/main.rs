@@ -1696,9 +1696,28 @@ fn build_executor(config: Config) -> Result<Arc<LocalExecutor>, CliError> {
 
 struct CliSecretResolver;
 
+fn normalize_secret_env_key(secret_id: &str) -> String {
+    secret_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn resolve_secret_from_env(secret_id: &str) -> Option<String> {
+    env::var(secret_id)
+        .or_else(|_| env::var(normalize_secret_env_key(secret_id)))
+        .ok()
+}
+
 impl SecretResolver for CliSecretResolver {
     fn resolve(&self, secret_id: &str) -> Option<String> {
-        env::var(secret_id).ok()
+        resolve_secret_from_env(secret_id)
     }
 }
 

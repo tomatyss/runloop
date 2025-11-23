@@ -42,7 +42,7 @@ Supported keys:
 | `kb_write` | bool or array           | `false` | Same semantics as `kb_read`; `true` is discouraged outside trusted agents.              |
 | `secrets`  | array of secret IDs     | `[]`    | IDs follow `runloop/<scope>/<name>`.                                                    |
 | `model`    | bool                    | `false` | Allows requests to model broker.                                                        |
-| `exec`     | bool                    | `false` | Command execution on host; disabled in v0.1.                                            |
+| `exec`     | bool                    | `false` | Command execution on host; off by default and should be granted sparingly.              |
 
 <!-- markdownlint-enable MD013 -->
 

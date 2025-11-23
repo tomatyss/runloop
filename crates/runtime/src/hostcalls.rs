@@ -1,3 +1,4 @@
+use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc as sync_mpsc;
@@ -613,10 +614,46 @@ fn host_exec_spawn(
     len: i32,
 ) -> Result<i32, WasmtimeError> {
     caller.data().state.ensure_exec()?;
+    const EXEC_EINVAL: i32 = -1;
+    const EXEC_ESPAWN: i32 = -2;
+    const EXEC_ESIGNAL: i32 = -3;
+
+    if len <= 0 {
+        return Ok(EXEC_EINVAL);
+    }
+
     let command = read_utf8(&mut caller, ptr, len)?;
-    // MVP: exec not implemented; simply acknowledge capability check.
-    tracing::warn!(%command, "exec hostcall invoked (stub)");
-    Ok(0)
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c").arg(&command);
+
+    let output = match cmd.output() {
+        Ok(output) => output,
+        Err(error) => {
+            tracing::warn!(%command, %error, "exec spawn failed");
+            return Ok(EXEC_ESPAWN);
+        }
+    };
+
+    if !output.stdout.is_empty() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let preview = stdout.chars().take(512).collect::<String>();
+        tracing::debug!(%command, stdout=%preview, "exec stdout");
+    }
+    if !output.stderr.is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let preview = stderr.chars().take(512).collect::<String>();
+        tracing::debug!(%command, stderr=%preview, "exec stderr");
+    }
+
+    let status = match output.status.code() {
+        Some(code) => code,
+        None => {
+            tracing::warn!(%command, "exec terminated by signal");
+            return Ok(EXEC_ESIGNAL);
+        }
+    };
+
+    Ok(status)
 }
 
 fn host_notify_ready(caller: Caller<'_, StoreData>) -> Result<(), WasmtimeError> {
@@ -784,6 +821,18 @@ mod tests {
             )
         )"#;
         Module::new(engine, wat).expect("compile model module")
+    }
+
+    fn compile_exec_module(engine: &Engine) -> Module {
+        let wat = r#"(module
+            (import "runloop" "exec_spawn" (func $exec_spawn (param i32 i32) (result i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "true")
+            (func (export "run") (result i32)
+                (call $exec_spawn (i32.const 0) (i32.const 4))
+            )
+        )"#;
+        Module::new(engine, wat).expect("compile exec module")
     }
 
     fn snapshot_region(instance: &Instance, store: &mut Store<StoreData>, start: usize) -> Vec<u8> {
@@ -993,5 +1042,104 @@ mod tests {
             .call(&mut store, stream_bytes.len() as i32)
             .expect("model call stream");
         assert_eq!(code, MODEL_ESTREAM);
+    }
+
+    #[test]
+    fn exec_spawn_runs_command_with_exec_cap() {
+        let engine = Engine::default();
+        let module = compile_exec_module(&engine);
+
+        let mut linker: Linker<StoreData> = Linker::new(&engine);
+        p1::add_to_linker_sync(&mut linker, |data: &mut StoreData| &mut data.wasi)
+            .expect("link wasi");
+        add_to_linker(&mut linker).expect("link hostcalls");
+
+        let wasi = wasmtime_wasi::WasiCtxBuilder::new().arg("exec").build_p1();
+        let mailbox = AgentMailbox::new(mpsc::channel(1).1);
+        let kb = Arc::new(KnowledgeBase::new());
+        let broker = Arc::new(Broker::default());
+        let secrets = Arc::new(SecretStore::new());
+        let audit = AuditSink::new(16);
+        let mut caps = Caps::deny_all();
+        caps.exec = true;
+        let host_state = Arc::new(HostState::new(
+            caps,
+            audit,
+            kb,
+            broker,
+            secrets,
+            Arc::new(HostcallStats::new()),
+            AgentId::new(),
+            "exec".to_string(),
+            None,
+            ReadyEmitter::noop(),
+            AuditPolicy::default(),
+        ));
+
+        let store_data = StoreData {
+            wasi,
+            state: host_state,
+            mailbox: Arc::new(mailbox),
+        };
+
+        let mut store = Store::new(&engine, store_data);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate exec module");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("export run");
+
+        let code = run.call(&mut store, ()).expect("exec call should succeed");
+        assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn exec_spawn_denied_without_cap() {
+        let engine = Engine::default();
+        let module = compile_exec_module(&engine);
+
+        let mut linker: Linker<StoreData> = Linker::new(&engine);
+        p1::add_to_linker_sync(&mut linker, |data: &mut StoreData| &mut data.wasi)
+            .expect("link wasi");
+        add_to_linker(&mut linker).expect("link hostcalls");
+
+        let wasi = wasmtime_wasi::WasiCtxBuilder::new().arg("exec").build_p1();
+        let mailbox = AgentMailbox::new(mpsc::channel(1).1);
+        let kb = Arc::new(KnowledgeBase::new());
+        let broker = Arc::new(Broker::default());
+        let secrets = Arc::new(SecretStore::new());
+        let audit = AuditSink::new(16);
+        let caps = Caps::deny_all();
+        let host_state = Arc::new(HostState::new(
+            caps,
+            audit,
+            kb,
+            broker,
+            secrets,
+            Arc::new(HostcallStats::new()),
+            AgentId::new(),
+            "exec-deny".to_string(),
+            None,
+            ReadyEmitter::noop(),
+            AuditPolicy::default(),
+        ));
+
+        let store_data = StoreData {
+            wasi,
+            state: host_state,
+            mailbox: Arc::new(mailbox),
+        };
+
+        let mut store = Store::new(&engine, store_data);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate exec module");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("export run");
+
+        let err = run.call(&mut store, ());
+        assert!(err.is_err(), "call should be denied without exec cap");
     }
 }
