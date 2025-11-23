@@ -406,15 +406,20 @@ draft artifact.
 
 ### I2. TUI monitor (`agtop`)
 
-- [ ] Status bar (mode, opening name + trace, active pane, token/health summary,
+- [x] Status bar (mode, opening name + trace, active pane, token/health summary,
       confirm badge).
-- [ ] Panes: **Log** (streaming), **Plan** (DAG with node statuses), **agtop**
-      (per-agent cpu/mem/tokens), **Trace** (ladder text). Navigation keys:
-      `Tab`, `Shift+Tab`, `q`, `?`, `/`, `.`, `!`.
-- [ ] Subscribes to `rlp/runs/<trace_id>/events` (unified stream) plus
-      `rlp/sys/metrics` + `rlp/agents/<agent>/metrics`.
-- [ ] Toggle confirm dialogs for external actions via bus (`action.proposal` →
-      `action.decision`).
+- [x] Panes: **Log** (streaming), **Plan** (table with node statuses + dep
+      counts), **agtop** (system + per-agent metrics), **Trace** (ladder text).
+      Navigation keys: `Tab`, `Shift+Tab`, `q`, `?`, `/`, `.`, `!`.
+- [x] Subscribes to `rlp/runs/<trace_id>/events` (unified stream) plus
+      `rlp/sys/metrics`; per-agent metrics via `rlp/agents/<agent>/metrics`
+      when provided with `--monitor-agents` (auto-discovery TBD).
+- [x] Toggle confirm dialogs for external actions via bus (`action.proposal` →
+      `action.decision`). Decisions publish `CT_ACTION_DECISION` with proposal
+      correlation.
+
+> Follow-ups: auto-discover agent metrics; richer DAG/edge rendering beyond the
+current table; surface tokens/costs once metrics payload includes them.
 
 **DoD:** While running the opening, panes update live; switching panes does not
 freeze updates.
