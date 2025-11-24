@@ -385,6 +385,12 @@ impl Runtime {
             None => spec.identity.name().to_string(),
         };
 
+        // Pre-register declared secret identifiers with the active provider so
+        // hostcall resolution can succeed without leaking values.
+        for secret_id in &spec.caps.secrets {
+            self.inner.secrets.allow(secret_id);
+        }
+
         let host_state = Arc::new(HostState::new(
             spec.caps.clone(),
             self.inner.audit.clone(),

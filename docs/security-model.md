@@ -31,12 +31,14 @@
 
 - Secret material never lives in the POG; only opaque `secret_id` references are
   stored.
-- Default backend selection order (`security.secrets_backend = "auto"`):
-  1. Freedesktop **Secret Service** (libsecret/KWallet)
-  2. `pass` (GPG-backed password store)
-  3. Encrypted **age vault** at `~/.runloop/secrets/`
-- CLI (`rlp secrets put/get/list/delete`) uses the same namespace:
-  `runloop/<scope>/<name>`.
+- Default provider today is `security.secrets.provider = "stub"` (in-memory,
+  test-only). Other providers are being implemented; an **env** provider exists
+  for development and returns the raw environment value to agents—treat it as a
+  convenience only, not a hardened backend.
+- Planned `auto` backend will probe Secret Service → `pass` → age vault
+  (`~/.runloop/secrets/`); not yet shipped.
+- CLI (`rlp secrets put/get/list/delete`) is planned; until then, provision
+  secrets through the chosen backend directly.
 - Overrides may only **reference** existing secret IDs; agents cannot read
   arbitrary secrets without explicit capability grants.
 

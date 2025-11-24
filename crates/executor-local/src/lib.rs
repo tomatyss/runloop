@@ -27,7 +27,10 @@ use runloop_openings::{
     Executor, Node, NodeExecution, NodeExecutionRequest, NodeInputs, NodeKind, NodeOutputs,
     RunnerError,
 };
-use runloop_runtime::{AgentIdentity, AgentSpec, AuditPolicy, Runtime, RuntimeBuilder};
+use runloop_runtime::{
+    AgentIdentity, AgentSpec, AuditPolicy, EnvSecretProvider, Runtime, RuntimeBuilder,
+    SecretProvider, SecretStore,
+};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
@@ -48,10 +51,33 @@ pub enum ExecutorInitError {
     Runtime(#[from] runloop_runtime::Error),
 }
 
+fn select_secret_provider(config: &Config) -> Arc<dyn SecretProvider> {
+    match config.security.secrets.provider.as_str() {
+        "env" => Arc::new(EnvSecretProvider),
+        // "stub" or unknown providers fall back to in-memory stub for now.
+        _ => Arc::new(SecretStore::new()),
+    }
+}
+
+struct ProviderResolver {
+    provider: Arc<dyn SecretProvider>,
+}
+
+impl ProviderResolver {
+    fn new(provider: Arc<dyn SecretProvider>) -> Self {
+        Self { provider }
+    }
+}
+
+impl SecretResolver for ProviderResolver {
+    fn resolve(&self, secret_id: &str) -> Option<String> {
+        self.provider.resolve(secret_id)
+    }
+}
+
 pub fn build_executor(
     config: Config,
     confirmation: Arc<dyn ConfirmationProvider>,
-    secret_resolver: Arc<dyn SecretResolver>,
     registry: Arc<AgentRegistry>,
 ) -> Result<Arc<LocalExecutor>, ExecutorInitError> {
     let kb = KnowledgeBase::open(&config.kb)?;
@@ -59,6 +85,8 @@ pub fn build_executor(
     catch_up_views(&kb)?;
     seed_contact(&kb)?;
 
+    let secrets = select_secret_provider(&config);
+    let secret_resolver: Arc<dyn SecretResolver> = Arc::new(ProviderResolver::new(secrets.clone()));
     let broker = Arc::new(Broker::new(config.models.broker.clone(), secret_resolver)?);
     let audit_policy = AuditPolicy::new(
         config.security.caps.audit_on_allow,
@@ -67,6 +95,7 @@ pub fn build_executor(
     let runtime = RuntimeBuilder::new()
         .knowledge_base(Arc::new(kb.clone()))
         .model_broker(broker.clone())
+        .secrets(secrets)
         .audit_policy(audit_policy)
         .build()?;
 

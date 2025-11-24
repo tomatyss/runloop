@@ -14,12 +14,10 @@ use runloop_core::{
 };
 use runloop_executor_local::{ExecutorInitError, LocalExecutor, build_executor};
 use runloop_kb::{KnowledgeBase, Materializer, NodeFinishedRecord, TraceStore};
-use runloop_model_broker::SecretResolver;
 use runloop_openings::{LadderHop, NodeState, RunEvent, RunTrace, Runner, parse_opening_str};
 use runloop_rmp::{Header, decode_payload, encode_payload};
 use runloop_runtime::AgentMetricSample;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 #[cfg(test)]
@@ -62,9 +60,8 @@ async fn main() -> Result<(), Error> {
     let confirmation = Arc::new(DaemonConfirmationProvider::new(
         config.security.confirm_external_actions,
     ));
-    let secrets: Arc<dyn SecretResolver> = Arc::new(DaemonSecretResolver);
-    let local_executor = build_executor(config.clone(), confirmation, secrets, registry.clone())
-        .map_err(|e| match e {
+    let local_executor =
+        build_executor(config.clone(), confirmation, registry.clone()).map_err(|e| match e {
             ExecutorInitError::Config(err) => err,
             other => Error::Runtime(other.to_string()),
         })?;
@@ -1344,33 +1341,6 @@ pub(crate) fn next_msg_id() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
-struct DaemonSecretResolver;
-
-fn normalize_secret_env_key(secret_id: &str) -> String {
-    secret_id
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                ch.to_ascii_uppercase()
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
-fn resolve_secret_from_env(secret_id: &str) -> Option<String> {
-    env::var(secret_id)
-        .or_else(|_| env::var(normalize_secret_env_key(secret_id)))
-        .ok()
-}
-
-impl SecretResolver for DaemonSecretResolver {
-    fn resolve(&self, secret_id: &str) -> Option<String> {
-        resolve_secret_from_env(secret_id)
-    }
-}
-
 struct DaemonConfirmationProvider {
     require: bool,
 }
@@ -1489,10 +1459,8 @@ edges:
         let confirmation = Arc::new(DaemonConfirmationProvider::new(
             config.security.confirm_external_actions,
         ));
-        let secrets: Arc<dyn SecretResolver> = Arc::new(DaemonSecretResolver);
         let local_executor =
-            build_executor(config.clone(), confirmation, secrets, registry.clone())
-                .expect("build executor");
+            build_executor(config.clone(), confirmation, registry.clone()).expect("build executor");
         let dispatcher = Arc::new(AgentDispatcher::new(bus.clone(), local_executor));
         let (ready_tx, ready_rx) = oneshot::channel();
         let (ctrl_shutdown_tx, ctrl_shutdown_rx) = oneshot::channel();
