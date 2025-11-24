@@ -320,6 +320,13 @@ See `docs/security-model.md` for secret-store details. Ops tasks:
   `trace_id`, `opening_id`, `agent_id`.
 - Tracing & metrics via OpenTelemetry OTLP. Configure endpoint, protocol, and
   sampling under `observability` in config.
+- Bus/TUI metrics snapshots: `observability.metrics_interval_ms` (default 1000,
+  allowed 100–60000) controls how often `runloopd` publishes
+  `CT_METRICS_SNAPSHOT` frames to `rlp/sys/metrics` and
+  `rlp/agents/<agent_id>/metrics` (TTL = 2× interval, minimum interval+250 ms).
+  System frames include queue depth/capacity, drop counters, and broker/hostcall
+  totals; agent frames include RSS/CPU and mailbox depth, with a final zeroed
+  snapshot on teardown.
 - Model broker exports `runloop_broker_calls_total`,
   `runloop_broker_cache_hits_total`, and `runloop_broker_errors_total{kind=*}`
   counters for dashboards.

@@ -14,6 +14,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tokio::time;
@@ -171,11 +172,23 @@ pub struct Broker {
     inner: Arc<BrokerInner>,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BrokerStats {
+    pub calls: u64,
+    pub cache_hits: u64,
+    pub tokens_prompt: u64,
+    pub tokens_completion: u64,
+}
+
 struct BrokerInner {
     providers: HashMap<String, Arc<dyn Provider>>,
     routes: Vec<RouteRule>,
     cache: Option<Arc<BrokerCache>>,
     budgets: BudgetLimits,
+    calls: AtomicU64,
+    cache_hits: AtomicU64,
+    tokens_prompt: AtomicU64,
+    tokens_completion: AtomicU64,
 }
 
 struct BrokerCache {
@@ -284,8 +297,21 @@ impl Broker {
                 routes,
                 cache,
                 budgets: config.budgets.into(),
+                calls: AtomicU64::new(0),
+                cache_hits: AtomicU64::new(0),
+                tokens_prompt: AtomicU64::new(0),
+                tokens_completion: AtomicU64::new(0),
             }),
         })
+    }
+
+    pub fn stats(&self) -> BrokerStats {
+        BrokerStats {
+            calls: self.inner.calls.load(Ordering::Relaxed),
+            cache_hits: self.inner.cache_hits.load(Ordering::Relaxed),
+            tokens_prompt: self.inner.tokens_prompt.load(Ordering::Relaxed),
+            tokens_completion: self.inner.tokens_completion.load(Ordering::Relaxed),
+        }
     }
 
     /// Execute a model completion request asynchronously.
@@ -326,6 +352,7 @@ impl Broker {
         };
 
         metrics::counter!(METRIC_CALLS, "provider" => provider.id().to_owned()).increment(1);
+        self.inner.calls.fetch_add(1, Ordering::Relaxed);
 
         let provider_model_hint = route
             .target_model
@@ -344,6 +371,7 @@ impl Broker {
         {
             metrics::counter!(METRIC_CACHE_HITS, "provider" => provider.id().to_owned())
                 .increment(1);
+            self.inner.cache_hits.fetch_add(1, Ordering::Relaxed);
             let mut output = hit;
             let (tokens_in, tokens_out, total_tokens) =
                 usage_profile(&output, &request.prompt, request.role_system.as_deref());
@@ -353,6 +381,7 @@ impl Broker {
             }
             output.tokens_in = tokens_in;
             output.tokens_out = tokens_out;
+            record_usage(&self.inner, tokens_in, tokens_out);
             return Ok(output);
         }
 
@@ -423,6 +452,7 @@ impl Broker {
         }
         output.tokens_in = tokens_in;
         output.tokens_out = tokens_out;
+        record_usage(&self.inner, tokens_in, tokens_out);
 
         if let (Some(ttl), Some(cache)) = (cache_ttl, inner.cache.as_ref()) {
             store_cache(cache, cache_key, &output, ttl).await;
@@ -564,6 +594,19 @@ fn usage_profile(
         .unwrap_or(0)
         .saturating_add(tokens_out.unwrap_or(0));
     (tokens_in, tokens_out, total)
+}
+
+fn record_usage(inner: &Arc<BrokerInner>, tokens_in: Option<u32>, tokens_out: Option<u32>) {
+    if let Some(t_in) = tokens_in {
+        inner
+            .tokens_prompt
+            .fetch_add(t_in as u64, Ordering::Relaxed);
+    }
+    if let Some(t_out) = tokens_out {
+        inner
+            .tokens_completion
+            .fetch_add(t_out as u64, Ordering::Relaxed);
+    }
 }
 
 fn saturating_duration_millis(duration: Duration) -> u32 {
