@@ -1,7 +1,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc as std_mpsc};
 use std::task::{Context, Poll};
 use std::thread;
@@ -73,6 +73,7 @@ impl Default for AuditPolicy {
 }
 
 /// Runtime embedding for agent Wasm modules.
+#[derive(Clone)]
 pub struct Runtime {
     inner: Arc<RuntimeInner>,
 }
@@ -157,8 +158,23 @@ struct AgentProcess {
     tid: AtomicU32,
     join: Mutex<Option<thread::JoinHandle<Result<(), Error>>>>,
     inbox: mpsc::Sender<AgentEnvelope>,
+    inbox_capacity: usize,
+    msgs_recv_total: AtomicU64,
     bus_task: Mutex<Option<TokioJoinHandle<()>>>,
     _host_state: Arc<HostState>,
+}
+
+impl AgentProcess {
+    fn record_inbound(&self) {
+        self.msgs_recv_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn mailbox_depth(&self) -> (u64, u64) {
+        let cap = self.inbox_capacity as u64;
+        let remaining = self.inbox.capacity() as u64;
+        let depth = cap.saturating_sub(remaining);
+        (depth, cap)
+    }
 }
 
 enum StartupSignal {
@@ -362,6 +378,7 @@ impl Runtime {
         let stdout_buffer = Arc::new(RwLock::new(Vec::new()));
         let stderr_buffer = Arc::new(RwLock::new(Vec::new()));
         let (inbox_tx, inbox_rx) = mpsc::channel::<AgentEnvelope>(32);
+        let inbox_capacity = inbox_tx.max_capacity();
         let mailbox = Arc::new(AgentMailbox::new(inbox_rx));
         let identity_label = match spec.identity.variant() {
             Some(var) => format!("{}:{var}", spec.identity.name()),
@@ -396,6 +413,8 @@ impl Runtime {
             tid: AtomicU32::new(0),
             join: Mutex::new(None),
             inbox: inbox_tx.clone(),
+            inbox_capacity,
+            msgs_recv_total: AtomicU64::new(0),
             bus_task: Mutex::new(None),
             _host_state: host_state.clone(),
         });
@@ -572,6 +591,7 @@ impl Runtime {
         {
             let topic = Bus::direct_topic(&id);
             let sender = process.inbox.clone();
+            let process_for_bus = process.clone();
             let subscribe_bus = bus.clone();
             let (bus_ready_tx, bus_ready_rx_inner) = std_mpsc::channel();
             let ready_handle_for_bus = ready_handle.clone();
@@ -585,6 +605,7 @@ impl Runtime {
                             if sender.send(envelope).await.is_err() {
                                 break;
                             }
+                            process_for_bus.record_inbound();
                         }
                     }
                     Err(err) => {
@@ -690,7 +711,9 @@ impl Runtime {
         entry
             .inbox
             .try_send(AgentEnvelope::new(header, body.to_vec()))
-            .map_err(|err| Error::SpawnFailed(format!("mailbox full: {err}")))
+            .map_err(|err| Error::SpawnFailed(format!("mailbox full: {err}")))?;
+        entry.record_inbound();
+        Ok(())
     }
 
     pub fn stats(&self, agent_id: AgentId) -> Result<AgentStats, Error> {
@@ -721,6 +744,31 @@ impl Runtime {
         } else {
             None
         }
+    }
+
+    pub fn agents_running(&self) -> usize {
+        self.inner.agents.len()
+    }
+
+    pub fn agent_metrics(&self) -> Vec<AgentMetricSample> {
+        self.inner
+            .agents
+            .iter()
+            .map(|entry| {
+                let tid = entry.tid.load(Ordering::SeqCst);
+                let tid_opt = if tid == 0 { None } else { Some(tid) };
+                let stats = read_stats(tid_opt).ok();
+                let (mailbox_depth, mailbox_capacity) = entry.mailbox_depth();
+                AgentMetricSample {
+                    agent_id: *entry.key(),
+                    rss_bytes: stats.as_ref().and_then(|s| s.rss_bytes),
+                    cpu_total_ms: stats.as_ref().and_then(|s| s.cpu_total_ms),
+                    mailbox_depth,
+                    mailbox_capacity,
+                    msgs_recv_total: entry.msgs_recv_total.load(Ordering::Relaxed),
+                }
+            })
+            .collect()
     }
 }
 
@@ -761,6 +809,17 @@ impl AgentHandle {
         let tid = if tid == 0 { None } else { Some(tid) };
         read_stats(tid)
     }
+}
+
+/// Snapshot of lightweight agent metrics for observability.
+#[derive(Debug, Clone)]
+pub struct AgentMetricSample {
+    pub agent_id: AgentId,
+    pub rss_bytes: Option<u64>,
+    pub cpu_total_ms: Option<u64>,
+    pub mailbox_depth: u64,
+    pub mailbox_capacity: u64,
+    pub msgs_recv_total: u64,
 }
 
 /// Output stream adapter that mirrors guest writes into the ring buffer and backing store.

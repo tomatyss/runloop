@@ -199,6 +199,14 @@ impl Config {
                 "router denylist empty while confirmations required; consider keeping protective entries"
             );
         }
+        if self.observability.metrics_interval_ms < 100
+            || self.observability.metrics_interval_ms > 60_000
+        {
+            return Err(Error::Config(format!(
+                "observability.metrics_interval_ms must be between 100 and 60000 (found {})",
+                self.observability.metrics_interval_ms
+            )));
+        }
         warn_missing_search_dirs("openings.search_dirs", &self.openings.search_dirs);
         warn_missing_search_dirs("agents.search_dirs", &self.agents.search_dirs);
         Ok(())
@@ -673,10 +681,21 @@ impl Default for LoggingConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ObservabilityConfig {
     #[serde(default)]
     pub traces: TracesConfig,
+    #[serde(default = "default_metrics_interval_ms")]
+    pub metrics_interval_ms: u32,
+}
+
+impl Default for ObservabilityConfig {
+    fn default() -> Self {
+        Self {
+            traces: TracesConfig::default(),
+            metrics_interval_ms: default_metrics_interval_ms(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -697,6 +716,10 @@ impl Default for TracesConfig {
             sampling: default_trace_sampling(),
         }
     }
+}
+
+fn default_metrics_interval_ms() -> u32 {
+    1_000
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -1212,7 +1235,7 @@ fn known_keys_for_path(path: &Path) -> BTreeSet<&'static str> {
             "fts",
             "redaction",
         ]),
-        "observability" => BTreeSet::from(["traces"]),
+        "observability" => BTreeSet::from(["traces", "metrics_interval_ms"]),
         "observability/traces" => BTreeSet::from(["enabled", "otlp_endpoint", "sampling"]),
         "kb/redaction" => BTreeSet::from([
             "mask_email",
@@ -1275,6 +1298,22 @@ mod tests {
     fn defaults_validate() {
         let config = Config::default();
         config.validate().expect("default config should validate");
+    }
+
+    #[test]
+    fn metrics_interval_bounds() {
+        let mut config = Config::default();
+        config.observability.metrics_interval_ms = 99;
+        assert!(config.validate().is_err(), "should reject too-low interval");
+        config.observability.metrics_interval_ms = 100;
+        config.validate().expect("100ms should pass");
+        config.observability.metrics_interval_ms = 60_000;
+        config.validate().expect("60s should pass");
+        config.observability.metrics_interval_ms = 60_001;
+        assert!(
+            config.validate().is_err(),
+            "should reject too-high interval"
+        );
     }
 
     #[test]

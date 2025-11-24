@@ -262,7 +262,14 @@ impl BusServerHandle {
 
     /// Retrieve a snapshot of bus metrics.
     pub fn stats(&self) -> BusStats {
-        self.inner.metrics.snapshot()
+        self.inner.snapshot_stats()
+    }
+
+    /// Cloneable, stats-only handle for background pollers.
+    pub fn stats_handle(&self) -> BusStatsHandle {
+        BusStatsHandle {
+            inner: self.inner.clone(),
+        }
     }
 
     /// Configure which publisher kinds may emit `action.decision` messages.
@@ -288,6 +295,18 @@ impl BusServerHandle {
 impl Drop for BusServerHandle {
     fn drop(&mut self) {
         self.close();
+    }
+}
+
+/// Cloneable stats-only handle to avoid moving the server into tasks.
+#[derive(Clone)]
+pub struct BusStatsHandle {
+    inner: Arc<Server>,
+}
+
+impl BusStatsHandle {
+    pub fn stats(&self) -> BusStats {
+        self.inner.snapshot_stats()
     }
 }
 
@@ -371,6 +390,27 @@ impl Server {
         };
         drop(states);
         true
+    }
+
+    fn snapshot_stats(&self) -> BusStats {
+        let mut depth_max = 0usize;
+        let mut capacity_max = 0usize;
+        {
+            let topics = self.topics.read();
+            for state in topics.values() {
+                for subscriber in &state.subscribers {
+                    let cap = subscriber.tx.max_capacity();
+                    let remaining = subscriber.tx.capacity();
+                    let backlog = cap.saturating_sub(remaining);
+                    depth_max = depth_max.max(backlog);
+                    capacity_max = capacity_max.max(cap);
+                }
+            }
+        }
+        let mut stats = self.metrics.snapshot();
+        stats.queue_depth_max = depth_max as u64;
+        stats.queue_capacity_max = capacity_max as u64;
+        stats
     }
 
     async fn publish(
@@ -736,6 +776,8 @@ impl Metrics {
             drops_ttl: self.drops_ttl.load(Ordering::Relaxed),
             drops_duplicate: self.drops_duplicate.load(Ordering::Relaxed),
             drops_backpressure: self.drops_backpressure.load(Ordering::Relaxed),
+            queue_depth_max: 0,
+            queue_capacity_max: 0,
         }
     }
 
@@ -774,6 +816,8 @@ pub struct BusStats {
     pub drops_ttl: u64,
     pub drops_duplicate: u64,
     pub drops_backpressure: u64,
+    pub queue_depth_max: u64,
+    pub queue_capacity_max: u64,
 }
 
 /// Drop notification payload sent on `DROP_TOPIC`.

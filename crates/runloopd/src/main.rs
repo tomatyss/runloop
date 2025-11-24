@@ -6,18 +6,19 @@ use executor_bus::{AgentDispatcher, BusExecutor};
 use futures_util::StreamExt;
 use runloop_agent_registry::AgentRegistry;
 use runloop_agents_common::{ActionDecision, ActionProposal, AgentResult, ConfirmationProvider};
-use runloop_bus::{Bus, BusServerHandle, Message, PublisherKind};
-use runloop_core::content::{CT_CTRL_REQ, CT_CTRL_RESP, CT_RUN_EVENT};
-use runloop_core::{AgentDigest, AgentRef, Config, Error, OpeningId, TraceId};
+use runloop_bus::{Bus, BusServerHandle, BusStatsHandle, Message, PublisherKind};
+use runloop_core::content::{CT_CTRL_REQ, CT_CTRL_RESP, CT_METRICS_SNAPSHOT, CT_RUN_EVENT};
+use runloop_core::{AgentDigest, AgentId, AgentRef, Config, Error, OpeningId, TraceId};
 use runloop_core::{
     ControlRequest, ControlResponse, DescribeAgentsRequest, RunAccepted, RunSubmitRequest,
 };
-use runloop_executor_local::{ExecutorInitError, build_executor};
+use runloop_executor_local::{ExecutorInitError, LocalExecutor, build_executor};
 use runloop_kb::{KnowledgeBase, Materializer, NodeFinishedRecord, TraceStore};
 use runloop_model_broker::SecretResolver;
 use runloop_openings::{LadderHop, NodeState, RunEvent, RunTrace, Runner, parse_opening_str};
 use runloop_rmp::{Header, decode_payload, encode_payload};
-use std::collections::{BTreeMap, HashMap};
+use runloop_runtime::AgentMetricSample;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -73,7 +74,17 @@ async fn main() -> Result<(), Error> {
         .await
         .map_err(|e| Error::Bus(e.to_string()))?;
 
-    let dispatcher = Arc::new(AgentDispatcher::new(bus.clone(), local_executor));
+    let metrics_interval_ms = config.observability.metrics_interval_ms as u64;
+    let bus_stats = bus_server.stats_handle();
+    let dispatcher = Arc::new(AgentDispatcher::new(bus.clone(), local_executor.clone()));
+    let (metrics_shutdown_tx, metrics_shutdown_rx) = oneshot::channel();
+    let metrics_task = spawn_metrics_task(
+        bus.clone(),
+        bus_stats,
+        local_executor.clone(),
+        metrics_interval_ms,
+        metrics_shutdown_rx,
+    );
 
     // Spawn control-plane loop
     let (ctrl_shutdown_tx, ctrl_shutdown_rx) = oneshot::channel();
@@ -94,6 +105,7 @@ async fn main() -> Result<(), Error> {
     tracing::info!("shutdown signal received; stopping services");
     let _ = shutdown_tx.send(());
     let _ = ctrl_shutdown_tx.send(());
+    let _ = metrics_shutdown_tx.send(());
     if let Err(err) = mat_worker.await {
         tracing::warn!("materializer task ended unexpectedly: {err}");
     }
@@ -106,6 +118,9 @@ async fn main() -> Result<(), Error> {
         Err(join_err) => {
             tracing::warn!("control plane task join error: {join_err}");
         }
+    }
+    if let Err(err) = metrics_task.await {
+        tracing::warn!(?err, "metrics task ended unexpectedly");
     }
     dispatcher.shutdown().await;
     drop(bus);
@@ -192,6 +207,258 @@ async fn start_bus(socket_path: &Path, config: &Config) -> Result<BusServerHandl
     handle.configure_action_decision_acl(allowed.clone());
     log_action_decision_acl(socket_path, &allowed);
     Ok(handle)
+}
+
+fn spawn_metrics_task(
+    bus: Bus,
+    bus_stats: BusStatsHandle,
+    executor: Arc<LocalExecutor>,
+    interval_ms: u64,
+    mut shutdown: oneshot::Receiver<()>,
+) -> tokio::task::JoinHandle<()> {
+    let ttl_ms = std::cmp::max(interval_ms * 2, interval_ms + 250);
+    let executor_id = std::env::var("HOSTNAME").unwrap_or_else(|_| "runloopd".into());
+    let node_id = "host".to_string();
+    tokio::spawn(async move {
+        let runtime = executor.runtime();
+        let broker = executor.broker();
+        let hostcall_stats = runtime.hostcall_stats();
+        let mut prev_agents: HashMap<AgentId, AgentMetricSample> = HashMap::new();
+        let mut ticker = tokio::time::interval(Duration::from_millis(interval_ms));
+        loop {
+            tokio::select! {
+                _ = ticker.tick() => {
+                    let ts_ms = current_millis();
+                    let bus_snapshot = bus_stats.stats();
+                    let broker_stats = broker.stats();
+                    let agent_samples = runtime.agent_metrics();
+                    let agents_running = agent_samples.len() as u64;
+                    let rss_total: u64 = agent_samples
+                        .iter()
+                        .filter_map(|s| s.rss_bytes)
+                        .sum();
+                    let drops_total = bus_snapshot
+                        .drops_ttl
+                        .saturating_add(bus_snapshot.drops_duplicate)
+                        .saturating_add(bus_snapshot.drops_backpressure);
+
+                    let mut gauges = serde_json::Map::new();
+                    gauges.insert("agents_running".into(), serde_json::json!(agents_running));
+                    gauges.insert(
+                        "bus_queue_depth_max".into(),
+                        serde_json::json!(bus_snapshot.queue_depth_max),
+                    );
+                    gauges.insert(
+                        "bus_queue_capacity_max".into(),
+                        serde_json::json!(bus_snapshot.queue_capacity_max),
+                    );
+                    gauges.insert("rss_total_bytes".into(), serde_json::json!(rss_total));
+
+                    let mut counters = serde_json::Map::new();
+                    counters.insert(
+                        "msgs_sent_total".into(),
+                        serde_json::json!(bus_snapshot.published),
+                    );
+                    counters.insert(
+                        "msgs_recv_total".into(),
+                        serde_json::json!(bus_snapshot.delivered),
+                    );
+                    counters.insert("msgs_dropped_total".into(), serde_json::json!(drops_total));
+                    counters.insert(
+                        "cap_denied_total".into(),
+                        serde_json::json!(hostcall_stats.denied()),
+                    );
+                    counters.insert(
+                        "broker_calls_total".into(),
+                        serde_json::json!(broker_stats.calls),
+                    );
+                    counters.insert(
+                        "cache_hits_total".into(),
+                        serde_json::json!(broker_stats.cache_hits),
+                    );
+                    counters.insert(
+                        "tokens_prompt_total".into(),
+                        serde_json::json!(broker_stats.tokens_prompt),
+                    );
+                    counters.insert(
+                        "tokens_completion_total".into(),
+                        serde_json::json!(broker_stats.tokens_completion),
+                    );
+
+                    let system_payload = serde_json::json!({
+                        "v": 1,
+                        "scope": "system",
+                        "ts_ms": ts_ms,
+                        "interval_ms": interval_ms,
+                        "labels": {
+                            "executor_id": executor_id,
+                            "node_id": node_id,
+                        },
+                        "gauges": gauges,
+                        "counters": counters,
+                    });
+
+                    if let Err(err) = publish_metrics(&bus, "rlp/sys/metrics", system_payload, ttl_ms).await
+                    {
+                        tracing::warn!(?err, "failed to publish system metrics");
+                    }
+
+                    let current_ids: HashSet<AgentId> = agent_samples.iter().map(|s| s.agent_id).collect();
+
+                    for sample in &agent_samples {
+                        if let Err(err) = publish_agent_metrics(
+                            &bus,
+                            sample,
+                            &executor_id,
+                            &node_id,
+                            ts_ms,
+                            interval_ms,
+                            ttl_ms,
+                        )
+                        .await
+                        {
+                            tracing::warn!(agent=?sample.agent_id, ?err, "failed to publish agent metrics");
+                        }
+                    }
+
+                    for (agent_id, last) in prev_agents.iter() {
+                        if !current_ids.contains(agent_id)
+                            && let Err(err) = publish_final_agent_metrics(
+                                &bus,
+                                last,
+                                &executor_id,
+                                &node_id,
+                                ts_ms,
+                                interval_ms,
+                                ttl_ms,
+                            )
+                            .await
+                        {
+                            tracing::warn!(agent=?agent_id, ?err, "failed to publish final agent metrics");
+                        }
+                    }
+
+                    prev_agents = agent_samples.into_iter().map(|s| (s.agent_id, s)).collect();
+                }
+                _ = &mut shutdown => {
+                    tracing::info!("metrics task stopping");
+                    break;
+                }
+            }
+        }
+    })
+}
+
+async fn publish_metrics(
+    bus: &Bus,
+    topic: &str,
+    payload: serde_json::Value,
+    ttl_ms: u64,
+) -> Result<(), runloop_bus::BusError> {
+    let body = encode_payload(CT_METRICS_SNAPSHOT, &payload, None)
+        .map(Bytes::from)
+        .map_err(|err| runloop_bus::BusError::BodyTypeMismatch {
+            expected: CT_METRICS_SNAPSHOT,
+            actual: err.to_string(),
+        })?;
+    let header = Header {
+        schema_id: CT_METRICS_SNAPSHOT,
+        created_at_ms: current_millis(),
+        ttl_ms,
+        msg_id: next_msg_id(),
+        ..Header::default()
+    };
+    let message = Message::new(header, body)?;
+    bus.publish(topic, message).await
+}
+
+async fn publish_agent_metrics(
+    bus: &Bus,
+    sample: &AgentMetricSample,
+    executor_id: &str,
+    node_id: &str,
+    ts_ms: u64,
+    interval_ms: u64,
+    ttl_ms: u64,
+) -> Result<(), runloop_bus::BusError> {
+    let mut gauges = serde_json::Map::new();
+    gauges.insert(
+        "mailbox_depth".into(),
+        serde_json::json!(sample.mailbox_depth),
+    );
+    gauges.insert(
+        "mailbox_capacity".into(),
+        serde_json::json!(sample.mailbox_capacity),
+    );
+    if let Some(rss) = sample.rss_bytes {
+        gauges.insert("rss_bytes".into(), serde_json::json!(rss));
+    }
+    if let Some(cpu) = sample.cpu_total_ms {
+        gauges.insert("cpu_total_ms".into(), serde_json::json!(cpu));
+    }
+
+    let mut counters = serde_json::Map::new();
+    counters.insert(
+        "msgs_recv_total".into(),
+        serde_json::json!(sample.msgs_recv_total),
+    );
+    counters.insert("msgs_sent_total".into(), serde_json::json!(0));
+    counters.insert("msgs_dropped_total".into(), serde_json::json!(0));
+
+    let payload = serde_json::json!({
+        "v": 1,
+        "scope": "agent",
+        "ts_ms": ts_ms,
+        "interval_ms": interval_ms,
+        "labels": {
+            "executor_id": executor_id,
+            "node_id": node_id,
+            "agent_id": sample.agent_id.to_string(),
+        },
+        "gauges": gauges,
+        "counters": counters,
+    });
+
+    let topic = format!("rlp/agents/{}/metrics", sample.agent_id);
+    publish_metrics(bus, &topic, payload, ttl_ms).await
+}
+
+async fn publish_final_agent_metrics(
+    bus: &Bus,
+    last: &AgentMetricSample,
+    executor_id: &str,
+    node_id: &str,
+    ts_ms: u64,
+    interval_ms: u64,
+    ttl_ms: u64,
+) -> Result<(), runloop_bus::BusError> {
+    let mut counters = serde_json::Map::new();
+    counters.insert(
+        "msgs_recv_total".into(),
+        serde_json::json!(last.msgs_recv_total),
+    );
+    counters.insert("msgs_sent_total".into(), serde_json::json!(0));
+    counters.insert("msgs_dropped_total".into(), serde_json::json!(0));
+
+    let payload = serde_json::json!({
+        "v": 1,
+        "scope": "agent",
+        "ts_ms": ts_ms,
+        "interval_ms": interval_ms,
+        "labels": {
+            "executor_id": executor_id,
+            "node_id": node_id,
+            "agent_id": last.agent_id.to_string(),
+        },
+        "gauges": {
+            "mailbox_depth": 0,
+            "mailbox_capacity": last.mailbox_capacity,
+        },
+        "counters": counters,
+    });
+
+    let topic = format!("rlp/agents/{}/metrics", last.agent_id);
+    publish_metrics(bus, &topic, payload, ttl_ms).await
 }
 
 fn action_decision_acl(kinds: &[String]) -> Result<Vec<PublisherKind>, Error> {
