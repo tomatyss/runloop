@@ -1248,6 +1248,9 @@ impl Provider for OllamaProvider {
             "prompt": request.prompt,
             "stream": false,
         });
+        if let Some(system) = &request.role_system {
+            body["system"] = serde_json::json!(system);
+        }
         if !options.is_empty() {
             body["options"] = serde_json::Value::Object(options);
         }
@@ -2296,6 +2299,48 @@ mod tests {
         assert_eq!(completion.text, "hey there");
         assert_eq!(completion.tokens_in, Some(8));
         assert_eq!(completion.tokens_out, Some(6));
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn ollama_provider_forwards_system_prompt() {
+        let _guard = httpmock_lock();
+        let server = MockServer::start();
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/api/generate").json_body(json!({
+                    "model": "llama3:8b",
+                    "prompt": "hello",
+                    "system": "stay brief",
+                    "stream": false
+                }));
+                then.status(200).json_body(json!({
+                    "response": "brief reply",
+                    "done": true
+                }));
+            })
+            .await;
+
+        let cfg = ModelProvider {
+            id: "ollama".into(),
+            kind: ProviderKind::HttpOllama,
+            model_dir: None,
+            base_url: Some(server.base_url()),
+            secret_id: None,
+            headers: Default::default(),
+            schema: None,
+        };
+        let provider = OllamaProvider::new(cfg).expect("provider init");
+        let request = ModelRequest {
+            role_system: Some("stay brief".into()),
+            ..request()
+        };
+
+        let completion = provider
+            .complete(&request, "llama3:8b", None)
+            .await
+            .expect("completion");
+        assert_eq!(completion.text, "brief reply");
         mock.assert_async().await;
     }
 
