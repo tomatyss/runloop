@@ -439,10 +439,14 @@ freeze updates.
 
 ### J2. Metrics
 
-- [ ] Counters: msgs sent/received, drops, cap_denied, broker_calls, cache_hits.
-- [ ] Gauges: agents_running, rss_total, bus_queue_depth.
+- [x] Counters: msgs sent/received, drops, cap_denied, broker_calls, cache_hits,
+      tokens_prompt/completion (monotonic).
+- [x] Gauges: agents_running, rss_total, bus_queue_depth_max/capacity_max,
+      per-agent mailbox_depth/rss/cpu.
 
 **DoD:** `agtop` shows these metrics; unit tests increment expected counters.
+      CT_METRICS_SNAPSHOT v1 published every `observability.metrics_interval_ms`
+      with TTL = 2× interval; per-agent final snapshot on teardown.
 
 ### J3. Audit log (caps)
 
