@@ -323,7 +323,22 @@ impl App {
     }
 
     fn process_metrics(&mut self, payload: Value, source: Option<String>) {
-        let scope_key = source.unwrap_or_else(|| "system".to_string());
+        let labels = payload
+            .get("labels")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
+        let scope = payload
+            .get("scope")
+            .and_then(|v| v.as_str())
+            .unwrap_or("system");
+        let scope_key = labels
+            .get("agent_id")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .or_else(|| source.clone())
+            .unwrap_or_else(|| scope.to_string());
+
         let group = self
             .state
             .metrics
@@ -332,16 +347,31 @@ impl App {
                 values: BTreeMap::new(),
             });
 
-        if let Some(obj) = payload.as_object() {
+        if let Some(gauges) = payload.get("gauges").and_then(|v| v.as_object()) {
+            for (k, v) in gauges {
+                group.values.insert(k.clone(), to_metric_string(v));
+            }
+            if let Some(depth) = gauges.get("bus_queue_depth_max") {
+                group
+                    .values
+                    .entry("bus_queue_depth".into())
+                    .or_insert_with(|| to_metric_string(depth));
+            }
+        }
+
+        if let Some(counters) = payload.get("counters").and_then(|v| v.as_object()) {
+            for (k, v) in counters {
+                group.values.insert(k.clone(), to_metric_string(v));
+            }
+        }
+
+        // Legacy flat format fallback
+        if payload.get("gauges").is_none()
+            && payload.get("counters").is_none()
+            && let Some(obj) = payload.as_object()
+        {
             for (k, v) in obj {
-                let val_str = if let Some(n) = v.as_f64() {
-                    format!("{:.2}", n)
-                } else if let Some(s) = v.as_str() {
-                    s.to_string()
-                } else {
-                    v.to_string()
-                };
-                group.values.insert(k.clone(), val_str);
+                group.values.insert(k.clone(), to_metric_string(v));
             }
         }
     }
@@ -402,6 +432,21 @@ fn next_msg_id() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
+fn to_metric_string(value: &Value) -> String {
+    if let Some(n) = value.as_f64() {
+        let truncated = n.trunc();
+        if (n - truncated).abs() < f64::EPSILON {
+            format!("{:.0}", n)
+        } else {
+            format!("{:.2}", n)
+        }
+    } else if let Some(s) = value.as_str() {
+        s.to_string()
+    } else {
+        value.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -430,14 +475,29 @@ mod tests {
     fn test_handle_event_metrics() {
         let mut app = App::new("test-trace".into(), None);
         let payload = json!({
-            "cpu": 10.5,
-            "mem": "512MB"
+            "v": 1,
+            "scope": "agent",
+            "ts_ms": 1,
+            "interval_ms": 1000,
+            "labels": { "agent_id": "agent-1" },
+            "gauges": { "cpu_total_ms": 10.5, "rss_bytes": 2048 },
+            "counters": { "msgs_recv_total": 3 }
         });
         app.handle_event(Event::Metrics(payload, Some("agent-1".into())));
 
         let group = app.state.metrics.get("agent-1").expect("agent-1 group");
-        assert_eq!(group.values.get("cpu").map(|s| s.as_str()), Some("10.50"));
-        assert_eq!(group.values.get("mem").map(|s| s.as_str()), Some("512MB"));
+        assert_eq!(
+            group.values.get("cpu_total_ms").map(|s| s.as_str()),
+            Some("10.50")
+        );
+        assert_eq!(
+            group.values.get("rss_bytes").map(|s| s.as_str()),
+            Some("2048")
+        );
+        assert_eq!(
+            group.values.get("msgs_recv_total").map(|s| s.as_str()),
+            Some("3")
+        );
     }
 
     #[test]

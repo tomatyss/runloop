@@ -128,6 +128,14 @@ pub struct LocalExecutor {
 }
 
 impl LocalExecutor {
+    pub fn runtime(&self) -> Runtime {
+        self.runtime.clone()
+    }
+
+    pub fn broker(&self) -> Arc<Broker> {
+        self.broker.clone()
+    }
+
     pub fn new(
         config: Config,
         kb: KnowledgeBase,
