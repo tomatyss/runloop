@@ -245,11 +245,50 @@ pub trait ConfirmationProvider: Send + Sync {
 /// Helper used by agents to build canonical contact payloads.
 #[must_use]
 pub fn contact_payload(contact: &ResolvedContact, trust: f32) -> Value {
-    json!({
+    let mut payload = json!({
         "name": contact.name,
         "email": contact.email,
-        "org": contact.org,
         "trust": trust,
         "evidence": []
-    })
+    });
+    if let Some(org) = &contact.org
+        && let Some(obj) = payload.as_object_mut()
+    {
+        obj.insert("org".to_string(), json!(org));
+    }
+    payload
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contact_payload_omits_org_when_none() {
+        let contact = ResolvedContact {
+            contact_id: "test".into(),
+            name: "Test User".into(),
+            email: "test@example.com".into(),
+            org: None,
+            confidence: 1.0,
+            last_event_id: None,
+        };
+        let payload = contact_payload(&contact, 0.5);
+        assert!(payload.get("org").is_none());
+        assert_eq!(payload["name"], "Test User");
+    }
+
+    #[test]
+    fn contact_payload_includes_org_when_some() {
+        let contact = ResolvedContact {
+            contact_id: "test".into(),
+            name: "Test User".into(),
+            email: "test@example.com".into(),
+            org: Some("Acme Corp".into()),
+            confidence: 1.0,
+            last_event_id: None,
+        };
+        let payload = contact_payload(&contact, 0.5);
+        assert_eq!(payload["org"], "Acme Corp");
+    }
 }

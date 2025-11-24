@@ -1,0 +1,41 @@
+[
+  {
+    "name": "known_recipient",
+    "inputs": {
+      "recipient": "john",
+      "topic": "Q4 plan"
+    },
+    "expectations": {
+      "recipient_email": "john@acme.com",
+      "min_words": 10,
+      "max_words": 200,
+      "has_citations": true
+    }
+  },
+  {
+    "name": "unknown_recipient",
+    "inputs": {
+      "recipient": "alice",
+      "topic": "Hello"
+    },
+    "expectations": {
+      "recipient_email": "alice@unknown.local",
+      "min_words": 5,
+      "max_words": 200,
+      "has_citations": true
+    }
+  },
+  {
+    "name": "long_topic",
+    "inputs": {
+      "recipient": "john",
+      "topic": "This is a very long topic description that goes on and on about the Q4 plan and how we need to synchronize our efforts across multiple departments including engineering, design, product management, and sales to ensure we hit our quarterly targets and deliver value to our customers in a timely manner without compromising on quality or stability of the platform."
+    },
+    "expectations": {
+      "recipient_email": "john@acme.com",
+      "min_words": 20,
+      "max_words": 180,
+      "has_citations": true
+    }
+  }
+]

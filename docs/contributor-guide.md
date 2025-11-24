@@ -32,6 +32,11 @@ single source of truth for onboarding new collaborators.
   `#[cfg(test)]`) and cross-crate behavior belongs in `tests/` harnesses. When a
   change alters capabilities or policies, add regression tests around the
   failure paths.
+- **Golden Tests:** For end-to-end regression testing of openings, we maintain a
+  golden corpus in `tests/golden/`. Run these tests using
+  `cargo test --package runloop-executor-local --test golden -- --ignored`.
+  These tests verify that openings produce expected outcomes (like correct
+  recipient resolution or draft properties) across various input scenarios.
 - Update documentation and examples alongside code changes. At minimum, touch
   `docs/` specs, `examples/openings/`, and `AGENTS.md` when you add new
   capabilities, commands, or bundles.

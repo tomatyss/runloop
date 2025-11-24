@@ -34,7 +34,9 @@ locally when adding public APIs to confirm docs render and examples compile.
 Module-level unit tests belong alongside source (`src/**/*.rs`) using
 `#[cfg(test)]`; cross-crate behaviors should land in `tests/` directories to
 exercise the WASM runtime and message bus together. Include fixtures for agent
-contracts in `examples/openings/` so they double as documentation. When touching
+contracts in `examples/openings/` so they double as documentation. For end-to-end
+regression of openings, verify changes against the golden corpus using
+`cargo test -p runloop-executor-local --test golden -- --ignored`. When touching
 capability or policy code, add regression coverage around failure paths and
 verify deterministic replay notes in `docs/ops.md` remain accurate.
 
