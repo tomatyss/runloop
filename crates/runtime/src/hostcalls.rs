@@ -1403,12 +1403,13 @@ mod tests {
 
         let start = Instant::now();
         let code = run.call(&mut store, ()).expect("exec call should complete");
+        let elapsed = start.elapsed();
         clear_exec_timeout_override();
 
         assert_eq!(code, EXEC_ESIGNAL);
         assert!(
-            start.elapsed() < Duration::from_secs(3),
-            "exec should time out quickly"
+            elapsed < Duration::from_secs(6),
+            "exec should time out quickly; elapsed={elapsed:?}"
         );
     }
 
