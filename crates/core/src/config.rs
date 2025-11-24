@@ -455,6 +455,12 @@ pub enum ProviderKind {
     Http,
     #[serde(rename = "http_gemini")]
     HttpGemini,
+    #[serde(rename = "http_openai_chat")]
+    HttpOpenAiChat,
+    #[serde(rename = "http_anthropic")]
+    HttpAnthropic,
+    #[serde(rename = "http_ollama")]
+    HttpOllama,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

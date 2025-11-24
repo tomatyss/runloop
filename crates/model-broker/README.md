@@ -50,7 +50,10 @@ pub struct Broker {
 ### Providers (v0)
 
 - `local:llama.cpp` (bindings)
-- `http:openai` (OpenAI-compatible; also covers Anthropic/others via adapters)
+- `http:openai` (OpenAI-compatible completions)
+- `http_openai_chat` (OpenAI chat/completions at `/v1/chat/completions`)
+- `http_anthropic` (Claude `/v1/messages`)
+- `http_ollama` (local Ollama `/api/generate`)
 - `http_gemini` (Google Gemini `generateContent`, non-streaming text
   completions)
 
