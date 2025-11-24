@@ -18,6 +18,7 @@ use runloop_model_broker::SecretResolver;
 use runloop_openings::{LadderHop, NodeState, RunEvent, RunTrace, Runner, parse_opening_str};
 use runloop_rmp::{Header, decode_payload, encode_payload};
 use std::collections::{BTreeMap, HashMap};
+use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 #[cfg(test)]
@@ -1077,9 +1078,29 @@ pub(crate) fn next_msg_id() -> u64 {
 }
 
 struct DaemonSecretResolver;
+
+fn normalize_secret_env_key(secret_id: &str) -> String {
+    secret_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn resolve_secret_from_env(secret_id: &str) -> Option<String> {
+    env::var(secret_id)
+        .or_else(|_| env::var(normalize_secret_env_key(secret_id)))
+        .ok()
+}
+
 impl SecretResolver for DaemonSecretResolver {
     fn resolve(&self, secret_id: &str) -> Option<String> {
-        std::env::var(secret_id).ok()
+        resolve_secret_from_env(secret_id)
     }
 }
 

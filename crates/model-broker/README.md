@@ -54,6 +54,11 @@ pub struct Broker {
 - `http_gemini` (Google Gemini `generateContent`, non-streaming text
   completions)
 
+Secret resolution: CLI and daemon resolvers currently read secrets from the
+environment, trying both the raw `secret_id` and an upper-snake variant with
+non-alphanumeric characters replaced by `_` (e.g., `runloop/models/gemini` →
+`RUNLOOP_MODELS_GEMINI`).
+
 ### Request shape (MVP)
 
 `ModelRequest` carries a single `prompt: String`, optional `ModelParams`, and
