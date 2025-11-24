@@ -8,7 +8,7 @@ name = "runloop_executor_local"
 
 [dependencies]
 async-trait = "0.1"
-base64 = { version = "0.21", default-features = false, features = ["std"] }
+base64 = { version = "0.22", default-features = false, features = ["std"] }
 runloop-agent-contact-resolver = { path = "../agents/contact_resolver" }
 runloop-agent-context-gatherer = { path = "../agents/context_gatherer" }
 runloop-agent-critic = { path = "../agents/critic" }
