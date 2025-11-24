@@ -73,8 +73,9 @@ unavailable. It fails fast with guidance to start the daemon (or re-run with
 ### 1.3 Model broker configuration _(MVP)_
 
 - `models.broker.providers` lists named backends. `kind` may be `local`, `http`
-  (OpenAI-compatible schemas such as `openai-completions`), or `http_gemini`
-  (Google Gemini `generateContent`). Both HTTP kinds accept `base_url`,
+  (OpenAI-compatible completions), `http_openai_chat` (OpenAI chat), `http_anthropic`
+  (Claude `/v1/messages`), `http_ollama` (local Ollama), or `http_gemini`
+  (Google Gemini `generateContent`). These HTTP kinds accept `base_url`,
   `secret_id`, and optional static headers.
 - `models.broker.route` is an ordered array of
   `{ pattern, provider, target_model? }` entries; the first matching pattern

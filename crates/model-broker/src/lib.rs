@@ -813,6 +813,498 @@ impl Provider for HttpProvider {
     }
 }
 
+struct OpenAiChatProvider {
+    id: String,
+    client: Client,
+    base_url: String,
+    secret_id: Option<String>,
+    headers: HeaderMap,
+    secrets: Arc<dyn SecretResolver>,
+}
+
+impl OpenAiChatProvider {
+    fn new(cfg: ModelProvider, secrets: Arc<dyn SecretResolver>) -> Result<Self, BrokerInitError> {
+        let base_url = cfg
+            .base_url
+            .ok_or_else(|| BrokerInitError::MissingBaseUrl { id: cfg.id.clone() })?;
+
+        let mut headers = HeaderMap::new();
+        for (key, value) in cfg.headers {
+            let name = HeaderName::try_from(key.as_str()).map_err(|source| {
+                BrokerInitError::InvalidHeaderName {
+                    id: cfg.id.clone(),
+                    header: key.clone(),
+                    source,
+                }
+            })?;
+            let header_value = HeaderValue::try_from(value.as_str()).map_err(|source| {
+                BrokerInitError::InvalidHeaderValue {
+                    id: cfg.id.clone(),
+                    header: key.clone(),
+                    source,
+                }
+            })?;
+            headers.append(name, header_value);
+        }
+
+        let client = Client::builder()
+            .build()
+            .map_err(|source| BrokerInitError::HttpClient {
+                id: cfg.id.clone(),
+                source,
+            })?;
+
+        Ok(Self {
+            id: cfg.id,
+            client,
+            base_url,
+            secret_id: cfg.secret_id,
+            headers,
+            secrets,
+        })
+    }
+}
+
+#[async_trait]
+impl Provider for OpenAiChatProvider {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    async fn complete(
+        &self,
+        request: &ModelRequest,
+        provider_model: &str,
+        timeout: Option<Duration>,
+    ) -> Result<ProviderCompletion, BrokerError> {
+        let secret = match self.secret_id.as_ref() {
+            Some(id) => self
+                .secrets
+                .resolve(id)
+                .ok_or_else(|| BrokerError::ProviderFault {
+                    code: "secret_missing".into(),
+                    message: format!("secret '{id}' not found"),
+                })?,
+            None => String::new(),
+        };
+
+        let mut messages = Vec::new();
+        if let Some(system) = &request.role_system {
+            messages.push(OpenAiChatMessage {
+                role: "system".into(),
+                content: system.clone(),
+            });
+        }
+        messages.push(OpenAiChatMessage {
+            role: "user".into(),
+            content: request.prompt.clone(),
+        });
+
+        let mut body = serde_json::Map::new();
+        body.insert("model".into(), serde_json::json!(provider_model));
+        body.insert("messages".into(), serde_json::json!(messages));
+        body.insert("stream".into(), serde_json::json!(false));
+
+        if let Some(params) = &request.params {
+            if let Some(value) = params.max_tokens {
+                body.insert("max_tokens".into(), serde_json::json!(value));
+            }
+            if let Some(value) = params.temperature {
+                body.insert("temperature".into(), serde_json::json!(value));
+            }
+            if let Some(value) = params.top_p {
+                body.insert("top_p".into(), serde_json::json!(value));
+            }
+            if let Some(stop) = &params.stop {
+                body.insert("stop".into(), serde_json::json!(stop));
+            }
+        }
+        let body = serde_json::Value::Object(body);
+
+        let url = format!(
+            "{}/v1/chat/completions",
+            self.base_url.trim_end_matches('/')
+        );
+        let mut builder = self.client.post(url).json(&body);
+        if let Some(duration) = timeout {
+            builder = builder.timeout(duration);
+        }
+        if !secret.is_empty() {
+            builder = builder.bearer_auth(secret);
+        }
+        for (key, value) in self.headers.iter() {
+            builder = builder.header(key, value);
+        }
+        builder = builder.header("X-Runloop-Trace-Id", request.trace_id.to_string());
+
+        let response = builder
+            .send()
+            .await
+            .map_err(|err| BrokerError::ProviderFault {
+                code: "http_send".into(),
+                message: err.to_string(),
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let message = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "no body".to_string());
+            return Err(BrokerError::ProviderFault {
+                code: format!("http_{}", status.as_u16()),
+                message,
+            });
+        }
+
+        let payload: OpenAiChatResponse =
+            response
+                .json()
+                .await
+                .map_err(|err| BrokerError::ProviderFault {
+                    code: "decode".into(),
+                    message: err.to_string(),
+                })?;
+
+        let choice =
+            payload
+                .choices
+                .into_iter()
+                .next()
+                .ok_or_else(|| BrokerError::ProviderFault {
+                    code: "empty_response".into(),
+                    message: "no completion choices returned".into(),
+                })?;
+
+        let text = choice
+            .message
+            .as_ref()
+            .map(|msg| msg.content.clone())
+            .unwrap_or_default();
+        if text.is_empty() {
+            return Err(BrokerError::ProviderFault {
+                code: "empty_response".into(),
+                message: "chat completion returned empty content".into(),
+            });
+        }
+
+        let resolved_model = payload.model.unwrap_or_else(|| provider_model.to_string());
+
+        Ok(ProviderCompletion {
+            text,
+            tokens_in: payload.usage.as_ref().and_then(|usage| usage.prompt_tokens),
+            tokens_out: payload
+                .usage
+                .as_ref()
+                .and_then(|usage| usage.completion_tokens),
+            finish_reason: choice
+                .finish_reason
+                .or(payload.finish_reason)
+                .map(|val| val.to_ascii_lowercase()),
+            provider_model: resolved_model,
+        })
+    }
+}
+
+struct AnthropicProvider {
+    id: String,
+    client: Client,
+    base_url: String,
+    secret_id: Option<String>,
+    headers: HeaderMap,
+    secrets: Arc<dyn SecretResolver>,
+}
+
+impl AnthropicProvider {
+    fn new(cfg: ModelProvider, secrets: Arc<dyn SecretResolver>) -> Result<Self, BrokerInitError> {
+        let base_url = cfg
+            .base_url
+            .ok_or_else(|| BrokerInitError::MissingBaseUrl { id: cfg.id.clone() })?;
+
+        let mut headers = HeaderMap::new();
+        for (key, value) in cfg.headers {
+            let name = HeaderName::try_from(key.as_str()).map_err(|source| {
+                BrokerInitError::InvalidHeaderName {
+                    id: cfg.id.clone(),
+                    header: key.clone(),
+                    source,
+                }
+            })?;
+            let header_value = HeaderValue::try_from(value.as_str()).map_err(|source| {
+                BrokerInitError::InvalidHeaderValue {
+                    id: cfg.id.clone(),
+                    header: key.clone(),
+                    source,
+                }
+            })?;
+            headers.append(name, header_value);
+        }
+        headers.insert(
+            HeaderName::from_static("anthropic-version"),
+            HeaderValue::from_static("2023-06-01"),
+        );
+
+        let client = Client::builder()
+            .build()
+            .map_err(|source| BrokerInitError::HttpClient {
+                id: cfg.id.clone(),
+                source,
+            })?;
+
+        Ok(Self {
+            id: cfg.id,
+            client,
+            base_url,
+            secret_id: cfg.secret_id,
+            headers,
+            secrets,
+        })
+    }
+}
+
+#[async_trait]
+impl Provider for AnthropicProvider {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    async fn complete(
+        &self,
+        request: &ModelRequest,
+        provider_model: &str,
+        timeout: Option<Duration>,
+    ) -> Result<ProviderCompletion, BrokerError> {
+        let api_key = match self.secret_id.as_ref() {
+            Some(id) => self
+                .secrets
+                .resolve(id)
+                .ok_or_else(|| BrokerError::ProviderFault {
+                    code: "secret_missing".into(),
+                    message: format!("secret '{id}' not found"),
+                })?,
+            None => String::new(),
+        };
+
+        let mut body = serde_json::json!({
+            "model": provider_model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": request.prompt
+                }
+            ],
+            "stream": false,
+        });
+        if let Some(system) = &request.role_system {
+            body["system"] = serde_json::json!(system);
+        }
+        let mut max_tokens = request
+            .params
+            .as_ref()
+            .and_then(|p| p.max_tokens)
+            .unwrap_or(512);
+        if max_tokens == 0 {
+            max_tokens = 1;
+        }
+        body["max_tokens"] = serde_json::json!(max_tokens);
+        if let Some(params) = &request.params {
+            if let Some(value) = params.temperature {
+                body["temperature"] = serde_json::json!(value);
+            }
+            if let Some(value) = params.top_p {
+                body["top_p"] = serde_json::json!(value);
+            }
+            if let Some(stop) = &params.stop {
+                body["stop_sequences"] = serde_json::json!(stop);
+            }
+        }
+
+        let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
+        let mut builder = self.client.post(url).json(&body);
+        if let Some(duration) = timeout {
+            builder = builder.timeout(duration);
+        }
+        if !api_key.is_empty() {
+            builder = builder.header("x-api-key", api_key);
+        }
+        for (key, value) in self.headers.iter() {
+            builder = builder.header(key, value);
+        }
+        builder = builder.header("X-Runloop-Trace-Id", request.trace_id.to_string());
+
+        let response = builder
+            .send()
+            .await
+            .map_err(|err| BrokerError::ProviderFault {
+                code: "http_send".into(),
+                message: err.to_string(),
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let message = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "no body".to_string());
+            return Err(BrokerError::ProviderFault {
+                code: format!("http_{}", status.as_u16()),
+                message,
+            });
+        }
+
+        let payload: AnthropicResponse =
+            response
+                .json()
+                .await
+                .map_err(|err| BrokerError::ProviderFault {
+                    code: "decode".into(),
+                    message: err.to_string(),
+                })?;
+
+        let text = payload
+            .content
+            .iter()
+            .filter_map(|block| block.text.clone())
+            .collect::<Vec<_>>()
+            .join("");
+        if text.is_empty() {
+            return Err(BrokerError::ProviderFault {
+                code: "empty_response".into(),
+                message: "anthropic response contained no text".into(),
+            });
+        }
+
+        Ok(ProviderCompletion {
+            text,
+            tokens_in: payload.usage.as_ref().and_then(|u| u.input_tokens),
+            tokens_out: payload.usage.as_ref().and_then(|u| u.output_tokens),
+            finish_reason: payload.stop_reason.map(|val| val.to_ascii_lowercase()),
+            provider_model: provider_model.to_string(),
+        })
+    }
+}
+
+struct OllamaProvider {
+    id: String,
+    client: Client,
+    base_url: String,
+}
+
+impl OllamaProvider {
+    fn new(cfg: ModelProvider) -> Result<Self, BrokerInitError> {
+        let base_url = cfg
+            .base_url
+            .ok_or_else(|| BrokerInitError::MissingBaseUrl { id: cfg.id.clone() })?;
+        let client = Client::builder()
+            .build()
+            .map_err(|source| BrokerInitError::HttpClient {
+                id: cfg.id.clone(),
+                source,
+            })?;
+        Ok(Self {
+            id: cfg.id,
+            client,
+            base_url,
+        })
+    }
+}
+
+#[async_trait]
+impl Provider for OllamaProvider {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    async fn complete(
+        &self,
+        request: &ModelRequest,
+        provider_model: &str,
+        timeout: Option<Duration>,
+    ) -> Result<ProviderCompletion, BrokerError> {
+        let mut options = serde_json::Map::new();
+        if let Some(params) = &request.params {
+            if let Some(value) = params.temperature {
+                options.insert("temperature".into(), serde_json::json!(value));
+            }
+            if let Some(value) = params.top_p {
+                options.insert("top_p".into(), serde_json::json!(value));
+            }
+            if let Some(stop) = &params.stop {
+                options.insert("stop".into(), serde_json::json!(stop.clone()));
+            }
+        }
+        if let Some(Value::Object(map)) = request
+            .extras
+            .as_ref()
+            .and_then(|extras| extras.get("ollama"))
+        {
+            for (k, v) in map {
+                options.insert(k.clone(), v.clone());
+            }
+        }
+
+        let mut body = serde_json::json!({
+            "model": provider_model,
+            "prompt": request.prompt,
+            "stream": false,
+        });
+        if !options.is_empty() {
+            body["options"] = serde_json::Value::Object(options);
+        }
+
+        let url = format!("{}/api/generate", self.base_url.trim_end_matches('/'));
+        let mut builder = self.client.post(url).json(&body);
+        if let Some(duration) = timeout {
+            builder = builder.timeout(duration);
+        }
+        builder = builder.header("X-Runloop-Trace-Id", request.trace_id.to_string());
+
+        let response = builder
+            .send()
+            .await
+            .map_err(|err| BrokerError::ProviderFault {
+                code: "http_send".into(),
+                message: err.to_string(),
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let message = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "no body".to_string());
+            return Err(BrokerError::ProviderFault {
+                code: format!("http_{}", status.as_u16()),
+                message,
+            });
+        }
+
+        let payload: OllamaResponse =
+            response
+                .json()
+                .await
+                .map_err(|err| BrokerError::ProviderFault {
+                    code: "decode".into(),
+                    message: err.to_string(),
+                })?;
+
+        if payload.response.trim().is_empty() {
+            return Err(BrokerError::ProviderFault {
+                code: "empty_response".into(),
+                message: "ollama returned empty response".into(),
+            });
+        }
+
+        Ok(ProviderCompletion {
+            text: payload.response,
+            tokens_in: payload.prompt_eval_count,
+            tokens_out: payload.eval_count,
+            finish_reason: None,
+            provider_model: provider_model.to_string(),
+        })
+    }
+}
+
 struct GeminiProvider {
     id: String,
     client: Client,
@@ -1242,6 +1734,9 @@ fn build_provider(
         ProviderKind::Local => Ok(Arc::new(NullProvider::new(cfg.id))),
         ProviderKind::Http => Ok(Arc::new(HttpProvider::new(cfg, secrets)?)),
         ProviderKind::HttpGemini => Ok(Arc::new(GeminiProvider::new(cfg, secrets)?)),
+        ProviderKind::HttpOpenAiChat => Ok(Arc::new(OpenAiChatProvider::new(cfg, secrets)?)),
+        ProviderKind::HttpAnthropic => Ok(Arc::new(AnthropicProvider::new(cfg, secrets)?)),
+        ProviderKind::HttpOllama => Ok(Arc::new(OllamaProvider::new(cfg)?)),
     }
 }
 
@@ -1283,6 +1778,66 @@ struct OpenAiUsage {
     prompt_tokens: Option<u32>,
     #[serde(default)]
     completion_tokens: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiChatResponse {
+    #[serde(default)]
+    choices: Vec<OpenAiChatChoice>,
+    #[serde(default)]
+    usage: Option<OpenAiUsage>,
+    #[serde(default)]
+    finish_reason: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiChatChoice {
+    #[serde(default)]
+    message: Option<OpenAiChatMessage>,
+    #[serde(default)]
+    finish_reason: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct OpenAiChatMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Deserialize)]
+struct AnthropicResponse {
+    #[serde(default)]
+    content: Vec<AnthropicContentBlock>,
+    #[serde(default)]
+    stop_reason: Option<String>,
+    #[serde(default)]
+    usage: Option<AnthropicUsage>,
+}
+
+#[derive(Deserialize)]
+struct AnthropicContentBlock {
+    #[serde(default)]
+    text: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AnthropicUsage {
+    #[serde(default)]
+    input_tokens: Option<u32>,
+    #[serde(default)]
+    output_tokens: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct OllamaResponse {
+    #[serde(default)]
+    response: String,
+    #[serde(default)]
+    prompt_eval_count: Option<u32>,
+    #[serde(default)]
+    eval_count: Option<u32>,
 }
 
 struct NoopSecretResolver;
@@ -1426,9 +1981,19 @@ mod tests {
         assert!(matches!(err, BrokerError::BudgetExceeded { .. }));
     }
 
+    static HTTPMOCK_GUARD: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+
+    fn httpmock_lock() -> std::sync::MutexGuard<'static, ()> {
+        HTTPMOCK_GUARD
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .expect("httpmock mutex poisoned")
+    }
+
     #[tokio::test]
     async fn gemini_provider_maps_requests_and_responses() {
-        let server = MockServer::start_async().await;
+        let _guard = httpmock_lock();
+        let server = MockServer::start();
         let mock = server
             .mock_async(|when, then| {
                 when.method(POST).header("x-goog-api-key", "test-key");
@@ -1509,7 +2074,8 @@ mod tests {
 
     #[tokio::test]
     async fn gemini_provider_surfaces_safety_blocks() {
-        let server = MockServer::start_async().await;
+        let _guard = httpmock_lock();
+        let server = MockServer::start();
         let mock = server
             .mock_async(|when, then| {
                 when.method(POST).header("x-goog-api-key", "test-key");
@@ -1569,6 +2135,170 @@ mod tests {
         mock.assert_async().await;
     }
 
+    #[tokio::test]
+    async fn openai_chat_provider_maps_requests_and_responses() {
+        let _guard = httpmock_lock();
+        let server = MockServer::start();
+        let mock = server.mock(|when, then| {
+            when.method(POST).path("/v1/chat/completions");
+            then.status(200).json_body(json!({
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": "hi there"},
+                        "finish_reason": "stop"
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 12,
+                    "completion_tokens": 4
+                },
+                "model": "gpt-4o-mini"
+            }));
+        });
+
+        let cfg = ModelProvider {
+            id: "openai".into(),
+            kind: ProviderKind::HttpOpenAiChat,
+            model_dir: None,
+            base_url: Some(server.base_url()),
+            secret_id: Some("openai_api".into()),
+            headers: Default::default(),
+            schema: None,
+        };
+        let provider = OpenAiChatProvider::new(
+            cfg,
+            Arc::new(MapSecrets::with_secret("openai_api", "test-key")),
+        )
+        .expect("provider init");
+
+        let request = ModelRequest {
+            model: "gpt-4o-mini".into(),
+            prompt: "hello".into(),
+            role_system: Some("be short".into()),
+            params: Some(ModelParams {
+                temperature: Some(0.3),
+                top_p: Some(0.9),
+                max_tokens: Some(64),
+                stop: Some(vec!["stop".into()]),
+            }),
+            ..request()
+        };
+
+        let completion = provider
+            .complete(&request, "gpt-4o-mini", None)
+            .await
+            .expect("completion");
+        assert_eq!(completion.text, "hi there");
+        assert_eq!(completion.tokens_in, Some(12));
+        assert_eq!(completion.tokens_out, Some(4));
+        assert_eq!(completion.finish_reason.as_deref(), Some("stop"));
+        assert_eq!(completion.provider_model, "gpt-4o-mini");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn anthropic_provider_maps_requests_and_responses() {
+        let _guard = httpmock_lock();
+        let server = MockServer::start();
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/messages")
+                    .header("x-api-key", "anth-key")
+                    .header("anthropic-version", "2023-06-01");
+                then.status(200).json_body(json!({
+                    "content": [
+                        {"text": "hello from claude"}
+                    ],
+                    "stop_reason": "end_turn",
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 5
+                    }
+                }));
+            })
+            .await;
+
+        let cfg = ModelProvider {
+            id: "claude".into(),
+            kind: ProviderKind::HttpAnthropic,
+            model_dir: None,
+            base_url: Some(server.base_url()),
+            secret_id: Some("anthropic_api".into()),
+            headers: Default::default(),
+            schema: None,
+        };
+        let provider = AnthropicProvider::new(
+            cfg,
+            Arc::new(MapSecrets::with_secret("anthropic_api", "anth-key")),
+        )
+        .expect("provider init");
+
+        let request = ModelRequest {
+            model: "claude-3-haiku-20240307".into(),
+            prompt: "hello".into(),
+            role_system: Some("you are brief".into()),
+            params: Some(ModelParams {
+                temperature: Some(0.5),
+                top_p: Some(0.9),
+                max_tokens: Some(32),
+                stop: Some(vec!["stop".into()]),
+            }),
+            ..request()
+        };
+
+        let completion = provider
+            .complete(&request, "claude-3-haiku-20240307", None)
+            .await
+            .expect("completion");
+        assert_eq!(completion.text, "hello from claude");
+        assert_eq!(completion.tokens_in, Some(10));
+        assert_eq!(completion.tokens_out, Some(5));
+        assert_eq!(completion.finish_reason.as_deref(), Some("end_turn"));
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn ollama_provider_maps_requests_and_responses() {
+        let _guard = httpmock_lock();
+        let server = MockServer::start();
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/api/generate").json_body(json!({
+                    "model": "llama3:8b",
+                    "prompt": "hello",
+                    "stream": false
+                }));
+                then.status(200).json_body(json!({
+                    "response": "hey there",
+                    "prompt_eval_count": 8,
+                    "eval_count": 6,
+                    "done": true
+                }));
+            })
+            .await;
+
+        let cfg = ModelProvider {
+            id: "ollama".into(),
+            kind: ProviderKind::HttpOllama,
+            model_dir: None,
+            base_url: Some(server.base_url()),
+            secret_id: None,
+            headers: Default::default(),
+            schema: None,
+        };
+        let provider = OllamaProvider::new(cfg).expect("provider init");
+
+        let completion = provider
+            .complete(&request(), "llama3:8b", None)
+            .await
+            .expect("completion");
+        assert_eq!(completion.text, "hey there");
+        assert_eq!(completion.tokens_in, Some(8));
+        assert_eq!(completion.tokens_out, Some(6));
+        mock.assert_async().await;
+    }
+
     #[test]
     fn usage_profile_counts_system_instruction_text() {
         let mut output = ModelOutput {
@@ -1596,7 +2326,7 @@ mod tests {
 
     #[tokio::test]
     async fn broker_routes_requests_to_gemini_provider() {
-        let server = MockServer::start_async().await;
+        let server = MockServer::start();
         let mock = server
             .mock_async(|when, then| {
                 when.method(POST)
