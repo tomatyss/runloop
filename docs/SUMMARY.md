@@ -18,6 +18,7 @@
   - [Security Model](security-model.md)
   - [Performance Harness](perf.md)
   - [Release Process](release-process.md)
+- [Configuration](configuration/exec.md)
 
 - [Tools](tools.md)
   - [Router & Shell Integration](router-shell.md)

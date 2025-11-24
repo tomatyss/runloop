@@ -1,7 +1,11 @@
-use std::process::Command;
+use std::cell::Cell;
+use std::io::{self, Read};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc as sync_mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::audit::{AuditCategory, AuditSink};
 use crate::caps::{CapabilitySet, Caps, NetLocation};
@@ -608,15 +612,85 @@ fn host_resolve_secret(
     }
 }
 
+const EXEC_OUTPUT_PREVIEW_LIMIT: usize = 512;
+const EXEC_POLL_INTERVAL: Duration = Duration::from_millis(25);
+thread_local! {
+    static EXEC_TIMEOUT_OVERRIDE_SECS: Cell<u64> = const { Cell::new(0) };
+}
+#[cfg(test)]
+const EXEC_TIMEOUT_OVERRIDE_DISABLE: u64 = u64::MAX;
+#[cfg(not(test))]
+const EXEC_TIMEOUT_OVERRIDE_DISABLE: u64 = 0;
+const EXEC_EINVAL: i32 = -1;
+const EXEC_ESPAWN: i32 = -2;
+const EXEC_ESIGNAL: i32 = -3;
+
+fn exec_timeout() -> Option<Duration> {
+    EXEC_TIMEOUT_OVERRIDE_SECS.with(|cell| {
+        let override_secs = cell.get();
+        if cfg!(test) && override_secs == EXEC_TIMEOUT_OVERRIDE_DISABLE {
+            return None;
+        }
+        if override_secs != 0 {
+            return Some(Duration::from_secs(override_secs));
+        }
+        match std::env::var("RUNLOOP_EXEC_TIMEOUT_SECS") {
+            Ok(val) => match val.parse::<u64>() {
+                Ok(0) => None, // explicit disable
+                Ok(secs) => Some(Duration::from_secs(secs)),
+                Err(_) => None,
+            },
+            Err(_) => None,
+        }
+    })
+}
+
+#[cfg(test)]
+fn set_exec_timeout_override(secs: u64) {
+    EXEC_TIMEOUT_OVERRIDE_SECS.with(|cell| cell.set(secs));
+}
+
+#[cfg(test)]
+fn clear_exec_timeout_override() {
+    EXEC_TIMEOUT_OVERRIDE_SECS.with(|cell| cell.set(0));
+}
+
+#[cfg(test)]
+fn disable_exec_timeout_override() {
+    EXEC_TIMEOUT_OVERRIDE_SECS.with(|cell| cell.set(EXEC_TIMEOUT_OVERRIDE_DISABLE));
+}
+
+fn drain_stream_preview(
+    mut reader: impl Read + Send + 'static,
+    limit: usize,
+) -> thread::JoinHandle<(Vec<u8>, io::Result<()>)> {
+    thread::spawn(move || {
+        let mut preview = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let remaining = limit.saturating_sub(preview.len());
+                    if remaining > 0 {
+                        let take = remaining.min(n);
+                        preview.extend_from_slice(&buf[..take]);
+                    }
+                }
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+                Err(err) => return (preview, Err(err)),
+            }
+        }
+        (preview, Ok(()))
+    })
+}
+
 fn host_exec_spawn(
     mut caller: Caller<'_, StoreData>,
     ptr: i32,
     len: i32,
 ) -> Result<i32, WasmtimeError> {
     caller.data().state.ensure_exec()?;
-    const EXEC_EINVAL: i32 = -1;
-    const EXEC_ESPAWN: i32 = -2;
-    const EXEC_ESIGNAL: i32 = -3;
 
     if len <= 0 {
         return Ok(EXEC_EINVAL);
@@ -624,28 +698,86 @@ fn host_exec_spawn(
 
     let command = read_utf8(&mut caller, ptr, len)?;
     let mut cmd = Command::new("sh");
-    cmd.arg("-c").arg(&command);
+    cmd.arg("-c")
+        .arg(&command)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
 
-    let output = match cmd.output() {
-        Ok(output) => output,
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
         Err(error) => {
             tracing::warn!(%command, %error, "exec spawn failed");
             return Ok(EXEC_ESPAWN);
         }
     };
 
-    if !output.stdout.is_empty() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let preview = stdout.chars().take(512).collect::<String>();
-        tracing::debug!(%command, stdout=%preview, "exec stdout");
+    let stdout_handle = child
+        .stdout
+        .take()
+        .map(|stdout| drain_stream_preview(stdout, EXEC_OUTPUT_PREVIEW_LIMIT));
+    let stderr_handle = child
+        .stderr
+        .take()
+        .map(|stderr| drain_stream_preview(stderr, EXEC_OUTPUT_PREVIEW_LIMIT));
+
+    let timeout = exec_timeout();
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if let Some(timeout) = timeout
+                    && start.elapsed() > timeout
+                {
+                    tracing::warn!(%command, ?timeout, "exec timed out; killing process");
+                    let _ = child.kill();
+                    match child.wait() {
+                        Ok(status) => break status,
+                        Err(error) => {
+                            tracing::warn!(%command, %error, "exec wait after kill failed");
+                            return Ok(EXEC_ESPAWN);
+                        }
+                    }
+                } else {
+                    thread::sleep(EXEC_POLL_INTERVAL);
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%command, %error, "exec wait failed");
+                return Ok(EXEC_ESPAWN);
+            }
+        }
+    };
+
+    if let Some(handle) = stdout_handle {
+        match handle.join() {
+            Ok((preview, Ok(()))) if !preview.is_empty() => {
+                let stdout = String::from_utf8_lossy(&preview);
+                tracing::debug!(%command, stdout=%stdout, "exec stdout");
+            }
+            Ok((_, Err(error))) => {
+                tracing::warn!(%command, %error, "failed to read exec stdout");
+            }
+            Err(_) => tracing::warn!(%command, "exec stdout drain panicked"),
+            _ => {}
+        }
     }
-    if !output.stderr.is_empty() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let preview = stderr.chars().take(512).collect::<String>();
-        tracing::debug!(%command, stderr=%preview, "exec stderr");
+    if let Some(handle) = stderr_handle {
+        match handle.join() {
+            Ok((preview, Ok(()))) if !preview.is_empty() => {
+                let stderr = String::from_utf8_lossy(&preview);
+                tracing::debug!(%command, stderr=%stderr, "exec stderr");
+            }
+            Ok((_, Err(error))) => {
+                tracing::warn!(%command, %error, "failed to read exec stderr");
+            }
+            Err(_) => tracing::warn!(%command, "exec stderr drain panicked"),
+            _ => {}
+        }
     }
 
-    let status = match output.status.code() {
+    let status = match status.code() {
         Some(code) => code,
         None => {
             tracing::warn!(%command, "exec terminated by signal");
@@ -833,6 +965,22 @@ mod tests {
             )
         )"#;
         Module::new(engine, wat).expect("compile exec module")
+    }
+
+    fn compile_exec_module_with_command(engine: &Engine, command: &str) -> Module {
+        let len = command.len();
+        let data = command.escape_default().to_string();
+        let wat = format!(
+            r#"(module
+            (import "runloop" "exec_spawn" (func $exec_spawn (param i32 i32) (result i32)))
+            (memory (export "memory") 2)
+            (data (i32.const 0) "{data}")
+            (func (export "run") (result i32)
+                (call $exec_spawn (i32.const 0) (i32.const {len}))
+            )
+        )"#
+        );
+        Module::new(engine, wat).expect("compile exec module with command")
     }
 
     fn snapshot_region(instance: &Instance, store: &mut Store<StoreData>, start: usize) -> Vec<u8> {
@@ -1141,5 +1289,185 @@ mod tests {
 
         let err = run.call(&mut store, ());
         assert!(err.is_err(), "call should be denied without exec cap");
+    }
+
+    #[test]
+    fn exec_spawn_drains_large_output_without_buffering() {
+        let engine = Engine::default();
+        let command =
+            "i=0; while [ $i -lt 1048576 ]; do printf a; i=$((i+1)); done; printf done >&2";
+        let module = compile_exec_module_with_command(&engine, command);
+
+        let mut linker: Linker<StoreData> = Linker::new(&engine);
+        p1::add_to_linker_sync(&mut linker, |data: &mut StoreData| &mut data.wasi)
+            .expect("link wasi");
+        add_to_linker(&mut linker).expect("link hostcalls");
+
+        let wasi = wasmtime_wasi::WasiCtxBuilder::new().arg("exec").build_p1();
+        let mailbox = AgentMailbox::new(mpsc::channel(1).1);
+        let kb = Arc::new(KnowledgeBase::new());
+        let broker = Arc::new(Broker::default());
+        let secrets = Arc::new(SecretStore::new());
+        let audit = AuditSink::new(16);
+        let mut caps = Caps::deny_all();
+        caps.exec = true;
+        let host_state = Arc::new(HostState::new(
+            caps,
+            audit,
+            kb,
+            broker,
+            secrets,
+            Arc::new(HostcallStats::new()),
+            AgentId::new(),
+            "exec-large".to_string(),
+            None,
+            ReadyEmitter::noop(),
+            AuditPolicy::default(),
+        ));
+
+        let store_data = StoreData {
+            wasi,
+            state: host_state,
+            mailbox: Arc::new(mailbox),
+        };
+
+        let mut store = Store::new(&engine, store_data);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate exec module");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("export run");
+
+        let snapshot = snapshot_region(&instance, &mut store, 0);
+        let captured = String::from_utf8(
+            snapshot
+                .into_iter()
+                .take(command.len())
+                .collect::<Vec<u8>>(),
+        )
+        .expect("utf8 command bytes");
+        assert_eq!(captured, command);
+
+        let code = run.call(&mut store, ()).expect("exec call should succeed");
+        assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn exec_spawn_times_out_long_running_command() {
+        let engine = Engine::default();
+        let module = compile_exec_module_with_command(&engine, "sleep 5");
+
+        let mut linker: Linker<StoreData> = Linker::new(&engine);
+        p1::add_to_linker_sync(&mut linker, |data: &mut StoreData| &mut data.wasi)
+            .expect("link wasi");
+        add_to_linker(&mut linker).expect("link hostcalls");
+
+        let wasi = wasmtime_wasi::WasiCtxBuilder::new().arg("exec").build_p1();
+        let mailbox = AgentMailbox::new(mpsc::channel(1).1);
+        let kb = Arc::new(KnowledgeBase::new());
+        let broker = Arc::new(Broker::default());
+        let secrets = Arc::new(SecretStore::new());
+        let audit = AuditSink::new(16);
+        let mut caps = Caps::deny_all();
+        caps.exec = true;
+        let host_state = Arc::new(HostState::new(
+            caps,
+            audit,
+            kb,
+            broker,
+            secrets,
+            Arc::new(HostcallStats::new()),
+            AgentId::new(),
+            "exec-timeout".to_string(),
+            None,
+            ReadyEmitter::noop(),
+            AuditPolicy::default(),
+        ));
+
+        set_exec_timeout_override(1);
+
+        let store_data = StoreData {
+            wasi,
+            state: host_state,
+            mailbox: Arc::new(mailbox),
+        };
+
+        let mut store = Store::new(&engine, store_data);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate exec module");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("export run");
+
+        let start = Instant::now();
+        let code = run.call(&mut store, ()).expect("exec call should complete");
+        clear_exec_timeout_override();
+
+        assert_eq!(code, EXEC_ESIGNAL);
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "exec should time out quickly"
+        );
+    }
+
+    #[test]
+    fn exec_spawn_allows_long_command_without_timeout() {
+        let engine = Engine::default();
+        let module = compile_exec_module_with_command(&engine, "sleep 2");
+
+        let mut linker: Linker<StoreData> = Linker::new(&engine);
+        p1::add_to_linker_sync(&mut linker, |data: &mut StoreData| &mut data.wasi)
+            .expect("link wasi");
+        add_to_linker(&mut linker).expect("link hostcalls");
+
+        let wasi = wasmtime_wasi::WasiCtxBuilder::new().arg("exec").build_p1();
+        let mailbox = AgentMailbox::new(mpsc::channel(1).1);
+        let kb = Arc::new(KnowledgeBase::new());
+        let broker = Arc::new(Broker::default());
+        let secrets = Arc::new(SecretStore::new());
+        let audit = AuditSink::new(16);
+        let mut caps = Caps::deny_all();
+        caps.exec = true;
+        let host_state = Arc::new(HostState::new(
+            caps,
+            audit,
+            kb,
+            broker,
+            secrets,
+            Arc::new(HostcallStats::new()),
+            AgentId::new(),
+            "exec-no-timeout".to_string(),
+            None,
+            ReadyEmitter::noop(),
+            AuditPolicy::default(),
+        ));
+
+        disable_exec_timeout_override();
+
+        let store_data = StoreData {
+            wasi,
+            state: host_state,
+            mailbox: Arc::new(mailbox),
+        };
+
+        let mut store = Store::new(&engine, store_data);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate exec module");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("export run");
+
+        let start = Instant::now();
+        let code = run.call(&mut store, ()).expect("exec call should complete");
+        clear_exec_timeout_override();
+
+        assert_eq!(code, 0);
+        assert!(
+            start.elapsed() >= Duration::from_secs(2),
+            "command should be allowed to run full duration without timeout"
+        );
     }
 }
