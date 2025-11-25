@@ -1,0 +1,29 @@
+version: 0
+name: system_helper
+goals:
+  - "run a host command and/or ask Gemini about your local state"
+
+params:
+  prompt: "Summarize my tmux layout."
+  command: "tmux list-sessions"
+  model: "gemini-1.5-flash"
+
+policy:
+  budget_tokens: 4000
+  timeout_ms: 20000
+  confirm_external: false
+
+nodes:
+  - id: helper
+    use: agent:system_helper
+    with:
+      prompt: "{{params.prompt}}"
+      command: "{{params.command}}"
+      model: "{{params.model}}"
+      output_cap: 8192
+    timeout_ms: 20000
+    budget_tokens: 3000
+
+success:
+  any_of:
+    - helper.out

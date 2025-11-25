@@ -1,0 +1,8 @@
+[capabilities]
+exec = true
+model = true
+fs = ["~/.config", "~/.tmux.conf"]
+net = []
+kb_read = false
+kb_write = false
+time = false

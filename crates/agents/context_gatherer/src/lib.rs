@@ -13,8 +13,19 @@ pub struct ContextRequest {
 }
 
 pub async fn gather(ctx: &AgentContext, req: ContextRequest) -> AgentResult<ContextBundle> {
+    if !events_table_exists(ctx) {
+        info!("events ledger missing; returning fallback snippet");
+        return Ok(ContextBundle {
+            topic: req.topic.clone(),
+            snippets: vec![fallback_snippet(&req)],
+        });
+    }
+
     ctx.ensure_views()?;
-    let snippets = collect_snippets(ctx, &req)?;
+    let mut snippets = collect_snippets(ctx, &req)?;
+    if snippets.is_empty() {
+        snippets.push(fallback_snippet(&req));
+    }
     Ok(ContextBundle {
         topic: req.topic.clone(),
         snippets,
@@ -54,24 +65,6 @@ fn collect_snippets(ctx: &AgentContext, req: &ContextRequest) -> AgentResult<Vec
         }
     }
 
-    if snippets.is_empty() {
-        let fallback = ContextSnippet {
-            title: format!(
-                "No prior events for {}",
-                req.contact
-                    .as_ref()
-                    .map(|c| c.name.as_str())
-                    .unwrap_or("recipient")
-            ),
-            excerpt: format!(
-                "No recorded artifacts mention \"{}\" yet. Consider adding recent notes.",
-                req.topic
-            ),
-            event_id: EventId(0),
-        };
-        info!("context gatherer using fallback snippet");
-        snippets.push(fallback);
-    }
     Ok(snippets)
 }
 
@@ -126,9 +119,38 @@ fn normalize_like_pattern(input: &str) -> String {
     escaped
 }
 
+fn events_table_exists(ctx: &AgentContext) -> bool {
+    ctx.kb()
+        .query_events("SELECT name FROM sqlite_master WHERE type='table' AND name='events' LIMIT 1")
+        .map(|res| !res.rows.is_empty())
+        .unwrap_or(false)
+}
+
+fn fallback_snippet(req: &ContextRequest) -> ContextSnippet {
+    let contact_label = req
+        .contact
+        .as_ref()
+        .map(|c| c.name.as_str())
+        .unwrap_or("recipient");
+
+    ContextSnippet {
+        title: format!("No prior events for {contact_label}"),
+        excerpt: format!(
+            "No recorded artifacts mention \"{}\" yet. Consider adding recent notes.",
+            req.topic
+        ),
+        event_id: EventId(0),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::executor::block_on;
+    use runloop_core::ids::{AgentId, OpeningId, TraceId};
+    use serde_json::json;
+    use std::fs;
+    use std::path::PathBuf;
 
     #[test]
     fn summarise_payload_highlights_topic_window() {
@@ -153,5 +175,52 @@ mod tests {
             clause,
             "LOWER(payload_json) LIKE '%john\\_doe 50\\%%' ESCAPE '\\'"
         );
+    }
+
+    #[test]
+    fn gather_reads_from_events_ledger() -> AgentResult<()> {
+        let kb = runloop_kb::KnowledgeBase::new();
+        let workdir = temp_dir("context-gatherer-ledger");
+
+        let ctx = AgentContext::new(
+            kb.clone(),
+            None,
+            workdir,
+            TraceId::default(),
+            OpeningId::new(),
+            AgentId::new(),
+            None,
+        );
+
+        ctx.propose_event(
+            "contact.upserted",
+            json!({
+                "name": "Jane Example",
+                "email": "jane@example.com",
+                "trust": 0.8
+            }),
+            None,
+        )?;
+
+        let bundle = block_on(gather(
+            &ctx,
+            ContextRequest {
+                topic: "jane".into(),
+                contact: None,
+            },
+        ))?;
+
+        assert!(
+            !bundle.snippets.is_empty(),
+            "expected snippet from events ledger"
+        );
+        assert_ne!(bundle.snippets[0].event_id, EventId(0));
+        Ok(())
+    }
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("{label}-{}", TraceId::new().0));
+        fs::create_dir_all(&path).expect("create temp dir for context gatherer test");
+        path
     }
 }
