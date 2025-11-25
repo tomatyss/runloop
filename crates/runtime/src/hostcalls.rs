@@ -14,6 +14,7 @@ use crate::ready::ReadyEmitter;
 use crate::runtime::AuditPolicy;
 use crate::secrets::SecretProvider;
 use anyhow::anyhow;
+use blake3::Hash as Blake3Hash;
 use parking_lot::Mutex;
 use runloop_core::ids::{AgentId, TraceId};
 use runloop_kb::{AuditDecision, AuditSeverity, CapAuditRecord, KnowledgeBase};
@@ -49,6 +50,11 @@ pub(crate) struct HostState {
     ready: ReadyEmitter,
     last_denial: Arc<Mutex<Option<CapDeniedInfo>>>,
     audit_policy: AuditPolicy,
+}
+
+fn redact_secret_id(secret_id: &str) -> String {
+    let hash: Blake3Hash = blake3::hash(secret_id.as_bytes());
+    format!("secret#{}", hash.to_hex())
 }
 
 impl HostState {
@@ -296,20 +302,21 @@ impl HostState {
     }
 
     fn ensure_secret(&self, secret_id: &str) -> Result<(), WasmtimeError> {
+        let redacted = redact_secret_id(secret_id);
         if self.caps.permits_secret(secret_id) {
             self.allow(
                 "secrets.get",
                 "resolve_secret",
-                secret_id,
-                secret_id.as_bytes(),
+                &redacted,
+                redacted.as_bytes(),
             );
             Ok(())
         } else {
             Err(self.deny(
                 "secrets.get",
                 "resolve_secret",
-                secret_id,
-                secret_id.as_bytes(),
+                &redacted,
+                redacted.as_bytes(),
                 "secret_not_permitted",
             ))
         }
@@ -602,11 +609,12 @@ fn host_resolve_secret(
         write_utf8(&mut caller, ptr, &value)?;
         Ok(value.len() as i32)
     } else {
+        let redacted = redact_secret_id(&secret_id);
         Err(caller.data().state.deny(
             "secrets.get",
             "resolve_secret",
-            &secret_id,
-            secret_id.as_bytes(),
+            &redacted,
+            redacted.as_bytes(),
             "secret_unknown",
         ))
     }

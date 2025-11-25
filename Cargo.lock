@@ -3555,6 +3555,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "blake3",
  "bytes",
  "camino",
  "cfg-if",
@@ -5225,7 +5226,7 @@ dependencies = [
  "bumpalo",
  "leb128fmt",
  "memchr",
- "unicode-width 0.2.0",
+ "unicode-width",
  "wasm-encoder 0.241.2",
 ]
 

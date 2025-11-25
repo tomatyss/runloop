@@ -470,9 +470,15 @@ freeze updates.
 
 ### K2. Secrets handling
 
-- [ ] `secret_id` indirection only; no raw secrets in KB/events.
+- [ ] `secret_id` indirection only; no raw secrets in KB/events. Env provider
+      currently hands the raw env value to agents—replace with real backends or
+      add masking.
 - [ ] Stub “keyring” provider that returns opaque tokens (no real secrets for
-      MVP).
+      MVP). Default provider remains `stub` and currently consults env vars for
+      backward compatibility; add real providers (secret-service|pass|age) and
+      a fail-fast path when secrets are missing.
+- [ ] Fail agent launch when declared secrets are absent unless an explicit
+      dev override is set; avoid silently returning the ID itself.
 
 **DoD:** Search repo for “api_key” yields no values; unit tests pass with fake
 ids.

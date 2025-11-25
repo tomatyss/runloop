@@ -308,11 +308,14 @@ dev = {
 See `docs/security-model.md` for secret-store details. Ops tasks:
 
 > **Status:** `rlp secrets ...` tooling is being wired up; use your platform's
-> secret store CLI until the native commands ship.
+> secret store CLI until the native commands ship. Default provider is
+> `stub` (in-memory, for dev) but it will consult environment variables first
+> to preserve existing env-only setups. Prefer a real backend for anything
+> sensitive.
 
-- `rlp secrets init --backend=secret-service|pass|age`
-- `rlp secrets put runloop/mail/smtp_api_key` (reads from stdin)
-- `rlp secrets list` and `rlp secrets delete` for maintenance
+- Planned: `rlp secrets init --backend=secret-service|pass|age`
+- Planned: `rlp secrets put runloop/mail/smtp_api_key` (reads from stdin)
+- Planned: `rlp secrets list` and `rlp secrets delete` for maintenance
 
 ## 7. Observability _(summary)_
 
