@@ -484,15 +484,16 @@ async fn handle_route(args: RouteArgs) -> Result<i32, CliError> {
 
     let timeout_ms = resolve_route_timeout(args.timeout_ms)?;
     let timeout = Duration::from_millis(timeout_ms);
-    let classify = async {
+    let prompt_for_task = prompt.clone();
+    let classify = task::spawn_blocking(move || -> Result<RouterClassification, CliError> {
         let config = Config::load()?;
         let router = Router::from_config(&config.router);
-        let classification = router.classify(&prompt);
-        Result::<RouterClassification, CliError>::Ok(classification)
-    };
+        Ok(router.classify(&prompt_for_task))
+    });
 
     let classification = match time::timeout(timeout, classify).await {
-        Ok(result) => result?,
+        Ok(join_result) => join_result
+            .map_err(|err| CliError::ShellIntegration(format!("router task panicked: {err}")))??,
         Err(_) => {
             eprintln!("router timeout after {timeout_ms} ms");
             return Ok(ROUTE_EXIT_CODE_TIMEOUT);
