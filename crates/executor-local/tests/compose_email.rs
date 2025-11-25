@@ -8,7 +8,6 @@ use runloop_agents_common::{ActionDecision, ActionProposal, AgentResult, Confirm
 use runloop_core::Config;
 use runloop_core::config::{ModelProvider, ModelRoute, ProviderKind};
 use runloop_executor_local::build_executor;
-use runloop_model_broker::SecretResolver;
 use runloop_openings::{Runner, parse_opening_str};
 use tempfile::tempdir;
 
@@ -18,14 +17,6 @@ struct TestConfirmation;
 impl ConfirmationProvider for TestConfirmation {
     async fn confirm(&self, _proposal: ActionProposal) -> AgentResult<ActionDecision> {
         Ok(ActionDecision::approved(Some("test".into())))
-    }
-}
-
-struct TestSecretResolver;
-
-impl SecretResolver for TestSecretResolver {
-    fn resolve(&self, _secret_id: &str) -> Option<String> {
-        None
     }
 }
 
@@ -78,10 +69,8 @@ async fn compose_email_opening_runs_end_to_end() {
     }];
 
     let confirmation = Arc::new(TestConfirmation);
-    let secrets: Arc<dyn SecretResolver> = Arc::new(TestSecretResolver);
     let registry = Arc::new(AgentRegistry::new(config.agents.search_dirs.clone()));
-    let executor =
-        build_executor(config.clone(), confirmation, secrets, registry).expect("build executor");
+    let executor = build_executor(config.clone(), confirmation, registry).expect("build executor");
 
     let opening = parse_opening_str(&opening_yaml).expect("parse opening");
     let runner = Runner::new(opening, executor);

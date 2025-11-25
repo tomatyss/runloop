@@ -31,7 +31,6 @@ use runloop_executor_local::{
 use runloop_kb::{
     EventRecord, KbBackupReport, KnowledgeBase, Materializer, TraceStore, VerifyReport,
 };
-use runloop_model_broker::SecretResolver;
 use runloop_openings::{
     LadderHop, NodeKind, Opening, ReplayMismatch, RunReport, RunTrace, Runner, RunnerError,
     SchemaHintFragment, parse_opening_str, replay,
@@ -46,7 +45,6 @@ use shell::{
     disable as disable_shell, enable as enable_shell,
 };
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::env;
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -1688,37 +1686,9 @@ fn build_executor(config: Config) -> Result<Arc<LocalExecutor>, CliError> {
     let confirmation = Arc::new(CliConfirmationProvider::new(
         config.security.confirm_external_actions,
     ));
-    let secrets = Arc::new(CliSecretResolver);
     let registry = Arc::new(AgentRegistry::new(config.agents.search_dirs.clone()));
-    let executor = build_local_executor(config, confirmation, secrets, registry)?;
+    let executor = build_local_executor(config, confirmation, registry)?;
     Ok(executor)
-}
-
-struct CliSecretResolver;
-
-fn normalize_secret_env_key(secret_id: &str) -> String {
-    secret_id
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                ch.to_ascii_uppercase()
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
-fn resolve_secret_from_env(secret_id: &str) -> Option<String> {
-    env::var(secret_id)
-        .or_else(|_| env::var(normalize_secret_env_key(secret_id)))
-        .ok()
-}
-
-impl SecretResolver for CliSecretResolver {
-    fn resolve(&self, secret_id: &str) -> Option<String> {
-        resolve_secret_from_env(secret_id)
-    }
 }
 
 struct CliConfirmationProvider {

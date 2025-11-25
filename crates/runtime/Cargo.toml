@@ -36,6 +36,7 @@ futures-util = "0.3"
 url = "2.5"
 sysinfo = { version = "0.30", default-features = false }
 anyhow = "1.0"
+blake3 = "1.5"
 
 
 [features]
