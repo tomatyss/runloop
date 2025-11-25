@@ -6,7 +6,7 @@ use rand::{Rng, SeedableRng};
 use runloop_core::{AgentId, OpeningId, TraceId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use thiserror::Error;
@@ -270,6 +270,7 @@ where
                 .or_default()
                 .push(edge);
         }
+        let mut blocked_predicates: HashSet<String> = HashSet::new();
 
         let mut queue = VecDeque::new();
         for node in &self.opening.nodes {
@@ -394,8 +395,13 @@ where
                                     })
                                     .unwrap_or(true);
 
+                                if !predicate_passed && edge.predicate.is_some() {
+                                    blocked_predicates.insert(edge.to.node.clone());
+                                }
+
                                 if predicate_passed
                                     && let Some(values) = outputs.ports.get(&edge.from.port)
+                                    && !values.is_empty()
                                 {
                                     let entry =
                                         input_buffers.entry(edge.to.node.clone()).or_default();
@@ -409,14 +415,22 @@ where
                                 {
                                     *counter -= 1;
                                     if *counter == 0 {
-                                        let delivered = input_buffers
+                                        let blocked = blocked_predicates.contains(&edge.to.node);
+                                        let downstream_delivered = input_buffers
                                             .get(&edge.to.node)
                                             .map(|inputs| !inputs.ports.is_empty())
                                             .unwrap_or(false);
                                         let had_inbound =
                                             inbound_total.get(&edge.to.node).copied().unwrap_or(0)
                                                 > 0;
-                                        if delivered || !had_inbound {
+
+                                        if blocked {
+                                            if let Some(record) = records.get_mut(&edge.to.node) {
+                                                record.state = NodeState::Skipped;
+                                            }
+                                            processed.insert(edge.to.node.clone(), false);
+                                            blocked_predicates.remove(&edge.to.node);
+                                        } else if downstream_delivered || !had_inbound {
                                             queue.push_back(edge.to.node.clone());
                                         } else if let Some(record) = records.get_mut(&edge.to.node)
                                         {
