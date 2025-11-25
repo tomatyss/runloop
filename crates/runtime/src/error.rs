@@ -134,6 +134,8 @@ pub enum Error {
     Config(String),
     #[error("capability override error: {0}")]
     Override(String),
+    #[error("agent {agent} requires secrets that cannot be resolved: {secrets:?}")]
+    SecretsMissing { agent: String, secrets: Vec<String> },
 }
 
 impl Error {

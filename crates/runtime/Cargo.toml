@@ -37,6 +37,8 @@ url = "2.5"
 sysinfo = { version = "0.30", default-features = false }
 anyhow = "1.0"
 blake3 = "1.5"
+uuid = { version = "1.8", features = ["v4"] }
+data-encoding = "2.6"
 
 
 [features]

@@ -129,6 +129,7 @@ pub fn build_executor(
         .model_broker(broker.clone())
         .secrets(secrets)
         .audit_policy(audit_policy)
+        .allow_missing_secrets(config.allow_missing_secrets())
         .build()?;
 
     Ok(Arc::new(LocalExecutor::new(
