@@ -579,14 +579,14 @@ cleanly.
 
 **O2. Zsh integration (preferred path)**
 
-- [ ] Ship a `runloop.zsh` snippet (e.g. under `packaging/shell/`) that defines
+- [x] Ship a `runloop.zsh` snippet (e.g. under `packaging/shell/`) that defines
       a ZLE widget (`runloop-accept-line`) hooking `accept-line`, inspects
       `$BUFFER`, and calls `rlp route` to classify.
-- [ ] If route=`shell`, delegate to the builtin `accept-line`; if route=`agent`,
+- [x] If route=`shell`, delegate to the builtin `accept-line`; if route=`agent`,
       invoke the default opening via `rlp run ... --params '{"prompt": "..."}'`
       (or a future `rlp prompt`), then clear the line instead of executing it in
       the shell.
-- [ ] Guard with an env toggle (e.g. `RUNLOOP_ROUTER_DISABLE=1`) and a small
+- [x] Guard with an env toggle (e.g. `RUNLOOP_ROUTER_DISABLE=1`) and a small
       `:runloop-off`/`:runloop-on` helper so users can temporarily bypass
       routing.
 

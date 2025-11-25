@@ -1,0 +1,71 @@
+version: 0
+name: compose_email
+goals:
+  - "send a concise email to john about Q4 plan"
+params:
+  recipient: "john"
+  topic: "Q4 plan"
+
+policy:
+  budget_tokens: 8000
+  timeout_ms: 30000
+  confirm_external: true
+
+nodes:
+  - id: contacts
+    use: agent:contact_resolver
+    with:
+      query: "{{params.recipient}}"
+    retry:
+      max_attempts: 2
+      backoff_ms: 2500
+    timeout_ms: 5000
+
+  - id: context
+    use: agent:context_gatherer
+    with:
+      topic: "{{params.topic}}"
+
+  - id: draft
+    use: agent:writer
+    with:
+      model: "mixtral-8x7b"
+      topic: "{{params.topic}}"
+      tone: "neutral-friendly"
+    timeout_ms: 15000
+    budget_tokens: 4000
+
+  - id: review
+    use: agent:critic
+
+  - id: send
+    use: agent:mailer
+    with:
+      require_human_confirm: true
+      topic: "{{params.topic}}"
+
+edges:
+  - from: contacts.out
+    to: draft.recipients
+  - from: contacts.out
+    to: context.contact
+  - from: context.out
+    to: draft.context
+  - from: draft.out
+    to: review.in
+  - from: draft.out
+    to: send.draft
+  - from: review.review
+    to: send.review
+  - from: contacts.out
+    to: send.contact
+  - from: review.ok==true
+    to: send.in
+
+success:
+  any_of:
+    - review.ok == true
+
+artifacts:
+  save:
+    - draft.out
