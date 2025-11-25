@@ -43,6 +43,23 @@
 - Overrides may only **reference** existing secret IDs; agents cannot read
   arbitrary secrets without explicit capability grants.
 
+### Fail-fast secret validation
+
+Agent launch validates that all declared secrets (in `policy.caps`) can be
+resolved **before** loading the WASM module. If any secret cannot be resolved:
+
+- **Default behavior** (`security.testing.allow_missing_secrets = false`): agent
+  launch fails immediately with `Error::SecretsMissing`, listing the missing
+  secret IDs.
+- **Development override** (`security.testing.allow_missing_secrets = true`):
+  agent launch proceeds with a warning. Use only for local development/testing.
+
+Environment variable override: `RUNLOOP__SECURITY__TESTING__ALLOW_MISSING_SECRETS=1`
+
+This validation runs after secret IDs are pre-registered with the provider
+(`allow()`), so stub/fixture providers that rely on pre-registration work
+correctly.
+
 ## Provenance & Audit _(normative)_
 
 - Every agent message carries RMP provenance metadata (`model`, `provider`,

@@ -17,6 +17,7 @@ use tokio::io::AsyncWrite;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle as TokioJoinHandle;
+use tracing::warn;
 use wasmtime::Error as WasmtimeError;
 use wasmtime::{Engine, Linker, Store};
 use wasmtime_wasi::cli::{IsTerminal, StdoutStream};
@@ -91,6 +92,8 @@ struct RuntimeInner {
     async_spawner: Option<AsyncSpawner>,
     ready_timeout: Duration,
     audit_policy: AuditPolicy,
+    /// When false (default), agent launch fails if declared secrets cannot be resolved.
+    allow_missing_secrets: bool,
 }
 
 struct AsyncSpawner {
@@ -194,6 +197,7 @@ pub struct RuntimeBuilder {
     async_handle: Option<TokioHandle>,
     ready_timeout: Duration,
     audit_policy: AuditPolicy,
+    allow_missing_secrets: bool,
 }
 
 impl RuntimeBuilder {
@@ -213,6 +217,7 @@ impl RuntimeBuilder {
             async_handle: None,
             ready_timeout: default_ready_timeout(),
             audit_policy: AuditPolicy::default(),
+            allow_missing_secrets: false,
         }
     }
 
@@ -269,6 +274,14 @@ impl RuntimeBuilder {
         self
     }
 
+    /// Allow agent launch to proceed even if declared secrets cannot be resolved.
+    /// This is intended for development/testing only.
+    #[must_use]
+    pub fn allow_missing_secrets(mut self, allow: bool) -> Self {
+        self.allow_missing_secrets = allow;
+        self
+    }
+
     pub fn build(self) -> Result<Runtime, Error> {
         let mut config = wasmtime::Config::default();
         config
@@ -313,6 +326,7 @@ impl RuntimeBuilder {
             async_spawner,
             ready_timeout: self.ready_timeout,
             audit_policy: self.audit_policy,
+            allow_missing_secrets: self.allow_missing_secrets,
         };
 
         Ok(Runtime {
@@ -365,6 +379,46 @@ impl Runtime {
             return Err(Error::AgentAlreadyExists(id.to_string()));
         }
 
+        let identity_label = match spec.identity.variant() {
+            Some(var) => format!("{}:{var}", spec.identity.name()),
+            None => spec.identity.name().to_string(),
+        };
+
+        // Pre-register declared secret identifiers with the active provider so
+        // hostcall resolution can succeed without leaking values.
+        for secret_id in &spec.caps.secrets {
+            self.inner.secrets.allow(secret_id);
+        }
+
+        // Validate declared secrets can be resolved. This check runs AFTER
+        // allow() so that stub/fixture providers that rely on pre-registration
+        // have a chance to set up. When allow_missing_secrets is false (default),
+        // fail fast if any secrets cannot be resolved.
+        //
+        // This validation happens early (before module loading) to fail fast
+        // with a clear error rather than a generic wasm load failure.
+        let mut missing_secrets = Vec::new();
+        for secret_id in &spec.caps.secrets {
+            if self.inner.secrets.resolve(secret_id).is_none() {
+                missing_secrets.push(secret_id.clone());
+            }
+        }
+
+        if !missing_secrets.is_empty() {
+            if self.inner.allow_missing_secrets {
+                warn!(
+                    agent = %identity_label,
+                    missing = ?missing_secrets,
+                    "agent launch proceeding with missing secrets (allow_missing_secrets=true)"
+                );
+            } else {
+                return Err(Error::SecretsMissing {
+                    agent: identity_label,
+                    secrets: missing_secrets,
+                });
+            }
+        }
+
         let wasm_path = spec.wasm_path.clone();
         let wasm_path_thread = wasm_path.clone();
         let module = self
@@ -380,16 +434,6 @@ impl Runtime {
         let (inbox_tx, inbox_rx) = mpsc::channel::<AgentEnvelope>(32);
         let inbox_capacity = inbox_tx.max_capacity();
         let mailbox = Arc::new(AgentMailbox::new(inbox_rx));
-        let identity_label = match spec.identity.variant() {
-            Some(var) => format!("{}:{var}", spec.identity.name()),
-            None => spec.identity.name().to_string(),
-        };
-
-        // Pre-register declared secret identifiers with the active provider so
-        // hostcall resolution can succeed without leaking values.
-        for secret_id in &spec.caps.secrets {
-            self.inner.secrets.allow(secret_id);
-        }
 
         let host_state = Arc::new(HostState::new(
             spec.caps.clone(),
@@ -1098,6 +1142,7 @@ impl FailureSummary {
 #[cfg(test)]
 mod runtime_tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     struct TestProvider(&'static str);
 
@@ -1116,5 +1161,154 @@ mod runtime_tests {
         let updated: Arc<dyn SecretProvider> = Arc::new(TestProvider("beta"));
         resolver.set(Arc::clone(&updated));
         assert_eq!(resolver.resolve("any"), Some("beta".into()));
+    }
+
+    // Test provider that only resolves specific secret IDs
+    struct SelectiveProvider {
+        secrets: BTreeMap<String, String>,
+    }
+
+    impl SelectiveProvider {
+        fn new() -> Self {
+            Self {
+                secrets: BTreeMap::new(),
+            }
+        }
+
+        fn with_secret(mut self, id: &str, value: &str) -> Self {
+            self.secrets.insert(id.to_string(), value.to_string());
+            self
+        }
+    }
+
+    impl SecretProvider for SelectiveProvider {
+        fn resolve(&self, secret_id: &str) -> Option<String> {
+            self.secrets.get(secret_id).cloned()
+        }
+    }
+
+    #[test]
+    fn allow_missing_secrets_defaults_to_false() {
+        let builder = RuntimeBuilder::new();
+        let runtime = builder.build().expect("build runtime");
+        assert!(!runtime.inner.allow_missing_secrets);
+    }
+
+    #[test]
+    fn allow_missing_secrets_can_be_enabled() {
+        let runtime = RuntimeBuilder::new()
+            .allow_missing_secrets(true)
+            .build()
+            .expect("build runtime");
+        assert!(runtime.inner.allow_missing_secrets);
+    }
+
+    fn make_test_spec(caps: Caps) -> AgentSpec {
+        AgentSpec {
+            identity: AgentIdentity::new("test-agent"),
+            wasm_path: std::path::PathBuf::from("/nonexistent.wasm"),
+            policy_path: std::path::PathBuf::from("/nonexistent.caps"),
+            caps,
+            argv: vec![],
+            env: BTreeMap::new(),
+            cwd: None,
+            stdout_capacity: 1024,
+            stderr_capacity: 1024,
+            working_dir: None,
+            spawn_ready_timeout_ms: None,
+        }
+    }
+
+    #[test]
+    fn spawn_fails_fast_when_secrets_missing() {
+        // Provider that has no secrets
+        let provider: Arc<dyn SecretProvider> = Arc::new(SelectiveProvider::new());
+        let runtime = RuntimeBuilder::new()
+            .secrets(provider)
+            .allow_missing_secrets(false)
+            .build()
+            .expect("build runtime");
+
+        // Create a spec that declares a secret
+        let mut caps = Caps::default();
+        caps.secrets.insert("missing_secret".to_string());
+
+        let spec = make_test_spec(caps);
+
+        let result = runtime.spawn(spec);
+        match result {
+            Err(Error::SecretsMissing { agent, secrets }) => {
+                assert_eq!(agent, "test-agent");
+                assert!(secrets.contains(&"missing_secret".to_string()));
+            }
+            Err(other) => {
+                // May fail for other reasons (e.g., wasm file not found) depending
+                // on when validation occurs. The important thing is it doesn't succeed.
+                // In practice, secrets validation happens before module loading.
+                panic!("expected SecretsMissing error, got: {:?}", other);
+            }
+            Ok(_) => panic!("expected spawn to fail with missing secrets"),
+        }
+    }
+
+    #[test]
+    fn spawn_succeeds_when_secrets_present() {
+        // Provider that has the required secret
+        let provider: Arc<dyn SecretProvider> =
+            Arc::new(SelectiveProvider::new().with_secret("my_api_key", "secret_value"));
+        let runtime = RuntimeBuilder::new()
+            .secrets(provider)
+            .allow_missing_secrets(false)
+            .build()
+            .expect("build runtime");
+
+        // Create a spec that declares the secret we have
+        let mut caps = Caps::default();
+        caps.secrets.insert("my_api_key".to_string());
+
+        let spec = make_test_spec(caps);
+
+        // This will fail because the wasm file doesn't exist, but it should NOT
+        // fail with SecretsMissing - that validation should pass.
+        let result = runtime.spawn(spec);
+        match result {
+            Err(Error::SecretsMissing { .. }) => {
+                panic!("secrets validation should have passed");
+            }
+            Err(_) => {
+                // Expected: fails for some other reason (wasm not found)
+            }
+            Ok(_) => {
+                // Unexpected but acceptable if somehow the spawn succeeded
+            }
+        }
+    }
+
+    #[test]
+    fn spawn_proceeds_with_missing_secrets_when_allowed() {
+        // Provider that has no secrets
+        let provider: Arc<dyn SecretProvider> = Arc::new(SelectiveProvider::new());
+        let runtime = RuntimeBuilder::new()
+            .secrets(provider)
+            .allow_missing_secrets(true) // Allow missing secrets
+            .build()
+            .expect("build runtime");
+
+        // Create a spec that declares a secret we don't have
+        let mut caps = Caps::default();
+        caps.secrets.insert("missing_secret".to_string());
+
+        let spec = make_test_spec(caps);
+
+        // Should NOT fail with SecretsMissing since we allow missing secrets
+        let result = runtime.spawn(spec);
+        match result {
+            Err(Error::SecretsMissing { .. }) => {
+                panic!("should not fail with SecretsMissing when allow_missing_secrets=true");
+            }
+            _ => {
+                // Expected: either succeeds or fails for another reason
+            }
+        }
     }
 }

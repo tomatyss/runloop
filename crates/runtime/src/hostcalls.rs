@@ -608,6 +608,11 @@ fn host_resolve_secret(
 ) -> Result<i32, WasmtimeError> {
     let secret_id = read_utf8(&mut caller, ptr, len)?;
     caller.data().state.ensure_secret(&secret_id)?;
+
+    // Resolve the secret value from the provider.
+    // NOTE: For MVP, we return the real value to maintain backward compatibility.
+    // Future work will introduce opaque handles via SecretHandleStore for sinks
+    // that can dereference them (e.g., HTTP auth headers in net hostcalls).
     if let Some(value) = caller.data().state.secrets.resolve(&secret_id) {
         write_utf8(&mut caller, ptr, &value)?;
         Ok(value.len() as i32)

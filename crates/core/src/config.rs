@@ -247,6 +247,16 @@ impl Config {
         Ok(())
     }
 
+    /// Returns true if missing secrets should be tolerated during agent launch.
+    /// Intended for development/testing only.
+    pub fn allow_missing_secrets(&self) -> bool {
+        self.security
+            .testing
+            .as_ref()
+            .map(|t| t.allow_missing_secrets)
+            .unwrap_or(false)
+    }
+
     fn expand_paths(&mut self) {
         self.runtime.workdir = expand_path(&self.runtime.workdir);
         self.runtime.sockets_dir = expand_path(&self.runtime.sockets_dir);
@@ -651,12 +661,17 @@ impl Default for SecretsConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct TestingConfig {
     #[serde(default)]
     pub broker_mode: Option<String>,
     #[serde(default)]
     pub broker_seed: Option<u64>,
+    /// When true, agent launch proceeds even if declared secrets are absent.
+    /// This is intended for development/testing only; production deployments
+    /// should keep this false (the default).
+    #[serde(default)]
+    pub allow_missing_secrets: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1303,7 +1318,9 @@ fn known_keys_for_path(path: &Path) -> BTreeSet<&'static str> {
             "allow_list",
             "default_ttl",
         ]),
-        "security/testing" => BTreeSet::from(["broker_mode", "broker_seed"]),
+        "security/testing" => {
+            BTreeSet::from(["broker_mode", "broker_seed", "allow_missing_secrets"])
+        }
         "router" => BTreeSet::from([
             "fastpath_shell",
             "default_opening",
