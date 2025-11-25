@@ -61,8 +61,9 @@ discover_agents
 
 echo "building wasm agents..."
 for agent_dir in "${AGENT_DIRS[@]}"; do
-  agent="$(basename "$agent_dir")"
-  bin_name="${agent}_wasm"
+  agent_dir_name="$(basename "$agent_dir")"
+  agent_name="${agent_dir_name//-/_}"
+  bin_name="${agent_name}_wasm"
   cargo build --release \
     --target "$WASM_TARGET" \
     --manifest-path "$agent_dir/Cargo.toml" \
@@ -71,16 +72,17 @@ done
 
 echo "copying artifacts..."
 for agent_dir in "${AGENT_DIRS[@]}"; do
-  agent="$(basename "$agent_dir")"
-  bin_name="${agent}_wasm"
+  agent_dir_name="$(basename "$agent_dir")"
+  agent_name="${agent_dir_name//-/_}"
+  bin_name="${agent_name}_wasm"
   src="$TARGET_DIR/${bin_name}.wasm"
-  dest_dir="$ROOT/agents/$agent/bin"
-  dest="$dest_dir/${agent}.wasm"
-  manifest="$ROOT/agents/$agent/manifest.toml"
-  tools="$ROOT/agents/$agent/tools.json"
+  dest_dir="$ROOT/agents/$agent_name/bin"
+  dest="$dest_dir/${agent_name}.wasm"
+  manifest="$ROOT/agents/$agent_name/manifest.toml"
+  tools="$ROOT/agents/$agent_name/tools.json"
 
   if [[ ! -f "$manifest" ]]; then
-    echo "manifest missing for agent $agent at $manifest" >&2
+    echo "manifest missing for agent $agent_name at $manifest" >&2
     exit 1
   fi
 
@@ -93,7 +95,7 @@ for agent_dir in "${AGENT_DIRS[@]}"; do
     echo "failed to compute blake3 digest for $dest" >&2
     exit 1
   fi
-  perl -0pi -e "s#entry_wasm = \\{.*?\\}#entry_wasm = { path = \"bin/${agent}.wasm\", blake3 = \"$digest\" }#s" \
+  perl -0pi -e "s#entry_wasm = \\{.*?\\}#entry_wasm = { path = \"bin/${agent_name}.wasm\", blake3 = \"$digest\" }#s" \
     "$manifest"
 
   if [[ -f "$tools" ]]; then

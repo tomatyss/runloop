@@ -1,3 +1,4 @@
-# Example Openings (Placeholder)
+# Example Openings
 
-TODO: Add YAML examples demonstrating multi-agent plans.
+- `compose_email.yaml` — canonical multi-agent flow (contacts → context → draft → critic → mailer).
+- `system_helper.yaml` — single-node helper that can run a host command and/or ask Gemini.

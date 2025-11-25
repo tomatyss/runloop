@@ -1,0 +1,40 @@
+[agent]
+name = "system_helper"
+version = "0.1.0"
+kind = "wasm32-wasip1"
+
+entry_wasm = { path = "bin/system_helper.wasm", blake3 = "9939052ef1466bbde7dbd0a378057095236ce2598117608c0fe428b4f02a13d6" }
+
+[ports]
+in = ["intent.system_helper.run.v1"]
+out = ["artifact.system_helper.result.v1"]
+
+[caps]
+file = "policy.caps"
+
+[schemas.with]
+type = "object"
+additionalProperties = false
+
+[schemas.with.properties.prompt]
+type = "string"
+minLength = 1
+
+[schemas.with.properties.command]
+type = "string"
+minLength = 1
+
+[schemas.with.properties.model]
+type = "string"
+minLength = 1
+
+[schemas.with.properties.output_cap]
+type = "integer"
+minimum = 1024
+maximum = 1048576
+
+[[schemas.with.anyOf]]
+required = ["prompt"]
+
+[[schemas.with.anyOf]]
+required = ["command"]
