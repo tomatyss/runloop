@@ -329,6 +329,103 @@ success:
     }
 
     #[tokio::test]
+    async fn predicate_guard_blocks_when_other_inputs_exist() {
+        let yaml = r#"
+version: 0
+name: gated
+nodes:
+  - id: review
+    use: agent:critic
+  - id: send
+    use: agent:mailer
+edges:
+  - from: review.review
+    to: send.review
+  - from: review.ok==true
+    to: send.in
+"#;
+
+        let opening = parse_opening_str(yaml).expect("parse opening");
+
+        let mut responses = HashMap::new();
+        let mut review_outputs = NodeOutputs::default();
+        review_outputs.push("review", JsonValue::String("draft needs edits".into()));
+        review_outputs.push("ok", JsonValue::Bool(false));
+        responses.insert("review".into(), NodeExecution::Completed(review_outputs));
+        responses.insert(
+            "send".into(),
+            NodeExecution::Completed(NodeOutputs::default()),
+        );
+
+        let executor = Arc::new(MockExecutor::new(responses));
+        let runner = Runner::new(opening, executor);
+        let report = runner.run().await.expect("run opening");
+
+        let send_record = report
+            .node_records
+            .iter()
+            .find(|record| record.node_id == "send")
+            .expect("send record");
+        assert!(
+            matches!(send_record.state, NodeState::Skipped),
+            "send should stay gated when predicate is false"
+        );
+        assert!(
+            send_record.attempts.is_empty(),
+            "gated node should not execute"
+        );
+    }
+
+    #[tokio::test]
+    async fn multi_input_node_still_runs_with_partial_data() {
+        let yaml = r#"
+version: 0
+name: multi_in_partial
+nodes:
+  - id: a
+    use: agent:a
+  - id: b
+    use: agent:b
+  - id: sink
+    use: agent:sink
+edges:
+  - from: a.out
+    to: sink.a
+  - from: b.out
+    to: sink.b
+success:
+  all_of:
+    - sink.ok == true
+"#;
+
+        let opening = parse_opening_str(yaml).expect("parse opening");
+
+        let mut responses = HashMap::new();
+        let mut a_outputs = NodeOutputs::default();
+        a_outputs.push("out", JsonValue::String("payload".into()));
+        responses.insert("a".into(), NodeExecution::Completed(a_outputs));
+        responses.insert("b".into(), NodeExecution::Completed(NodeOutputs::default()));
+        let mut sink_outputs = NodeOutputs::default();
+        sink_outputs.push("ok", JsonValue::Bool(true));
+        responses.insert("sink".into(), NodeExecution::Completed(sink_outputs));
+
+        let executor = Arc::new(MockExecutor::new(responses));
+        let runner = Runner::new(opening, executor);
+        let report = runner.run().await.expect("run opening");
+
+        let sink_record = report
+            .node_records
+            .iter()
+            .find(|record| record.node_id == "sink")
+            .expect("sink record");
+        assert!(
+            matches!(sink_record.state, NodeState::Succeeded),
+            "sink should execute when at least one input delivers"
+        );
+        assert!(report.trace.success, "success condition should pass");
+    }
+
+    #[tokio::test]
     async fn replay_handles_node_failure() {
         let yaml = r#"
 version: 0

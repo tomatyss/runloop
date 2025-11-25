@@ -89,6 +89,13 @@ unavailable. It fails fast with guidance to start the daemon (or re-run with
   and config-provided values.
 - Provider `secret_id` values resolve at runtime via the configured secret
   store; raw API keys should never be stored in YAML.
+- To use Gemini, add a provider entry with `kind: http_gemini`, `base_url:
+  https://generativelanguage.googleapis.com`, and a `secret_id` such as
+  `runloop/models/gemini` (the runtime will also look for the environment
+  variable `RUNLOOP_MODELS_GEMINI`). Agents that invoke Gemini still need
+  `model = true` in `policy.caps`; automation agents that shell out (e.g., to
+  manage tmux) also require `exec = true` plus explicit filesystem whitelists
+  for any touched configs.
 
 ### 1.4 Runtime readiness gate _(normative)_
 

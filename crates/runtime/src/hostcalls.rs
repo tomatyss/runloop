@@ -469,6 +469,9 @@ pub(crate) fn add_to_linker(linker: &mut Linker<StoreData>) -> Result<(), Error>
         .func_wrap("runloop", "exec_spawn", host_exec_spawn)
         .map_err(|err| Error::SpawnFailed(err.to_string()))?;
     linker
+        .func_wrap("runloop", "exec_spawn_capture", host_exec_spawn_capture)
+        .map_err(|err| Error::SpawnFailed(err.to_string()))?;
+    linker
         .func_wrap("runloop", "notify_ready", host_notify_ready)
         .map_err(|err| Error::SpawnFailed(err.to_string()))?;
     linker
@@ -632,6 +635,8 @@ const EXEC_TIMEOUT_OVERRIDE_DISABLE: u64 = 0;
 const EXEC_EINVAL: i32 = -1;
 const EXEC_ESPAWN: i32 = -2;
 const EXEC_ESIGNAL: i32 = -3;
+const EXEC_ENOSPACE: i32 = -4;
+const EXEC_CAPTURE_MAX_BUF: usize = 64 * 1024;
 
 fn exec_timeout() -> Option<Duration> {
     EXEC_TIMEOUT_OVERRIDE_SECS.with(|cell| {
@@ -671,10 +676,11 @@ fn disable_exec_timeout_override() {
 fn drain_stream_preview(
     mut reader: impl Read + Send + 'static,
     limit: usize,
-) -> thread::JoinHandle<(Vec<u8>, io::Result<()>)> {
+) -> thread::JoinHandle<(Vec<u8>, io::Result<()>, bool)> {
     thread::spawn(move || {
         let mut preview = Vec::new();
         let mut buf = [0u8; 4096];
+        let mut truncated = false;
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
@@ -683,13 +689,18 @@ fn drain_stream_preview(
                     if remaining > 0 {
                         let take = remaining.min(n);
                         preview.extend_from_slice(&buf[..take]);
+                        if n > take {
+                            truncated = true;
+                        }
+                    } else {
+                        truncated = true;
                     }
                 }
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
-                Err(err) => return (preview, Err(err)),
+                Err(err) => return (preview, Err(err), truncated),
             }
         }
-        (preview, Ok(()))
+        (preview, Ok(()), truncated)
     })
 }
 
@@ -760,11 +771,11 @@ fn host_exec_spawn(
 
     if let Some(handle) = stdout_handle {
         match handle.join() {
-            Ok((preview, Ok(()))) if !preview.is_empty() => {
+            Ok((preview, Ok(()), truncated)) if !preview.is_empty() => {
                 let stdout = String::from_utf8_lossy(&preview);
-                tracing::debug!(%command, stdout=%stdout, "exec stdout");
+                tracing::debug!(%command, stdout=%stdout, truncated, "exec stdout");
             }
-            Ok((_, Err(error))) => {
+            Ok((_, Err(error), _)) => {
                 tracing::warn!(%command, %error, "failed to read exec stdout");
             }
             Err(_) => tracing::warn!(%command, "exec stdout drain panicked"),
@@ -773,11 +784,11 @@ fn host_exec_spawn(
     }
     if let Some(handle) = stderr_handle {
         match handle.join() {
-            Ok((preview, Ok(()))) if !preview.is_empty() => {
+            Ok((preview, Ok(()), truncated)) if !preview.is_empty() => {
                 let stderr = String::from_utf8_lossy(&preview);
-                tracing::debug!(%command, stderr=%stderr, "exec stderr");
+                tracing::debug!(%command, stderr=%stderr, truncated, "exec stderr");
             }
-            Ok((_, Err(error))) => {
+            Ok((_, Err(error), _)) => {
                 tracing::warn!(%command, %error, "failed to read exec stderr");
             }
             Err(_) => tracing::warn!(%command, "exec stderr drain panicked"),
@@ -789,6 +800,158 @@ fn host_exec_spawn(
         Some(code) => code,
         None => {
             tracing::warn!(%command, "exec terminated by signal");
+            return Ok(EXEC_ESIGNAL);
+        }
+    };
+
+    Ok(status)
+}
+
+fn host_exec_spawn_capture(
+    mut caller: Caller<'_, StoreData>,
+    ptr: i32,
+    len: i32,
+    stdout_ptr: i32,
+    stdout_cap: i32,
+    stderr_ptr: i32,
+    stderr_cap: i32,
+) -> Result<i32, WasmtimeError> {
+    caller.data().state.ensure_exec()?;
+    if len <= 0 || stdout_cap < 0 || stderr_cap < 0 {
+        return Ok(EXEC_EINVAL);
+    }
+
+    if (stdout_cap > 0 && stdout_cap < 4) || (stderr_cap > 0 && stderr_cap < 4) {
+        return Ok(EXEC_ENOSPACE);
+    }
+
+    if stdout_cap as usize > EXEC_CAPTURE_MAX_BUF || stderr_cap as usize > EXEC_CAPTURE_MAX_BUF {
+        return Ok(EXEC_ENOSPACE);
+    }
+
+    let command = read_utf8(&mut caller, ptr, len)?;
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
+        .arg(&command)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            tracing::warn!(%command, %error, "exec capture spawn failed");
+            return Ok(EXEC_ESPAWN);
+        }
+    };
+
+    let stdout_limit = stdout_cap.saturating_sub(4) as usize;
+    let stderr_limit = stderr_cap.saturating_sub(4) as usize;
+    let stdout_handle = child
+        .stdout
+        .take()
+        .map(|stdout| drain_stream_preview(stdout, stdout_limit));
+    let stderr_handle = child
+        .stderr
+        .take()
+        .map(|stderr| drain_stream_preview(stderr, stderr_limit));
+
+    let timeout = exec_timeout();
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if let Some(timeout) = timeout
+                    && start.elapsed() > timeout
+                {
+                    tracing::warn!(%command, ?timeout, "exec capture timed out; killing process");
+                    let _ = child.kill();
+                    match child.wait() {
+                        Ok(status) => break status,
+                        Err(error) => {
+                            tracing::warn!(%command, %error, "exec capture wait after kill failed");
+                            return Ok(EXEC_ESPAWN);
+                        }
+                    }
+                } else {
+                    thread::sleep(EXEC_POLL_INTERVAL);
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%command, %error, "exec capture wait failed");
+                return Ok(EXEC_ESPAWN);
+            }
+        }
+    };
+
+    let mut stdout_written = false;
+    if let Some(handle) = stdout_handle {
+        match handle.join() {
+            Ok((preview, Ok(()), truncated)) if stdout_cap > 0 => {
+                let data_cap = stdout_cap.saturating_sub(4) as usize;
+                if truncated || preview.len() > data_cap {
+                    return Ok(EXEC_ENOSPACE);
+                }
+                write_bytes(
+                    &mut caller,
+                    stdout_ptr,
+                    &(preview.len() as u32).to_le_bytes(),
+                )?;
+                if !preview.is_empty() {
+                    let data_ptr = stdout_ptr
+                        .checked_add(4)
+                        .ok_or_else(|| host_error("stdout pointer overflow"))?;
+                    write_bytes(&mut caller, data_ptr, &preview)?;
+                }
+                stdout_written = true;
+            }
+            Ok((_, Err(error), _)) => {
+                tracing::warn!(%command, %error, "failed to read exec stdout (capture)");
+            }
+            Err(_) => tracing::warn!(%command, "exec stdout drain panicked (capture)"),
+            _ => {}
+        }
+    }
+    if !stdout_written && stdout_cap >= 4 {
+        write_bytes(&mut caller, stdout_ptr, &0u32.to_le_bytes())?;
+    }
+    let mut stderr_written = false;
+    if let Some(handle) = stderr_handle {
+        match handle.join() {
+            Ok((preview, Ok(()), truncated)) if stderr_cap > 0 => {
+                let data_cap = stderr_cap.saturating_sub(4) as usize;
+                if truncated || preview.len() > data_cap {
+                    return Ok(EXEC_ENOSPACE);
+                }
+                write_bytes(
+                    &mut caller,
+                    stderr_ptr,
+                    &(preview.len() as u32).to_le_bytes(),
+                )?;
+                if !preview.is_empty() {
+                    let data_ptr = stderr_ptr
+                        .checked_add(4)
+                        .ok_or_else(|| host_error("stderr pointer overflow"))?;
+                    write_bytes(&mut caller, data_ptr, &preview)?;
+                }
+                stderr_written = true;
+            }
+            Ok((_, Err(error), _)) => {
+                tracing::warn!(%command, %error, "failed to read exec stderr (capture)");
+            }
+            Err(_) => tracing::warn!(%command, "exec stderr drain panicked (capture)"),
+            _ => {}
+        }
+    }
+    if !stderr_written && stderr_cap >= 4 {
+        write_bytes(&mut caller, stderr_ptr, &0u32.to_le_bytes())?;
+    }
+
+    let status = match status.code() {
+        Some(code) => code,
+        None => {
+            tracing::warn!(%command, "exec (capture) terminated by signal");
             return Ok(EXEC_ESIGNAL);
         }
     };
@@ -989,6 +1152,33 @@ mod tests {
         )"#
         );
         Module::new(engine, wat).expect("compile exec module with command")
+    }
+
+    fn compile_exec_capture_module(
+        engine: &Engine,
+        command: &str,
+        stdout_cap: usize,
+        stderr_cap: usize,
+    ) -> Module {
+        let len = command.len();
+        let data = command.escape_default().to_string();
+        let stdout_ptr = 256;
+        let stderr_ptr = stdout_ptr + stdout_cap;
+        let wat = format!(
+            r#"(module
+            (import "runloop" "exec_spawn_capture" (func $exec_capture (param i32 i32 i32 i32 i32 i32) (result i32)))
+            (memory (export "memory") 3)
+            (data (i32.const 0) "{data}")
+            (func (export "run") (result i32)
+                (call $exec_capture
+                    (i32.const 0) (i32.const {len})
+                    (i32.const {stdout_ptr}) (i32.const {stdout_cap})
+                    (i32.const {stderr_ptr}) (i32.const {stderr_cap})
+                )
+            )
+        )"#
+        );
+        Module::new(engine, wat).expect("compile exec capture module with command")
     }
 
     fn snapshot_region(instance: &Instance, store: &mut Store<StoreData>, start: usize) -> Vec<u8> {
@@ -1248,6 +1438,194 @@ mod tests {
 
         let code = run.call(&mut store, ()).expect("exec call should succeed");
         assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn exec_spawn_capture_returns_output() {
+        let engine = Engine::default();
+        let module = compile_exec_capture_module(&engine, "printf hi", 32, 32);
+
+        let mut linker: Linker<StoreData> = Linker::new(&engine);
+        p1::add_to_linker_sync(&mut linker, |data: &mut StoreData| &mut data.wasi)
+            .expect("link wasi");
+        add_to_linker(&mut linker).expect("link hostcalls");
+
+        let wasi = wasmtime_wasi::WasiCtxBuilder::new().arg("exec").build_p1();
+        let mailbox = AgentMailbox::new(mpsc::channel(1).1);
+        let kb = Arc::new(KnowledgeBase::new());
+        let broker = Arc::new(Broker::default());
+        let secrets = Arc::new(SecretStore::new());
+        let audit = AuditSink::new(16);
+        let mut caps = Caps::deny_all();
+        caps.exec = true;
+        let host_state = Arc::new(HostState::new(
+            caps,
+            audit,
+            kb,
+            broker,
+            secrets,
+            Arc::new(HostcallStats::new()),
+            AgentId::new(),
+            "exec-capture".to_string(),
+            None,
+            ReadyEmitter::noop(),
+            AuditPolicy::default(),
+        ));
+
+        let store_data = StoreData {
+            wasi,
+            state: host_state,
+            mailbox: Arc::new(mailbox),
+        };
+
+        let mut store = Store::new(&engine, store_data);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate exec capture module");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("export run");
+
+        let code = run
+            .call(&mut store, ())
+            .expect("exec capture call succeeds");
+        assert_eq!(code, 0);
+
+        let stdout_snapshot = snapshot_region(&instance, &mut store, 256);
+        let stdout_len = u32::from_le_bytes(
+            stdout_snapshot
+                .get(0..4)
+                .unwrap_or_default()
+                .try_into()
+                .expect("stdout length bytes"),
+        ) as usize;
+        let stdout = stdout_snapshot
+            .get(4..4 + stdout_len)
+            .unwrap_or(&[])
+            .to_vec();
+        assert_eq!(stdout, b"hi");
+
+        let stderr_snapshot =
+            snapshot_region(&instance, &mut store, 256 + 32 /* stdout cap */);
+        let stderr_len = u32::from_le_bytes(
+            stderr_snapshot
+                .get(0..4)
+                .unwrap_or_default()
+                .try_into()
+                .expect("stderr length bytes"),
+        ) as usize;
+        let stderr = stderr_snapshot
+            .get(4..4 + stderr_len)
+            .unwrap_or(&[])
+            .to_vec();
+        assert!(
+            stderr.is_empty() && stderr_len == 0,
+            "capture should not write to stderr buffer for clean command"
+        );
+    }
+
+    #[test]
+    fn exec_spawn_capture_signals_truncation() {
+        let engine = Engine::default();
+        let module = compile_exec_capture_module(&engine, "printf 12345", 8, 8);
+
+        let mut linker: Linker<StoreData> = Linker::new(&engine);
+        p1::add_to_linker_sync(&mut linker, |data: &mut StoreData| &mut data.wasi)
+            .expect("link wasi");
+        add_to_linker(&mut linker).expect("link hostcalls");
+
+        let wasi = wasmtime_wasi::WasiCtxBuilder::new().arg("exec").build_p1();
+        let mailbox = AgentMailbox::new(mpsc::channel(1).1);
+        let kb = Arc::new(KnowledgeBase::new());
+        let broker = Arc::new(Broker::default());
+        let secrets = Arc::new(SecretStore::new());
+        let audit = AuditSink::new(16);
+        let mut caps = Caps::deny_all();
+        caps.exec = true;
+        let host_state = Arc::new(HostState::new(
+            caps,
+            audit,
+            kb,
+            broker,
+            secrets,
+            Arc::new(HostcallStats::new()),
+            AgentId::new(),
+            "exec-capture-truncate".to_string(),
+            None,
+            ReadyEmitter::noop(),
+            AuditPolicy::default(),
+        ));
+
+        let store_data = StoreData {
+            wasi,
+            state: host_state,
+            mailbox: Arc::new(mailbox),
+        };
+
+        let mut store = Store::new(&engine, store_data);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate exec capture module");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("export run");
+
+        let code = run
+            .call(&mut store, ())
+            .expect("exec capture call succeeds");
+        assert_eq!(code, EXEC_ENOSPACE, "truncation should surface as no-space");
+    }
+
+    #[test]
+    fn exec_spawn_capture_rejects_oversized_buffers() {
+        let engine = Engine::default();
+        let module = compile_exec_capture_module(&engine, "printf hi", 131072, 16);
+
+        let mut linker: Linker<StoreData> = Linker::new(&engine);
+        p1::add_to_linker_sync(&mut linker, |data: &mut StoreData| &mut data.wasi)
+            .expect("link wasi");
+        add_to_linker(&mut linker).expect("link hostcalls");
+
+        let wasi = wasmtime_wasi::WasiCtxBuilder::new().arg("exec").build_p1();
+        let mailbox = AgentMailbox::new(mpsc::channel(1).1);
+        let kb = Arc::new(KnowledgeBase::new());
+        let broker = Arc::new(Broker::default());
+        let secrets = Arc::new(SecretStore::new());
+        let audit = AuditSink::new(16);
+        let mut caps = Caps::deny_all();
+        caps.exec = true;
+        let host_state = Arc::new(HostState::new(
+            caps,
+            audit,
+            kb,
+            broker,
+            secrets,
+            Arc::new(HostcallStats::new()),
+            AgentId::new(),
+            "exec-capture-oversize".to_string(),
+            None,
+            ReadyEmitter::noop(),
+            AuditPolicy::default(),
+        ));
+
+        let store_data = StoreData {
+            wasi,
+            state: host_state,
+            mailbox: Arc::new(mailbox),
+        };
+
+        let mut store = Store::new(&engine, store_data);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("instantiate exec capture module");
+        let run = instance
+            .get_typed_func::<(), i32>(&mut store, "run")
+            .expect("export run");
+
+        let code = run
+            .call(&mut store, ())
+            .expect("exec capture call succeeds");
+        assert_eq!(code, EXEC_ENOSPACE, "oversized buffers should be rejected");
     }
 
     #[test]
