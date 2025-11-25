@@ -32,9 +32,10 @@
 - Secret material never lives in the POG; only opaque `secret_id` references are
   stored.
 - Default provider today is `security.secrets.provider = "stub"` (in-memory,
-  test-only). Other providers are being implemented; an **env** provider exists
-  for development and returns the raw environment value to agents—treat it as a
-  convenience only, not a hardened backend.
+  test-only). To maintain backward compatibility, the stub path will also
+  consult environment variables first (equivalent to the `env` provider) before
+  falling back to the empty store. Prefer configuring an explicit provider for
+  production secrets.
 - Planned `auto` backend will probe Secret Service → `pass` → age vault
   (`~/.runloop/secrets/`); not yet shipped.
 - CLI (`rlp secrets put/get/list/delete`) is planned; until then, provision

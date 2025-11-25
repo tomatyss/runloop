@@ -309,8 +309,8 @@ See `docs/security-model.md` for secret-store details. Ops tasks:
 
 > **Status:** `rlp secrets ...` tooling is being wired up; use your platform's
 > secret store CLI until the native commands ship. Default provider is
-> `stub` (in-memory, for dev). If you switch to `env`, remember it passes the
-> raw environment value into agents; prefer a real backend for anything
+> `stub` (in-memory, for dev) but it will consult environment variables first
+> to preserve existing env-only setups. Prefer a real backend for anything
 > sensitive.
 
 - Planned: `rlp secrets init --backend=secret-service|pass|age`

@@ -54,8 +54,40 @@ pub enum ExecutorInitError {
 fn select_secret_provider(config: &Config) -> Arc<dyn SecretProvider> {
     match config.security.secrets.provider.as_str() {
         "env" => Arc::new(EnvSecretProvider),
-        // "stub" or unknown providers fall back to in-memory stub for now.
-        _ => Arc::new(SecretStore::new()),
+        // Default "stub" keeps an in-memory store but will still honor env
+        // variables for backward compatibility with existing deployments that
+        // export API keys without configuring a provider.
+        "stub" => env_then_store(),
+        // Unknown providers fall back to stub.
+        _ => env_then_store(),
+    }
+}
+
+fn env_then_store() -> Arc<dyn SecretProvider> {
+    Arc::new(EnvThenStore {
+        env: EnvSecretProvider,
+        store: Arc::new(SecretStore::new()),
+    })
+}
+
+struct EnvThenStore {
+    env: EnvSecretProvider,
+    store: Arc<SecretStore>,
+}
+
+impl SecretProvider for EnvThenStore {
+    fn resolve(&self, secret_id: &str) -> Option<String> {
+        self.env
+            .resolve(secret_id)
+            .or_else(|| self.store.resolve(secret_id))
+    }
+
+    fn allow(&self, secret_id: &str) {
+        self.store.allow(secret_id);
+    }
+
+    fn exists(&self, secret_id: &str) -> bool {
+        self.env.exists(secret_id) || self.store.exists(secret_id)
     }
 }
 
