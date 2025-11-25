@@ -1245,7 +1245,7 @@ mod runtime_tests {
                 // May fail for other reasons (e.g., wasm file not found) depending
                 // on when validation occurs. The important thing is it doesn't succeed.
                 // In practice, secrets validation happens before module loading.
-                panic!("expected SecretsMissing error, got: {other:?}");
+                panic!("expected SecretsMissing error, got: {:?}", other);
             }
             Ok(_) => panic!("expected spawn to fail with missing secrets"),
         }
