@@ -7,6 +7,7 @@ use clap::ValueEnum;
 use dirs::home_dir;
 
 const USER_SHELL_DIR: &str = ".runloop/shell";
+const USER_OPENING_DEFAULT: &str = ".runloop/openings/router-default.yaml";
 const ZSH_SNIPPET: &str = "runloop.zsh";
 const BASH_SNIPPET: &str = "runloop.bash";
 
@@ -68,22 +69,10 @@ pub struct DisableRequest {
 pub fn enable(request: EnableRequest) -> Result<ShellEditResult, ShellError> {
     let rc_path = resolve_rc_path(request.flavor, request.rc_path)?;
     let snippet_path = resolve_snippet_path(request.flavor, request.snippet_override.as_deref())?;
-    let opening_path = match request.opening_path {
-        Some(ref path) => {
-            let expanded = expand_path(path)?;
-            if !expanded.exists() {
-                return Err(ShellError::MissingOpening(expanded));
-            }
-            let canonical = fs::canonicalize(&expanded)
-                .map_err(|_| ShellError::MissingOpening(expanded.clone()))?;
-            Some(canonical)
-        }
-        None => None,
-    };
 
     let (start_marker, end_marker) = markers(request.flavor);
-    let mut notes = Vec::new();
     let contents = fs::read_to_string(&rc_path).unwrap_or_default();
+    let mut notes = Vec::new();
     if contents.contains(start_marker) && contents.contains(end_marker) {
         notes.push(format!(
             "runloop shell block already present in {}",
@@ -98,6 +87,11 @@ pub fn enable(request: EnableRequest) -> Result<ShellEditResult, ShellError> {
         });
     }
 
+    let opening_path = resolve_opening_path(
+        request.opening_path.as_deref(),
+        &mut notes,
+        !request.dry_run,
+    )?;
     let block = build_block(request.flavor, &snippet_path, opening_path.as_deref());
 
     if request.dry_run {
@@ -278,6 +272,88 @@ fn ensure_parent_dir(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+fn resolve_opening_path(
+    explicit: Option<&Path>,
+    notes: &mut Vec<String>,
+    allow_create: bool,
+) -> Result<Option<PathBuf>, ShellError> {
+    if let Some(path) = explicit {
+        let expanded = expand_path(path)?;
+        if !expanded.exists() {
+            return Err(ShellError::MissingOpening(expanded));
+        }
+        let canonical = fs::canonicalize(&expanded)
+            .map_err(|_| ShellError::MissingOpening(expanded.clone()))?;
+        return Ok(Some(canonical));
+    }
+
+    let Some(home) = home_dir() else {
+        return Err(ShellError::MissingHome);
+    };
+    let user_default = home.join(USER_OPENING_DEFAULT);
+    if user_default.exists() {
+        let canonical = fs::canonicalize(&user_default)
+            .map_err(|_| ShellError::MissingOpening(user_default.clone()))?;
+        notes.push(format!(
+            "using existing router-default opening at {}",
+            canonical.display()
+        ));
+        return Ok(Some(canonical));
+    }
+
+    if let Some(source) = default_opening_source()? {
+        if allow_create {
+            ensure_parent_dir(&user_default)?;
+            fs::copy(&source, &user_default)
+                .map_err(|_| ShellError::MissingOpening(source.clone()))?;
+            let canonical = fs::canonicalize(&user_default)
+                .map_err(|_| ShellError::MissingOpening(user_default.clone()))?;
+            notes.push(format!(
+                "copied router-default opening to {}",
+                canonical.display()
+            ));
+            return Ok(Some(canonical));
+        } else {
+            notes.push(format!(
+                "would copy router-default opening from {} to {}",
+                source.display(),
+                user_default.display()
+            ));
+            return Ok(Some(user_default));
+        }
+    }
+
+    notes.push(
+        "router-default opening not found; RUNLOOP_ROUTER_OPENING_PATH will not be set".into(),
+    );
+    Ok(None)
+}
+
+fn default_opening_source() -> Result<Option<PathBuf>, ShellError> {
+    let mut candidates = vec![
+        PathBuf::from("/usr/share/runloop/openings/router-default.yaml"),
+        PathBuf::from("/usr/local/share/runloop/openings/router-default.yaml"),
+    ];
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(
+            cwd.join("packaging")
+                .join("openings")
+                .join("router-default.yaml"),
+        );
+        candidates.push(
+            cwd.join("examples")
+                .join("openings")
+                .join("compose_email.yaml"),
+        );
+    }
+    for candidate in candidates {
+        if let Ok(canonical) = fs::canonicalize(&candidate) {
+            return Ok(Some(canonical));
+        }
+    }
+    Ok(None)
+}
+
 fn build_block(flavor: ShellFlavor, snippet_path: &Path, opening: Option<&Path>) -> String {
     let (start_marker, end_marker) = markers(flavor);
     let mut block = String::new();
@@ -355,11 +431,12 @@ fn single_quote(value: &str) -> String {
 mod tests {
     use super::*;
     use std::env;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::{Mutex, MutexGuard, OnceLock};
     use tempfile::tempdir;
 
     static CWD_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     #[test]
     fn enable_inserts_block() {
@@ -367,11 +444,13 @@ mod tests {
         let rc_path = dir.path().join(".testrc");
         let snippet = dir.path().join("runloop.zsh");
         fs::write(&snippet, "echo snippet").unwrap();
+        let opening = dir.path().join("router.yaml");
+        fs::write(&opening, "id: router").unwrap();
         let result = enable(EnableRequest {
             flavor: ShellFlavor::Zsh,
             rc_path: Some(rc_path.clone()),
             snippet_override: Some(snippet.clone()),
-            opening_path: None,
+            opening_path: Some(opening),
             dry_run: false,
         })
         .unwrap();
@@ -391,13 +470,16 @@ mod tests {
         fs::create_dir_all(&snippet_dir).unwrap();
         let snippet = snippet_dir.join("runloop.zsh");
         fs::write(&snippet, "echo snippet").unwrap();
+        let opening = dir.path().join("openings/router.yaml");
+        fs::create_dir_all(opening.parent().unwrap()).unwrap();
+        fs::write(&opening, "id: router").unwrap();
         let _guard = DirGuard::new(dir.path());
         let relative = PathBuf::from("snippets/runloop.zsh");
         let result = enable(EnableRequest {
             flavor: ShellFlavor::Zsh,
             rc_path: Some(rc_path.clone()),
             snippet_override: Some(relative),
-            opening_path: None,
+            opening_path: Some(PathBuf::from("openings/router.yaml")),
             dry_run: false,
         })
         .unwrap();
@@ -439,11 +521,13 @@ mod tests {
         let rc_path = dir.path().join(".testrc");
         let snippet = dir.path().join("runloop.zsh");
         fs::write(&snippet, "echo snippet").unwrap();
+        let opening = dir.path().join("router.yaml");
+        fs::write(&opening, "id: router").unwrap();
         enable(EnableRequest {
             flavor: ShellFlavor::Zsh,
             rc_path: Some(rc_path.clone()),
             snippet_override: Some(snippet),
-            opening_path: None,
+            opening_path: Some(opening),
             dry_run: false,
         })
         .unwrap();
@@ -481,5 +565,100 @@ mod tests {
         fn drop(&mut self) {
             let _ = env::set_current_dir(&self.original);
         }
+    }
+
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl EnvGuard {
+        fn new(key: &'static str, value: &Path) -> Self {
+            let lock = ENV_LOCK
+                .get_or_init(|| Mutex::new(()))
+                .lock()
+                .expect("env mutex poisoned");
+            let previous = env::var_os(key);
+            unsafe {
+                env::set_var(key, value);
+            }
+            Self {
+                key,
+                previous,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(val) => unsafe { env::set_var(self.key, val) },
+                None => unsafe { env::remove_var(self.key) },
+            }
+        }
+    }
+
+    #[test]
+    fn enable_copies_packaged_opening_when_missing() {
+        let dir = tempdir().unwrap();
+        let _cwd = DirGuard::new(dir.path());
+        let _home = EnvGuard::new("HOME", dir.path());
+
+        let packaging = dir.path().join("packaging/openings");
+        fs::create_dir_all(&packaging).unwrap();
+        let packaged_opening = packaging.join("router-default.yaml");
+        fs::write(&packaged_opening, "id: router").unwrap();
+
+        let snippet = dir.path().join("runloop.zsh");
+        fs::write(&snippet, "echo snippet").unwrap();
+
+        let result = enable(EnableRequest {
+            flavor: ShellFlavor::Zsh,
+            rc_path: None,
+            snippet_override: Some(snippet),
+            opening_path: None,
+            dry_run: false,
+        })
+        .unwrap();
+
+        let user_copy = dir.path().join(".runloop/openings/router-default.yaml");
+        assert!(user_copy.exists());
+        let user_contents = fs::read_to_string(user_copy).unwrap();
+        assert_eq!(user_contents, "id: router");
+        assert_eq!(result.action, ShellAction::Added);
+    }
+
+    #[test]
+    fn enable_dry_run_does_not_copy_opening() {
+        let dir = tempdir().unwrap();
+        let _cwd = DirGuard::new(dir.path());
+        let _home = EnvGuard::new("HOME", dir.path());
+
+        let packaging = dir.path().join("packaging/openings");
+        fs::create_dir_all(&packaging).unwrap();
+        let packaged_opening = packaging.join("router-default.yaml");
+        fs::write(&packaged_opening, "id: router").unwrap();
+
+        let snippet = dir.path().join("runloop.zsh");
+        fs::write(&snippet, "echo snippet").unwrap();
+
+        let result = enable(EnableRequest {
+            flavor: ShellFlavor::Zsh,
+            rc_path: None,
+            snippet_override: Some(snippet),
+            opening_path: None,
+            dry_run: true,
+        })
+        .unwrap();
+
+        let user_copy = dir.path().join(".runloop/openings/router-default.yaml");
+        assert!(
+            !user_copy.exists(),
+            "dry-run should not create opening copy"
+        );
+        assert_eq!(result.action, ShellAction::Added);
+        assert!(result.dry_run);
     }
 }

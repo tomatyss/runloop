@@ -1,4 +1,6 @@
 # runloop router integration for zsh
+# Optional knobs: RUNLOOP_ROUTER_BINDKEY='^J', RUNLOOP_ROUTER_TIMEOUT_MS=200,
+# RUNLOOP_ROUTER_DISABLE=1, RUNLOOP_ROUTER_FORCE=1
 # shellcheck disable=SC2154
 
 if [[ ! -o interactive ]]; then
@@ -33,8 +35,17 @@ runloop_router_on() {
 
 _runloop_router_should_handle() {
   [[ -o interactive ]] || return 1
-  [[ "$TERM" == "dumb" ]] && return 1
+  [[ -n ${RUNLOOP_ROUTER_FORCE:-} ]] && return 0
   [[ -n ${RUNLOOP_ROUTER_DISABLE:-} ]] && return 1
+  [[ "$TERM" == "dumb" ]] && return 1
+  local auto_envs=(
+    CI GITHUB_ACTIONS BUILDKITE TEAMCITY_VERSION JENKINS_URL
+    GITLAB_CI CIRCLECI SSH_CONNECTION SSH_TTY
+  )
+  local name
+  for name in $auto_envs; do
+    [[ -n ${(P)name} ]] && return 1
+  done
   return 0
 }
 
@@ -84,8 +95,12 @@ runloop_accept_line() {
     zle .accept-line
     return
   fi
+  local route_cmd=(rlp route --stdin)
+  if [[ -n ${RUNLOOP_ROUTER_TIMEOUT_MS:-} ]]; then
+    route_cmd+=(--timeout-ms "$RUNLOOP_ROUTER_TIMEOUT_MS")
+  fi
   local route_output
-  route_output=$(printf '%s' "$buffer" | rlp route --stdin 2>&1)
+  route_output=$(printf '%s' "$buffer" | "${route_cmd[@]}" 2>&1)
   local route_status=$?
   if (( route_status == 10 )); then
     zle .accept-line
@@ -96,8 +111,12 @@ runloop_accept_line() {
       CURSOR=0
       zle redisplay
     else
-      zle -M "runloop: failed to execute opening"
+      zle -M "runloop: failed to execute opening; start runloopd or add --local to the opening"
     fi
+    return
+  elif (( route_status == 12 )); then
+    zle -M "runloop: router timeout; executing in shell"
+    zle .accept-line
     return
   fi
   zle -M "runloop: router error ($route_status): $route_output"
@@ -105,10 +124,11 @@ runloop_accept_line() {
 }
 
 zle -N runloop-accept-line runloop_accept_line
-bindkey '^M' runloop-accept-line &>/dev/null || true
+_runloop_bind=${RUNLOOP_ROUTER_BINDKEY:-'^M'}
+bindkey "$_runloop_bind" runloop-accept-line &>/dev/null || true
 if bindkey -M viins >/dev/null 2>&1; then
-  bindkey -M viins '^M' runloop-accept-line
+  bindkey -M viins "$_runloop_bind" runloop-accept-line
 fi
 if bindkey -M vicmd >/dev/null 2>&1; then
-  bindkey -M vicmd '^M' runloop-accept-line
+  bindkey -M vicmd "$_runloop_bind" runloop-accept-line
 fi
