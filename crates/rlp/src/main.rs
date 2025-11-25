@@ -50,7 +50,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Instant as StdInstant, SystemTime, UNIX_EPOCH};
-use std::{fs, fs::File};
+use std::{env, fs, fs::File};
 use thiserror::Error;
 use tokio::time::Duration;
 use tokio::{net::UnixStream, sync::mpsc, task, time};
@@ -60,6 +60,8 @@ const CLI_AGENT_ID: &str = "agent:rlp-cli";
 const ROUTE_PAYLOAD_VERSION: u32 = 1;
 const ROUTE_EXIT_CODE_SHELL: i32 = 10;
 const ROUTE_EXIT_CODE_AGENT: i32 = 11;
+const ROUTE_EXIT_CODE_TIMEOUT: i32 = 12;
+const ROUTE_DEFAULT_TIMEOUT_MS: u64 = 200;
 
 #[derive(Parser, Debug)]
 #[command(name = "rlp", about = "Runloop CLI (work in progress)")]
@@ -101,6 +103,9 @@ struct RouteArgs {
     /// Read the prompt from STDIN (mutually exclusive with PROMPT).
     #[arg(long = "stdin")]
     read_stdin: bool,
+    /// Timeout in milliseconds; defaults to RUNLOOP_ROUTER_TIMEOUT_MS or 200ms.
+    #[arg(long = "timeout-ms", value_name = "MILLISECONDS")]
+    timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -477,9 +482,23 @@ async fn handle_route(args: RouteArgs) -> Result<i32, CliError> {
         }
     }
 
-    let config = Config::load()?;
-    let router = Router::from_config(&config.router);
-    let classification = router.classify(&prompt);
+    let timeout_ms = resolve_route_timeout(args.timeout_ms)?;
+    let timeout = Duration::from_millis(timeout_ms);
+    let prompt_for_task = prompt.clone();
+    let classify = task::spawn_blocking(move || -> Result<RouterClassification, CliError> {
+        let config = Config::load()?;
+        let router = Router::from_config(&config.router);
+        Ok(router.classify(&prompt_for_task))
+    });
+
+    let classification = match time::timeout(timeout, classify).await {
+        Ok(join_result) => join_result
+            .map_err(|err| CliError::ShellIntegration(format!("router task panicked: {err}")))??,
+        Err(_) => {
+            eprintln!("router timeout after {timeout_ms} ms");
+            return Ok(ROUTE_EXIT_CODE_TIMEOUT);
+        }
+    };
 
     let payload = RoutePayload::from(&classification);
     let rendered = serde_json::to_string(&payload)?;
@@ -490,6 +509,81 @@ async fn handle_route(args: RouteArgs) -> Result<i32, CliError> {
         RouterRoute::Agent => ROUTE_EXIT_CODE_AGENT,
     };
     Ok(exit_code)
+}
+
+fn resolve_route_timeout(cli_value: Option<u64>) -> Result<u64, CliError> {
+    if let Some(ms) = cli_value {
+        return Ok(ms);
+    }
+    if let Ok(env_val) = env::var("RUNLOOP_ROUTER_TIMEOUT_MS") {
+        let parsed = env_val.parse::<u64>().map_err(|_| {
+            CliError::InvalidParams(format!(
+                "RUNLOOP_ROUTER_TIMEOUT_MS must be an integer, got '{env_val}'"
+            ))
+        })?;
+        return Ok(parsed);
+    }
+    Ok(ROUTE_DEFAULT_TIMEOUT_MS)
+}
+
+#[cfg(test)]
+mod route_tests {
+    use super::*;
+    use std::env;
+    use std::sync::{Mutex, OnceLock};
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn with_env_var(key: &str, val: Option<&str>, f: impl FnOnce()) {
+        let _guard = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env mutex poisoned");
+        let prev = env::var_os(key);
+        match val {
+            Some(v) => unsafe { env::set_var(key, v) },
+            None => unsafe { env::remove_var(key) },
+        }
+        f();
+        match prev {
+            Some(v) => unsafe { env::set_var(key, v) },
+            None => unsafe { env::remove_var(key) },
+        }
+    }
+
+    #[test]
+    fn timeout_prefers_cli_over_env() {
+        with_env_var("RUNLOOP_ROUTER_TIMEOUT_MS", Some("999"), || {
+            let ms = resolve_route_timeout(Some(50)).unwrap();
+            assert_eq!(ms, 50);
+        });
+    }
+
+    #[test]
+    fn timeout_reads_env_when_cli_missing() {
+        with_env_var("RUNLOOP_ROUTER_TIMEOUT_MS", Some("150"), || {
+            let ms = resolve_route_timeout(None).unwrap();
+            assert_eq!(ms, 150);
+        });
+    }
+
+    #[test]
+    fn timeout_defaults_when_not_set() {
+        with_env_var("RUNLOOP_ROUTER_TIMEOUT_MS", None, || {
+            let ms = resolve_route_timeout(None).unwrap();
+            assert_eq!(ms, ROUTE_DEFAULT_TIMEOUT_MS);
+        });
+    }
+
+    #[test]
+    fn timeout_invalid_env_errors() {
+        with_env_var("RUNLOOP_ROUTER_TIMEOUT_MS", Some("abc"), || {
+            let err = resolve_route_timeout(None).unwrap_err();
+            let CliError::InvalidParams(_) = err else {
+                panic!("expected InvalidParams");
+            };
+        });
+    }
 }
 
 async fn handle_why(args: WhyArgs) -> Result<(), CliError> {
