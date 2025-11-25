@@ -16,7 +16,7 @@ use tokio::task::JoinHandle;
 use tracing::error;
 use uuid::Uuid;
 
-use crate::{next_msg_id, uuid_to_u128};
+use crate::utils::{current_millis, next_msg_id, uuid_to_u128};
 
 #[derive(Clone)]
 pub struct AgentDispatcher {
@@ -178,14 +178,6 @@ async fn handle_invocation(
 
 fn agent_topic(reference: &AgentRef) -> String {
     format!("agent/{}", reference.name)
-}
-
-fn current_millis() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
 }
 
 pub struct BusExecutor {

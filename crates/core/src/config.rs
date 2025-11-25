@@ -209,6 +209,41 @@ impl Config {
         }
         warn_missing_search_dirs("openings.search_dirs", &self.openings.search_dirs);
         warn_missing_search_dirs("agents.search_dirs", &self.agents.search_dirs);
+
+        if self
+            .runtime
+            .socket_path
+            .as_ref()
+            .is_some_and(|path| path.trim().is_empty())
+        {
+            return Err(Error::Config(
+                "runtime.socket_path cannot be empty when specified".into(),
+            ));
+        }
+        if self.runtime.sockets_dir.trim().is_empty() && self.runtime.socket_path.is_none() {
+            return Err(Error::Config(
+                "runtime.sockets_dir cannot be empty when runtime.socket_path is unset".into(),
+            ));
+        }
+
+        for kind in &self.bus.auth.publishers.action_decision.allowed_kinds {
+            let normalized = kind.trim();
+            if normalized.is_empty() {
+                return Err(Error::Config(
+                    "empty publisher kind entry in bus.auth.publishers.action_decision.allowed_kinds"
+                        .into(),
+                ));
+            }
+            match normalized.to_ascii_lowercase().as_str() {
+                "ui" | "tui" | "agent" => {}
+                other => {
+                    return Err(Error::Config(format!(
+                        "unknown publisher kind '{other}' in bus.auth.publishers.action_decision.allowed_kinds"
+                    )));
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -1468,5 +1503,59 @@ runtime:
         assert_eq!(config.models.broker.route.len(), 1);
         assert_eq!(config.models.broker.route[0].provider, "local");
         assert_eq!(config.models.broker.route[0].pattern, "*");
+    }
+
+    #[test]
+    fn validate_rejects_empty_socket_path() {
+        let mut config = Config::default();
+        config.runtime.socket_path = Some("   ".into());
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("runtime.socket_path cannot be empty")
+        );
+    }
+
+    #[test]
+    fn validate_rejects_empty_sockets_dir_when_no_path() {
+        let mut config = Config::default();
+        config.runtime.socket_path = None;
+        config.runtime.sockets_dir = "   ".into();
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("runtime.sockets_dir cannot be empty")
+        );
+    }
+
+    #[test]
+    fn validate_rejects_invalid_action_decision_kind() {
+        let mut config = Config::default();
+        config
+            .bus
+            .auth
+            .publishers
+            .action_decision
+            .allowed_kinds
+            .push("invalid_kind".into());
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("unknown publisher kind 'invalid_kind'")
+        );
+    }
+
+    #[test]
+    fn validate_rejects_empty_action_decision_kind() {
+        let mut config = Config::default();
+        config
+            .bus
+            .auth
+            .publishers
+            .action_decision
+            .allowed_kinds
+            .push("   ".into());
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("empty publisher kind entry"));
     }
 }
