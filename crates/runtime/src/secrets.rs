@@ -1,7 +1,13 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
+use runloop_core::Config;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use tracing::{debug, warn};
+use uuid::Uuid;
 
 /// Per-agent store that maps secret identifiers to opaque runtime handles.
 ///
@@ -12,24 +18,21 @@ use parking_lot::RwLock;
 ///
 /// Handles are bound to the lifetime of this store (typically per-agent
 /// session) and are cleared when the store is dropped.
-///
-/// # Future Use
-///
-/// This infrastructure is **not yet wired into the runtime**. Currently,
-/// `resolve_secret` returns real values for backward compatibility. When we
-/// add hostcalls that accept secret handles (e.g., `http_request` with auth
-/// headers), this store will be integrated into `HostState` to provide the
-/// opaque handle layer.
 #[derive(Clone, Default)]
-#[allow(dead_code)]
 pub struct SecretHandleStore {
     /// Maps secret_id → opaque handle (rlsec_...)
     id_to_handle: Arc<RwLock<BTreeMap<String, String>>>,
-    /// Maps opaque handle → real secret value
-    handle_to_value: Arc<RwLock<BTreeMap<String, String>>>,
+    /// Maps opaque handle → (secret_id, value, refreshed_at)
+    handle_to_record: Arc<RwLock<BTreeMap<String, HandleRecord>>>,
 }
 
-#[allow(dead_code)]
+#[derive(Clone)]
+struct HandleRecord {
+    secret_id: String,
+    value: String,
+    refreshed_at: Instant,
+}
+
 impl SecretHandleStore {
     #[must_use]
     pub fn new() -> Self {
@@ -46,7 +49,8 @@ impl SecretHandleStore {
     }
 
     /// Resolve a secret identifier to an opaque handle, creating one if this
-    /// is the first request for this `secret_id`.
+    /// is the first request for this `secret_id`. On subsequent calls, always
+    /// refresh the value from the provider so rotations are observed.
     ///
     /// Returns `Some(handle)` if the underlying `provider` can resolve the
     /// secret, storing the real value internally. Returns `None` if the
@@ -56,9 +60,18 @@ impl SecretHandleStore {
         secret_id: &str,
         provider: &dyn SecretProvider,
     ) -> Option<String> {
-        // Fast path: already cached
-        if let Some(handle) = self.id_to_handle.read().get(secret_id) {
-            return Some(handle.clone());
+        // Refresh path: if handle exists, update value from provider
+        if let Some(handle) = self.id_to_handle.read().get(secret_id).cloned() {
+            let value = provider.resolve(secret_id)?;
+            self.handle_to_record.write().insert(
+                handle.clone(),
+                HandleRecord {
+                    secret_id: secret_id.to_string(),
+                    value,
+                    refreshed_at: Instant::now(),
+                },
+            );
+            return Some(handle);
         }
 
         // Resolve the real value from the provider
@@ -69,27 +82,55 @@ impl SecretHandleStore {
         self.id_to_handle
             .write()
             .insert(secret_id.to_string(), handle.clone());
-        self.handle_to_value
-            .write()
-            .insert(handle.clone(), real_value);
+        self.handle_to_record.write().insert(
+            handle.clone(),
+            HandleRecord {
+                secret_id: secret_id.to_string(),
+                value: real_value,
+                refreshed_at: Instant::now(),
+            },
+        );
         Some(handle)
     }
 
     /// Dereference an opaque handle to its real secret value.
     /// Only host-side code should call this (e.g., model broker HTTP auth).
+    pub fn dereference_with(&self, handle: &str, provider: &dyn SecretProvider) -> Option<String> {
+        let mut guard = self.handle_to_record.write();
+        if let Some(record) = guard.get_mut(handle) {
+            // Refresh from provider to avoid serving stale secrets.
+            if let Some(fresh) = provider.resolve(&record.secret_id) {
+                record.value = fresh;
+                record.refreshed_at = Instant::now();
+                return Some(record.value.clone());
+            }
+            // Missing from provider: drop mapping to avoid stale reuse.
+            let id = record.secret_id.clone();
+            drop(guard);
+            self.id_to_handle.write().remove(&id);
+            self.handle_to_record.write().remove(handle);
+            return None;
+        }
+        None
+    }
+
+    /// Non-refreshing dereference (used only by legacy trait impls / tests).
     pub fn dereference(&self, handle: &str) -> Option<String> {
-        self.handle_to_value.read().get(handle).cloned()
+        self.handle_to_record
+            .read()
+            .get(handle)
+            .map(|rec| rec.value.clone())
     }
 
     /// Check if a handle was issued by this store.
     pub fn is_valid_handle(&self, handle: &str) -> bool {
-        self.handle_to_value.read().contains_key(handle)
+        self.handle_to_record.read().contains_key(handle)
     }
 
     /// Clear all mappings (called on agent teardown).
     pub fn clear(&self) {
         self.id_to_handle.write().clear();
-        self.handle_to_value.write().clear();
+        self.handle_to_record.write().clear();
     }
 }
 
@@ -199,6 +240,23 @@ fn resolve_secret_from_env(secret_id: &str) -> Option<String> {
         .ok()
 }
 
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
+}
+
+fn slugify_secret_id(secret_id: &str) -> String {
+    secret_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 impl SecretProvider for EnvSecretProvider {
     fn resolve(&self, secret_id: &str) -> Option<String> {
         resolve_secret_from_env(secret_id)
@@ -209,9 +267,306 @@ impl SecretProvider for EnvSecretProvider {
     }
 }
 
+/// Env fallback + in-memory store, matching the prior "stub" behavior.
+#[derive(Clone, Default)]
+pub struct EnvThenStore {
+    env: EnvSecretProvider,
+    store: Arc<SecretStore>,
+}
+
+impl EnvThenStore {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            env: EnvSecretProvider,
+            store: Arc::new(SecretStore::new()),
+        }
+    }
+}
+
+impl SecretProvider for EnvThenStore {
+    fn resolve(&self, secret_id: &str) -> Option<String> {
+        self.env
+            .resolve(secret_id)
+            .or_else(|| self.store.resolve(secret_id))
+    }
+
+    fn allow(&self, secret_id: &str) {
+        self.store.allow(secret_id);
+    }
+
+    fn exists(&self, secret_id: &str) -> bool {
+        self.env.exists(secret_id) || self.store.exists(secret_id)
+    }
+}
+
+/// Pass (password-store) backend. Best-effort: shells out to `pass show` and
+/// reads the first line of the secret. Only used when explicitly selected or
+/// auto-detected.
+#[derive(Clone, Default)]
+struct PassProvider;
+
+impl PassProvider {
+    fn available() -> bool {
+        Command::new("pass")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+            && home_dir()
+                .map(|d| d.join(".password-store"))
+                .is_some_and(|p| p.exists())
+    }
+
+    fn read_secret(&self, secret_id: &str) -> Option<String> {
+        let entry = format!("runloop/{secret_id}");
+        let output = Command::new("pass").arg("show").arg(entry).output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let stdout = String::from_utf8(output.stdout).ok()?;
+        let line = stdout.lines().next()?.trim();
+        if line.is_empty() {
+            None
+        } else {
+            Some(line.to_string())
+        }
+    }
+}
+
+impl SecretProvider for PassProvider {
+    fn resolve(&self, secret_id: &str) -> Option<String> {
+        self.read_secret(secret_id)
+    }
+
+    fn exists(&self, secret_id: &str) -> bool {
+        self.read_secret(secret_id).is_some()
+    }
+}
+
+/// Stub Secret Service backend. Logs a warning once; returns None so callers
+/// can fall back.
+#[derive(Clone, Default)]
+struct SecretServiceProvider;
+
+impl SecretServiceProvider {
+    #[allow(dead_code)]
+    fn available() -> bool {
+        std::env::var("DBUS_SESSION_BUS_ADDRESS").is_ok()
+    }
+}
+
+impl SecretProvider for SecretServiceProvider {
+    fn resolve(&self, _secret_id: &str) -> Option<String> {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            warn!("secret-service provider not wired; returning None (falling back)");
+        });
+        None
+    }
+
+    fn exists(&self, _secret_id: &str) -> bool {
+        false
+    }
+}
+
+/// Age-backed file store (stub). Ensures key file permissions but does not yet
+/// implement real encryption; returns None so upstream callers can fall back.
+#[derive(Clone)]
+struct AgeProvider {
+    root: PathBuf,
+}
+
+impl AgeProvider {
+    fn new(root: PathBuf) -> Self {
+        Self { root }
+    }
+
+    fn available(root: &Path) -> bool {
+        root.exists() && Self::ensure_master_key(root).is_some()
+    }
+
+    fn ensure_master_key(root: &Path) -> Option<()> {
+        let key_path = root.join("master.agekey");
+        if !key_path.exists() {
+            let random = Uuid::new_v4().to_string();
+            std::fs::write(&key_path, format!("AGE-SECRET-KEY-1-{random}")).ok()?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600));
+            }
+            return Some(());
+        }
+        let meta = key_path.metadata().ok()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if meta.permissions().mode() & 0o077 != 0 {
+                warn!("master.agekey permissions too loose; refusing to use");
+                return None;
+            }
+        }
+        Some(())
+    }
+}
+
+impl SecretProvider for AgeProvider {
+    fn resolve(&self, secret_id: &str) -> Option<String> {
+        std::fs::create_dir_all(&self.root).ok()?;
+        let _ = Self::ensure_master_key(&self.root)?;
+
+        static WARN: std::sync::Once = std::sync::Once::new();
+        WARN.call_once(|| {
+            warn!("age provider currently stores secrets as plaintext within .age files; encryption TODO");
+        });
+
+        let slug = slugify_secret_id(secret_id);
+        let path = self.root.join(format!("{slug}.age"));
+        let content = std::fs::read_to_string(path).ok()?;
+        let value = content.trim().to_string();
+        if value.is_empty() { None } else { Some(value) }
+    }
+}
+
+struct CacheEntry {
+    value: String,
+    expires_at: Option<Instant>,
+}
+
+/// TTL-aware caching wrapper.
+struct CachingSecretProvider {
+    inner: Arc<dyn SecretProvider>,
+    ttl: Duration,
+    cache: Arc<RwLock<HashMap<String, CacheEntry>>>,
+}
+
+impl CachingSecretProvider {
+    fn new(inner: Arc<dyn SecretProvider>, ttl: Duration) -> Self {
+        Self {
+            inner,
+            ttl,
+            cache: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+}
+
+impl SecretProvider for CachingSecretProvider {
+    fn resolve(&self, secret_id: &str) -> Option<String> {
+        let now = Instant::now();
+        if let Some(entry) = self.cache.read().get(secret_id) {
+            if entry.expires_at.map(|t| t > now).unwrap_or(false) {
+                return Some(entry.value.clone());
+            }
+        }
+
+        // Expired or missing: try to refresh.
+        self.cache.write().remove(secret_id);
+        let value = self.inner.resolve(secret_id)?;
+        let expires_at = if self.ttl.is_zero() {
+            None
+        } else {
+            Some(now + self.ttl)
+        };
+        self.cache.write().insert(
+            secret_id.to_string(),
+            CacheEntry {
+                value: value.clone(),
+                expires_at,
+            },
+        );
+        Some(value)
+    }
+
+    fn allow(&self, secret_id: &str) {
+        self.inner.allow(secret_id);
+        self.cache.write().remove(secret_id);
+    }
+
+    fn exists(&self, secret_id: &str) -> bool {
+        if let Some(entry) = self.cache.read().get(secret_id) {
+            if entry
+                .expires_at
+                .map(|t| t > Instant::now())
+                .unwrap_or(false)
+            {
+                return true;
+            }
+        }
+        self.inner.exists(secret_id)
+    }
+}
+
+fn env_then_store() -> Arc<dyn SecretProvider> {
+    Arc::new(EnvThenStore::new())
+}
+
+fn expand_root(path: &str) -> PathBuf {
+    if let Some(stripped) = path.strip_prefix("~/") {
+        if let Some(home) = home_dir() {
+            return home.join(stripped);
+        }
+    }
+    PathBuf::from(path)
+}
+
+fn select_provider_backend(config: &Config) -> Arc<dyn SecretProvider> {
+    let root = config
+        .security
+        .secrets
+        .root
+        .clone()
+        .unwrap_or_else(|| "~/.runloop/secrets".into());
+    let root = expand_root(&root);
+
+    match config.security.secrets.provider.as_str() {
+        "env" => Arc::new(EnvSecretProvider),
+        "secret-service" => Arc::new(SecretServiceProvider::default()),
+        "pass" => Arc::new(PassProvider::default()),
+        "age" => Arc::new(AgeProvider::new(root)),
+        "auto" => {
+            if PassProvider::available() {
+                Arc::new(PassProvider::default())
+            } else if AgeProvider::available(&root) {
+                Arc::new(AgeProvider::new(root))
+            } else {
+                debug!("auto secret provider falling back to env+store");
+                env_then_store()
+            }
+        }
+        "stub" => env_then_store(),
+        other => {
+            warn!(
+                provider = other,
+                "unknown secret provider; using stub fallback"
+            );
+            env_then_store()
+        }
+    }
+}
+
+/// Build a SecretProvider based on configuration, honoring TTL and provider
+/// selection. Exposed so executors/daemons share the same mapping.
+#[must_use]
+pub fn secret_provider_from_config(config: &Config) -> Arc<dyn SecretProvider> {
+    let base = select_provider_backend(config);
+    let ttl_secs = config.security.secrets.default_ttl;
+    if ttl_secs == 0 {
+        base
+    } else {
+        Arc::new(CachingSecretProvider::new(
+            base,
+            Duration::from_secs(ttl_secs),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::thread::sleep;
+    use std::time::Duration;
 
     #[allow(unsafe_code)]
     fn with_env_var(key: &str, val: &str, f: impl FnOnce()) {
@@ -328,7 +683,7 @@ mod tests {
         let provider = MockProvider::new().with_secret("api_key", "super-secret");
 
         let handle = store.resolve_or_create("api_key", &provider).unwrap();
-        let dereferenced = store.dereference(&handle);
+        let dereferenced = store.dereference_with(&handle, &provider);
 
         assert_eq!(dereferenced, Some("super-secret".to_string()));
     }
@@ -345,7 +700,8 @@ mod tests {
     #[test]
     fn handle_store_returns_none_for_invalid_handle() {
         let store = SecretHandleStore::new();
-        let dereferenced = store.dereference("rlsec_invalid");
+        let provider = MockProvider::new();
+        let dereferenced = store.dereference_with("rlsec_invalid", &provider);
         assert!(dereferenced.is_none());
     }
 
@@ -360,6 +716,70 @@ mod tests {
         store.clear();
 
         assert!(!store.is_valid_handle(&handle));
-        assert!(store.dereference(&handle).is_none());
+        let provider = MockProvider::new();
+        assert!(store.dereference_with(&handle, &provider).is_none());
+    }
+
+    #[test]
+    fn env_then_store_prefers_env_fallback() {
+        let provider = EnvThenStore::new();
+        with_env_var("RUNLOOP_TEST_ENV_ONLY", "env-secret", || {
+            assert_eq!(
+                provider.resolve("RUNLOOP_TEST_ENV_ONLY"),
+                Some("env-secret".into())
+            );
+        });
+    }
+
+    #[derive(Default)]
+    struct CountingProvider {
+        value: RwLock<String>,
+        calls: AtomicUsize,
+    }
+
+    impl CountingProvider {
+        fn with(value: &str) -> Self {
+            Self {
+                value: RwLock::new(value.to_string()),
+                calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn set(&self, value: &str) {
+            *self.value.write() = value.to_string();
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::Relaxed)
+        }
+    }
+
+    impl SecretProvider for CountingProvider {
+        fn resolve(&self, _secret_id: &str) -> Option<String> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Some(self.value.read().clone())
+        }
+    }
+
+    #[test]
+    fn caching_secret_provider_refreshes_after_ttl() {
+        let base = Arc::new(CountingProvider::with("one"));
+        let caching = CachingSecretProvider::new(base.clone(), Duration::from_millis(10));
+
+        let first = caching.resolve("alpha").unwrap();
+        assert_eq!(first, "one");
+        assert_eq!(base.calls(), 1);
+
+        // Within TTL: cached
+        let second = caching.resolve("alpha").unwrap();
+        assert_eq!(second, "one");
+        assert_eq!(base.calls(), 1);
+
+        // After TTL: refresh
+        sleep(Duration::from_millis(15));
+        base.set("two");
+        let third = caching.resolve("alpha").unwrap();
+        assert_eq!(third, "two");
+        assert_eq!(base.calls(), 2);
     }
 }

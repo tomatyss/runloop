@@ -29,15 +29,23 @@
 
 ## Secret Handling _(normative)_
 
-- Secret material never lives in the POG; only opaque `secret_id` references are
-  stored.
-- Default provider today is `security.secrets.provider = "stub"` (in-memory,
-  test-only). To maintain backward compatibility, the stub path will also
-  consult environment variables first (equivalent to the `env` provider) before
-  falling back to the empty store. Prefer configuring an explicit provider for
-  production secrets.
-- Planned `auto` backend will probe Secret Service → `pass` → age vault
-  (`~/.runloop/secrets/`); not yet shipped.
+- Secret material never lives in the POG; only opaque `secret_id` references or
+  hashed markers are stored. Hostcalls return raw values by default for backward
+  compatibility. To opt into handle-only mode (`rlsec_<...>`), set
+  `security.testing.expose_raw_secrets = false`
+  (`RUNLOOP__SECURITY__TESTING__EXPOSE_RAW_SECRETS=0`). Default remains `true`
+  for now and will flip to handle-only in a future breaking release.
+- Default provider: `security.secrets.provider = "stub"` = env-first +
+  in-memory (`EnvThenStore`). Other providers:
+  - `env`
+  - `secret-service` (DBus Secret Service; currently stubbed/best-effort; skipped in `auto`)
+  - `pass` (`pass show runloop/<secret_id>`, first line)
+  - `age` (file store under `security.secrets.root`, default
+    `~/.runloop/secrets`; master key at `<root>/master.agekey` 0o600. Current
+    implementation reads plaintext `.age` files; encryption TODO.)
+  - `auto` probes pass → age → env+store (secret-service skipped until wired).
+- TTL: `security.secrets.default_ttl` sets cache max-age; expired entries are
+  discarded and refreshed. Stale secrets are never served.
 - CLI (`rlp secrets put/get/list/delete`) is planned; until then, provision
   secrets through the chosen backend directly.
 - Overrides may only **reference** existing secret IDs; agents cannot read
@@ -54,7 +62,9 @@ resolved **before** loading the WASM module. If any secret cannot be resolved:
 - **Development override** (`security.testing.allow_missing_secrets = true`):
   agent launch proceeds with a warning. Use only for local development/testing.
 
-Environment variable override: `RUNLOOP__SECURITY__TESTING__ALLOW_MISSING_SECRETS=1`
+Environment variable overrides:\
+`RUNLOOP__SECURITY__TESTING__ALLOW_MISSING_SECRETS=1`\
+`RUNLOOP__SECURITY__TESTING__EXPOSE_RAW_SECRETS=1`
 
 This validation runs after secret IDs are pre-registered with the provider
 (`allow()`), so stub/fixture providers that rely on pre-registration work

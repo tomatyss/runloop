@@ -257,6 +257,16 @@ impl Config {
             .unwrap_or(false)
     }
 
+    /// Returns true if hostcalls should expose raw secret values to guests.
+    /// Intended only for legacy/dev scenarios; defaults to true.
+    pub fn expose_raw_secrets(&self) -> bool {
+        self.security
+            .testing
+            .as_ref()
+            .map(|t| t.expose_raw_secrets)
+            .unwrap_or(true)
+    }
+
     fn expand_paths(&mut self) {
         self.runtime.workdir = expand_path(&self.runtime.workdir);
         self.runtime.sockets_dir = expand_path(&self.runtime.sockets_dir);
@@ -672,6 +682,11 @@ pub struct TestingConfig {
     /// should keep this false (the default).
     #[serde(default)]
     pub allow_missing_secrets: bool,
+    /// Dev-only escape hatch: when true, hostcalls return raw secret values
+    /// instead of opaque handles. Defaults to true for backward compatibility;
+    /// will flip to false in a future breaking release.
+    #[serde(default = "default_true")]
+    pub expose_raw_secrets: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1318,9 +1333,12 @@ fn known_keys_for_path(path: &Path) -> BTreeSet<&'static str> {
             "allow_list",
             "default_ttl",
         ]),
-        "security/testing" => {
-            BTreeSet::from(["broker_mode", "broker_seed", "allow_missing_secrets"])
-        }
+        "security/testing" => BTreeSet::from([
+            "broker_mode",
+            "broker_seed",
+            "allow_missing_secrets",
+            "expose_raw_secrets",
+        ]),
         "router" => BTreeSet::from([
             "fastpath_shell",
             "default_opening",
