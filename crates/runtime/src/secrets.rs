@@ -414,7 +414,7 @@ impl AgeProvider {
 impl SecretProvider for AgeProvider {
     fn resolve(&self, secret_id: &str) -> Option<String> {
         std::fs::create_dir_all(&self.root).ok()?;
-        let _ = Self::ensure_master_key(&self.root)?;
+        Self::ensure_master_key(&self.root)?;
 
         static WARN: std::sync::Once = std::sync::Once::new();
         WARN.call_once(|| {
@@ -454,10 +454,10 @@ impl CachingSecretProvider {
 impl SecretProvider for CachingSecretProvider {
     fn resolve(&self, secret_id: &str) -> Option<String> {
         let now = Instant::now();
-        if let Some(entry) = self.cache.read().get(secret_id) {
-            if entry.expires_at.map(|t| t > now).unwrap_or(false) {
-                return Some(entry.value.clone());
-            }
+        if let Some(entry) = self.cache.read().get(secret_id)
+            && entry.expires_at.map(|t| t > now).unwrap_or(false)
+        {
+            return Some(entry.value.clone());
         }
 
         // Expired or missing: try to refresh.
@@ -484,14 +484,13 @@ impl SecretProvider for CachingSecretProvider {
     }
 
     fn exists(&self, secret_id: &str) -> bool {
-        if let Some(entry) = self.cache.read().get(secret_id) {
-            if entry
+        if let Some(entry) = self.cache.read().get(secret_id)
+            && entry
                 .expires_at
                 .map(|t| t > Instant::now())
                 .unwrap_or(false)
-            {
-                return true;
-            }
+        {
+            return true;
         }
         self.inner.exists(secret_id)
     }
@@ -502,10 +501,10 @@ fn env_then_store() -> Arc<dyn SecretProvider> {
 }
 
 fn expand_root(path: &str) -> PathBuf {
-    if let Some(stripped) = path.strip_prefix("~/") {
-        if let Some(home) = home_dir() {
-            return home.join(stripped);
-        }
+    if let Some(stripped) = path.strip_prefix("~/")
+        && let Some(home) = home_dir()
+    {
+        return home.join(stripped);
     }
     PathBuf::from(path)
 }
@@ -521,12 +520,12 @@ fn select_provider_backend(config: &Config) -> Arc<dyn SecretProvider> {
 
     match config.security.secrets.provider.as_str() {
         "env" => Arc::new(EnvSecretProvider),
-        "secret-service" => Arc::new(SecretServiceProvider::default()),
-        "pass" => Arc::new(PassProvider::default()),
+        "secret-service" => Arc::new(SecretServiceProvider),
+        "pass" => Arc::new(PassProvider),
         "age" => Arc::new(AgeProvider::new(root)),
         "auto" => {
             if PassProvider::available() {
-                Arc::new(PassProvider::default())
+                Arc::new(PassProvider)
             } else if AgeProvider::available(&root) {
                 Arc::new(AgeProvider::new(root))
             } else {

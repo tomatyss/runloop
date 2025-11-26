@@ -1,9 +1,9 @@
 # Exec hostcall timeouts
 
-The runtime can optionally impose a wall-clock timeout on `exec_spawn` hostcalls.
-By default no timeout is applied; commands run until completion. To enforce an
-upper bound, set the environment variable `RUNLOOP_EXEC_TIMEOUT_SECS` to a
-positive integer number of seconds.
+The runtime can optionally impose a wall-clock timeout on `exec_spawn`
+hostcalls. By default no timeout is applied; commands run until completion. To
+enforce an upper bound, set the environment variable `RUNLOOP_EXEC_TIMEOUT_SECS`
+to a positive integer number of seconds.
 
 Special values:
 

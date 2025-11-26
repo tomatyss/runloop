@@ -35,10 +35,11 @@
   `security.testing.expose_raw_secrets = false`
   (`RUNLOOP__SECURITY__TESTING__EXPOSE_RAW_SECRETS=0`). Default remains `true`
   for now and will flip to handle-only in a future breaking release.
-- Default provider: `security.secrets.provider = "stub"` = env-first +
-  in-memory (`EnvThenStore`). Other providers:
+- Default provider: `security.secrets.provider = "stub"` = env-first + in-memory
+  (`EnvThenStore`). Other providers:
   - `env`
-  - `secret-service` (DBus Secret Service; currently stubbed/best-effort; skipped in `auto`)
+  - `secret-service` (DBus Secret Service; currently stubbed/best-effort;
+    skipped in `auto`)
   - `pass` (`pass show runloop/<secret_id>`, first line)
   - `age` (file store under `security.secrets.root`, default
     `~/.runloop/secrets`; master key at `<root>/master.agekey` 0o600. Current
