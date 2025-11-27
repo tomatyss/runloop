@@ -12,7 +12,7 @@ use crate::caps::{CapabilitySet, Caps, NetLocation};
 use crate::error::{CapDeniedInfo, CapKind, Error};
 use crate::ready::ReadyEmitter;
 use crate::runtime::AuditPolicy;
-use crate::secrets::SecretProvider;
+use crate::secrets::{SecretHandleStore, SecretProvider};
 use anyhow::anyhow;
 use blake3::Hash as Blake3Hash;
 use parking_lot::Mutex;
@@ -41,6 +41,7 @@ pub(crate) struct HostState {
     kb: Arc<KnowledgeBase>,
     broker: Arc<Broker>,
     secrets: Arc<dyn SecretProvider>,
+    secret_handles: SecretHandleStore,
     hostcall_stats: Arc<HostcallStats>,
     agent_id: AgentId,
     trace_id: TraceId,
@@ -50,6 +51,7 @@ pub(crate) struct HostState {
     ready: ReadyEmitter,
     last_denial: Arc<Mutex<Option<CapDeniedInfo>>>,
     audit_policy: AuditPolicy,
+    expose_raw_secrets: bool,
 }
 
 fn redact_secret_id(secret_id: &str) -> String {
@@ -65,12 +67,14 @@ impl HostState {
         kb: Arc<KnowledgeBase>,
         broker: Arc<Broker>,
         secrets: Arc<dyn SecretProvider>,
+        secret_handles: SecretHandleStore,
         hostcall_stats: Arc<HostcallStats>,
         agent_id: AgentId,
         identity: String,
         async_handle: Option<TokioHandle>,
         ready: ReadyEmitter,
         audit_policy: AuditPolicy,
+        expose_raw_secrets: bool,
     ) -> Self {
         Self {
             caps,
@@ -78,6 +82,7 @@ impl HostState {
             kb,
             broker,
             secrets,
+            secret_handles,
             hostcall_stats,
             agent_id,
             trace_id: TraceId::new(),
@@ -87,6 +92,7 @@ impl HostState {
             ready,
             last_denial: Arc::new(Mutex::new(None)),
             audit_policy,
+            expose_raw_secrets,
         }
     }
 
@@ -140,6 +146,23 @@ impl HostState {
 
     pub(crate) fn notify_mailbox_recv(&self) {
         self.ready.notify_mailbox_recv();
+    }
+
+    /// Return the raw secret value for a given identifier or handle.
+    /// Handles are scoped per-agent via `secret_handles`; raw IDs fall back to
+    /// the configured provider. Stale handles are refreshed from the provider.
+    fn resolve_secret_value(&self, token: &str) -> Option<String> {
+        if token.starts_with("rlsec_") {
+            return self.secret_handles.dereference_with(token, &*self.secrets);
+        }
+        self.secrets.resolve(token)
+    }
+
+    /// Issue (or reuse) an opaque handle for the provided secret identifier,
+    /// refreshing the underlying value each call to avoid serving stale secrets.
+    fn issue_secret_handle(&self, secret_id: &str) -> Option<String> {
+        self.secret_handles
+            .resolve_or_create(secret_id, &*self.secrets)
     }
 
     fn broker_complete(&self, request: ModelRequest) -> ModelResult {
@@ -609,23 +632,28 @@ fn host_resolve_secret(
     let secret_id = read_utf8(&mut caller, ptr, len)?;
     caller.data().state.ensure_secret(&secret_id)?;
 
-    // Resolve the secret value from the provider.
-    // NOTE: For MVP, we return the real value to maintain backward compatibility.
-    // Future work will introduce opaque handles via SecretHandleStore for sinks
-    // that can dereference them (e.g., HTTP auth headers in net hostcalls).
-    if let Some(value) = caller.data().state.secrets.resolve(&secret_id) {
-        write_utf8(&mut caller, ptr, &value)?;
-        Ok(value.len() as i32)
-    } else {
-        let redacted = redact_secret_id(&secret_id);
-        Err(caller.data().state.deny(
-            "secrets.get",
-            "resolve_secret",
-            &redacted,
-            redacted.as_bytes(),
-            "secret_unknown",
-        ))
+    let state = &caller.data().state;
+
+    // Default: return raw value for backward compatibility unless operators
+    // opt into handle-only mode by disabling expose_raw_secrets.
+    if state.expose_raw_secrets {
+        if let Some(value) = state.resolve_secret_value(&secret_id) {
+            write_utf8(&mut caller, ptr, &value)?;
+            return Ok(value.len() as i32);
+        }
+    } else if let Some(handle) = state.issue_secret_handle(&secret_id) {
+        write_utf8(&mut caller, ptr, &handle)?;
+        return Ok(handle.len() as i32);
     }
+
+    let redacted = redact_secret_id(&secret_id);
+    Err(state.deny(
+        "secrets.get",
+        "resolve_secret",
+        &redacted,
+        redacted.as_bytes(),
+        "secret_unknown",
+    ))
 }
 
 const EXEC_OUTPUT_PREVIEW_LIMIT: usize = 512;
@@ -1235,12 +1263,14 @@ mod tests {
             kb,
             broker,
             secrets,
+            SecretHandleStore::new(),
             std::sync::Arc::new(HostcallStats::new()),
             AgentId::new(),
             "probe".to_string(),
             None,
             ReadyEmitter::noop(),
             AuditPolicy::default(),
+            false,
         ));
 
         let store_data = StoreData {
@@ -1299,12 +1329,14 @@ mod tests {
             kb,
             broker,
             secrets,
+            SecretHandleStore::new(),
             Arc::new(HostcallStats::new()),
             AgentId::new(),
             "model".to_string(),
             None,
             ReadyEmitter::noop(),
             AuditPolicy::default(),
+            false,
         ));
 
         let store_data = StoreData {
@@ -1419,12 +1451,14 @@ mod tests {
             kb,
             broker,
             secrets,
+            SecretHandleStore::new(),
             Arc::new(HostcallStats::new()),
             AgentId::new(),
             "exec".to_string(),
             None,
             ReadyEmitter::noop(),
             AuditPolicy::default(),
+            false,
         ));
 
         let store_data = StoreData {
@@ -1469,12 +1503,14 @@ mod tests {
             kb,
             broker,
             secrets,
+            SecretHandleStore::new(),
             Arc::new(HostcallStats::new()),
             AgentId::new(),
             "exec-capture".to_string(),
             None,
             ReadyEmitter::noop(),
             AuditPolicy::default(),
+            false,
         ));
 
         let store_data = StoreData {
@@ -1553,12 +1589,14 @@ mod tests {
             kb,
             broker,
             secrets,
+            SecretHandleStore::new(),
             Arc::new(HostcallStats::new()),
             AgentId::new(),
             "exec-capture-truncate".to_string(),
             None,
             ReadyEmitter::noop(),
             AuditPolicy::default(),
+            false,
         ));
 
         let store_data = StoreData {
@@ -1605,12 +1643,14 @@ mod tests {
             kb,
             broker,
             secrets,
+            SecretHandleStore::new(),
             Arc::new(HostcallStats::new()),
             AgentId::new(),
             "exec-capture-oversize".to_string(),
             None,
             ReadyEmitter::noop(),
             AuditPolicy::default(),
+            false,
         ));
 
         let store_data = StoreData {
@@ -1656,12 +1696,14 @@ mod tests {
             kb,
             broker,
             secrets,
+            SecretHandleStore::new(),
             Arc::new(HostcallStats::new()),
             AgentId::new(),
             "exec-deny".to_string(),
             None,
             ReadyEmitter::noop(),
             AuditPolicy::default(),
+            false,
         ));
 
         let store_data = StoreData {
@@ -1708,12 +1750,14 @@ mod tests {
             kb,
             broker,
             secrets,
+            SecretHandleStore::new(),
             Arc::new(HostcallStats::new()),
             AgentId::new(),
             "exec-large".to_string(),
             None,
             ReadyEmitter::noop(),
             AuditPolicy::default(),
+            false,
         ));
 
         let store_data = StoreData {
@@ -1768,12 +1812,14 @@ mod tests {
             kb,
             broker,
             secrets,
+            SecretHandleStore::new(),
             Arc::new(HostcallStats::new()),
             AgentId::new(),
             "exec-timeout".to_string(),
             None,
             ReadyEmitter::noop(),
             AuditPolicy::default(),
+            false,
         ));
 
         set_exec_timeout_override(1);
@@ -1828,12 +1874,14 @@ mod tests {
             kb,
             broker,
             secrets,
+            SecretHandleStore::new(),
             Arc::new(HostcallStats::new()),
             AgentId::new(),
             "exec-no-timeout".to_string(),
             None,
             ReadyEmitter::noop(),
             AuditPolicy::default(),
+            false,
         ));
 
         disable_exec_timeout_override();
@@ -1861,5 +1909,74 @@ mod tests {
             start.elapsed() >= Duration::from_secs(2),
             "command should be allowed to run full duration without timeout"
         );
+    }
+
+    #[test]
+    fn resolve_secret_returns_handle_and_dereferences() {
+        let kb = Arc::new(KnowledgeBase::new());
+        let broker = Arc::new(Broker::default());
+        let stats = Arc::new(HostcallStats::new());
+        let mut caps = Caps::deny_all();
+        caps.secrets.insert("alpha".into());
+
+        let store = SecretStore::new();
+        store.put("alpha", "super-secret");
+        let secrets: Arc<dyn SecretProvider> = Arc::new(store);
+
+        let host_state = Arc::new(HostState::new(
+            caps,
+            AuditSink::new(16),
+            kb,
+            broker,
+            secrets,
+            SecretHandleStore::new(),
+            stats,
+            AgentId::new(),
+            "secret-test".into(),
+            None,
+            ReadyEmitter::noop(),
+            AuditPolicy::default(),
+            false, // handle-only mode
+        ));
+
+        let handle = host_state.issue_secret_handle("alpha").expect("handle");
+        assert!(handle.starts_with("rlsec_"));
+        let raw = host_state
+            .resolve_secret_value(&handle)
+            .expect("dereference");
+        assert_eq!(raw, "super-secret");
+    }
+
+    #[test]
+    fn hostcall_resolve_secret_returns_raw_when_expose_enabled() {
+        let kb = Arc::new(KnowledgeBase::new());
+        let broker = Arc::new(Broker::default());
+        let stats = Arc::new(HostcallStats::new());
+        let mut caps = Caps::deny_all();
+        caps.secrets.insert("alpha".into());
+
+        let store = SecretStore::new();
+        store.put("alpha", "raw-secret");
+        let secrets: Arc<dyn SecretProvider> = Arc::new(store);
+
+        let host_state = Arc::new(HostState::new(
+            caps,
+            AuditSink::new(16),
+            kb,
+            broker,
+            secrets,
+            SecretHandleStore::new(),
+            stats,
+            AgentId::new(),
+            "secret-test".into(),
+            None,
+            ReadyEmitter::noop(),
+            AuditPolicy::default(),
+            true, // expose raw secrets (default)
+        ));
+
+        // Simulate hostcall resolve_secret path
+        let val = host_state.resolve_secret_value("alpha").expect("raw");
+        assert_eq!(val, "raw-secret");
     }
 }
