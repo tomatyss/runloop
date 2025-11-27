@@ -188,11 +188,16 @@ impl Config {
                 self.version
             )));
         }
-        if self.runtime.agent_container != "wasm32-wasip1" {
+        if self.runtime.agent_container != "wasm32-wasip1"
+            && self.runtime.agent_container != "wasm32-wasi"
+        {
             return Err(Error::Config(format!(
-                "runtime.agent_container must be \"wasm32-wasip1\" for MVP (found {})",
+                "runtime.agent_container must be \"wasm32-wasip1\" (or legacy \"wasm32-wasi\") for MVP (found {})",
                 self.runtime.agent_container
             )));
+        }
+        if self.runtime.agent_container == "wasm32-wasi" {
+            warn!("using legacy runtime.agent_container=\"wasm32-wasi\"; prefer \"wasm32-wasip1\"");
         }
         if self.security.confirm_external_actions && self.router.denylist.is_empty() {
             warn!(
@@ -1404,6 +1409,21 @@ security:
         assert_eq!(config.router.default_opening, "compose_support_ticket");
         assert_eq!(config.security.confirm_external_actions, false);
         assert!(config.kb.root_dir.ends_with(".custom-pog"));
+    }
+
+    #[test]
+    fn legacy_agent_container_still_validates() {
+        let mut config = Config::default();
+        config.runtime.agent_container = "wasm32-wasi".into();
+        config
+            .validate()
+            .expect("legacy wasm32-wasi should remain accepted for compatibility");
+
+        config.runtime.agent_container = "bogus".into();
+        assert!(
+            config.validate().is_err(),
+            "non-WASI agent_container values should be rejected"
+        );
     }
 
     #[test]
