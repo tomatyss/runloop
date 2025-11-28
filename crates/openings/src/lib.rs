@@ -51,11 +51,14 @@ mod tests {
 
     #[test]
     fn system_helper_parses_with_exists_condition() {
-        let yaml =
-            std::fs::read_to_string(fixture_path("system_helper.yaml")).expect("system_helper fixture");
+        let yaml = std::fs::read_to_string(fixture_path("system_helper.yaml"))
+            .expect("system_helper fixture");
         let opening = parse_opening_str(&yaml).expect("parse system_helper");
         assert_eq!(opening.name, "system_helper");
-        assert!(opening.edges.is_empty(), "system_helper should have no edges");
+        assert!(
+            opening.edges.is_empty(),
+            "system_helper should have no edges"
+        );
 
         match opening.success {
             Some(SuccessCondition::AnyOf(exprs)) => {
