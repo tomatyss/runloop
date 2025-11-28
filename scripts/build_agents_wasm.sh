@@ -9,6 +9,7 @@ fi
 WASM_TARGET="wasm32-wasip1"
 TARGET_DIR="$ROOT/target/$WASM_TARGET/release"
 export CARGO_TARGET_DIR="$ROOT/target"
+ALLOW_MISSING_MANIFESTS="${ALLOW_MISSING_MANIFESTS:-0}"
 
 if ! rustc --print target-list | grep -q "$WASM_TARGET"; then
   echo "rustc missing $WASM_TARGET target (install via 'rustup target add $WASM_TARGET')" >&2
@@ -17,8 +18,23 @@ fi
 
 discover_agents() {
   local -a paths=()
+  local dir_name agent_name manifest
   while IFS= read -r entry; do
     [[ -f "$entry/Cargo.toml" ]] || continue
+    if ! grep -q "\[\[bin\]\]" "$entry/Cargo.toml"; then
+      continue
+    fi
+    dir_name="$(basename "$entry")"
+    agent_name="${dir_name//-/_}"
+    manifest="$ROOT/agents/$agent_name/manifest.toml"
+    if [[ ! -f "$manifest" ]]; then
+      if [[ "$ALLOW_MISSING_MANIFESTS" == "1" ]]; then
+        echo "skipping $dir_name; missing manifest at agents/$agent_name/manifest.toml (ALLOW_MISSING_MANIFESTS=1)" >&2
+        continue
+      fi
+      echo "missing manifest for $dir_name at agents/$agent_name/manifest.toml" >&2
+      exit 1
+    fi
     paths+=("$entry")
   done < <(find "$ROOT/crates/agents-wasm" -mindepth 1 -maxdepth 1 -type d ! -name target -print | sort)
 

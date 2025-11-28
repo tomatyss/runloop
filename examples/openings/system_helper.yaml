@@ -24,6 +24,8 @@ nodes:
     timeout_ms: 20000
     budget_tokens: 3000
 
+edges: []
+
 success:
   any_of:
-    - helper.out
+    - exists(helper.out)

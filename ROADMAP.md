@@ -272,6 +272,10 @@ README.md
 
 ```
 
+- Authoring UX (no repo required): `rlp agent scaffold/build/install` works on a
+  clean Debian install, scaffolded crates do not assume a workspace root, and
+  digest tooling ships with the package.
+
 - `rlp agent install <path|uri>` validates signature/caps and registers the
   bundle; upgrade path handles versioning.
 - Signed bundles (Ed25519), deterministic Wasm builds; trust roots in config.
@@ -280,6 +284,9 @@ README.md
 
 - Tampered bundle rejected; repro builds verified on two machines;
   install/upgrade rollback tested.
+- On a clean Debian host (no source tree), `rlp agent scaffold system_setup`
+  → `rlp agent build/install` → `rlp run` succeeds without manual manifest
+  edits or workspace setup.
 
 ### OS packaging / images
 

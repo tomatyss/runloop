@@ -27,18 +27,18 @@ mod tests {
     use std::sync::Arc;
     use std::sync::Mutex;
 
-    fn fixture_path() -> PathBuf {
+    fn fixture_path(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("..")
             .join("examples")
             .join("openings")
-            .join("compose_email.yaml")
+            .join(name)
     }
 
     #[test]
     fn compose_email_parses() {
-        let yaml = std::fs::read_to_string(fixture_path()).expect("fixture");
+        let yaml = std::fs::read_to_string(fixture_path("compose_email.yaml")).expect("fixture");
         let opening = parse_opening_str(&yaml).expect("parse compose_email");
         assert_eq!(opening.name, "compose_email");
         assert_eq!(opening.nodes.len(), 5);
@@ -47,6 +47,29 @@ mod tests {
             opening.success,
             Some(SuccessCondition::AnyOf(exprs)) if !exprs.is_empty()
         ));
+    }
+
+    #[test]
+    fn system_helper_parses_with_exists_condition() {
+        let yaml =
+            std::fs::read_to_string(fixture_path("system_helper.yaml")).expect("system_helper fixture");
+        let opening = parse_opening_str(&yaml).expect("parse system_helper");
+        assert_eq!(opening.name, "system_helper");
+        assert!(opening.edges.is_empty(), "system_helper should have no edges");
+
+        match opening.success {
+            Some(SuccessCondition::AnyOf(exprs)) => {
+                assert_eq!(exprs.len(), 1);
+                match &exprs[0] {
+                    Expression::Exists(reference) => {
+                        assert_eq!(reference.node, "helper");
+                        assert_eq!(reference.port, "out");
+                    }
+                    other => panic!("expected exists expression, got {other:?}"),
+                }
+            }
+            other => panic!("expected AnyOf success condition, got {other:?}"),
+        }
     }
 
     struct MockExecutor {
