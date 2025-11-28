@@ -332,7 +332,7 @@ README.md
   **BLAKE3 BLOB(32)**; hex form is for logs/UI only.
 - **Action confirmation ACL:** only UI may publish `action.decision`; agents
   request via `action.request`.
-- **Routing policy:** shell fast‑path togglable; “why this route?” always
+- **Routing policy:** shell fast‑path toggleable; “why this route?” always
   producible.
 
 ---
