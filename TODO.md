@@ -619,6 +619,49 @@ cleanly.
 - [ ] Manual acceptance: after enabling integration, typing `ls -la` executes
       via the shell, while `draft email to John about Q4 plan` launches the
       configured opening; `rlp why` explains the decision for each.
+
+---
+
+## Epic P — Agent authoring UX (deb installs)
+
+### P1. Scaffold that builds without a workspace
+
+- [ ] `rlp agent scaffold` emits crates with explicit `package.license` /
+      edition (no `license.workspace=true`), so they build in
+      `~/.runloop/agents-wasm` without a repo workspace.
+- [ ] Update README template to note the standalone build flow.
+
+**DoD:** On a clean Debian host (no source tree), `cargo build --target
+      wasm32-wasip1 --manifest-path ~/.runloop/agents-wasm/<name>/Cargo.toml`
+      succeeds after scaffolding.
+
+### P2. Build/install command for bundles
+
+- [ ] Add `rlp agent build` (or `build/install`) that compiles the wasm,
+      copies it into `bin/`, refreshes `entry_wasm`/`tools.json` BLAKE3 digests,
+      and validates caps.
+- [ ] Ship a digest helper with the deb (or vendor `b3sum`) and reuse it in the
+      command.
+
+**DoD:** On a clean Debian host: `rlp agent scaffold system_setup` →
+      `rlp agent build system_setup` → `rlp run <opening>` succeeds without
+      manual file edits or perl one-liners.
+
+### P3. Config robustness for user installs
+
+- [ ] Config loader should skip unreadable `/etc/runloop/config.yaml` with a
+      warning instead of failing the CLI.
+
+**DoD:** With `/etc/runloop/config.yaml` unreadable, `rlp` still loads the user
+      config and runs commands.
+
+### P4. Docs (deb install flow)
+
+- [ ] Add a short guide for “authoring an agent on a deb install” (scaffold →
+      build/install → run) to `docs/` and link from `docs/getting-started.md`.
+
+**DoD:** Following the guide on a clean install produces a runnable agent
+      without the source repo.
 - [ ] Add a small integration test (or scripted demo) that opens an interactive
       shell under `script`/`expect`, feeds a few prompts, and asserts that
       router decisions and side effects match expectations.
