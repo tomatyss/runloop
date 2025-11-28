@@ -107,9 +107,8 @@ Always-on, single line:
   agent). Minimum gauges/counters (Epic J prerequisites): `agents_running`,
   `rss_total`, `bus_queue_depth_max`, `bus_queue_capacity_max`, `msgs_sent`,
   `msgs_dropped`, `cap_denied`, `broker_calls`, `cache_hits`. Status bar
-  surfaces `agents_running` and
-  `bus_queue_depth` when present. Subscribe to per-agent metrics with
-  `--monitor-agents` until auto-discovery is added.
+  surfaces `agents_running` and `bus_queue_depth` when present. Subscribe to
+  per-agent metrics with `--monitor-agents` until auto-discovery is added.
   Frames conform to `CT_METRICS_SNAPSHOT` v1:
   `{"v":1,"scope":"system|agent","ts_ms":...,"interval_ms":...,"labels":{executor_id,node_id,agent_id?},"gauges":{...},"counters":{...}}`.
   When token usage is unknown, token counters are omitted (rendered as N/A).

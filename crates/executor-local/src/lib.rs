@@ -28,8 +28,8 @@ use runloop_openings::{
     RunnerError,
 };
 use runloop_runtime::{
-    AgentIdentity, AgentSpec, AuditPolicy, EnvSecretProvider, Runtime, RuntimeBuilder,
-    SecretProvider, SecretStore,
+    AgentIdentity, AgentSpec, AuditPolicy, Runtime, RuntimeBuilder, SecretProvider,
+    secret_provider_from_config,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -49,46 +49,6 @@ pub enum ExecutorInitError {
     Broker(#[from] BrokerInitError),
     #[error(transparent)]
     Runtime(#[from] runloop_runtime::Error),
-}
-
-fn select_secret_provider(config: &Config) -> Arc<dyn SecretProvider> {
-    match config.security.secrets.provider.as_str() {
-        "env" => Arc::new(EnvSecretProvider),
-        // Default "stub" keeps an in-memory store but will still honor env
-        // variables for backward compatibility with existing deployments that
-        // export API keys without configuring a provider.
-        "stub" => env_then_store(),
-        // Unknown providers fall back to stub.
-        _ => env_then_store(),
-    }
-}
-
-fn env_then_store() -> Arc<dyn SecretProvider> {
-    Arc::new(EnvThenStore {
-        env: EnvSecretProvider,
-        store: Arc::new(SecretStore::new()),
-    })
-}
-
-struct EnvThenStore {
-    env: EnvSecretProvider,
-    store: Arc<SecretStore>,
-}
-
-impl SecretProvider for EnvThenStore {
-    fn resolve(&self, secret_id: &str) -> Option<String> {
-        self.env
-            .resolve(secret_id)
-            .or_else(|| self.store.resolve(secret_id))
-    }
-
-    fn allow(&self, secret_id: &str) {
-        self.store.allow(secret_id);
-    }
-
-    fn exists(&self, secret_id: &str) -> bool {
-        self.env.exists(secret_id) || self.store.exists(secret_id)
-    }
 }
 
 struct ProviderResolver {
@@ -117,7 +77,7 @@ pub fn build_executor(
     catch_up_views(&kb)?;
     seed_contact(&kb)?;
 
-    let secrets = select_secret_provider(&config);
+    let secrets = secret_provider_from_config(&config);
     let secret_resolver: Arc<dyn SecretResolver> = Arc::new(ProviderResolver::new(secrets.clone()));
     let broker = Arc::new(Broker::new(config.models.broker.clone(), secret_resolver)?);
     let audit_policy = AuditPolicy::new(
@@ -130,6 +90,7 @@ pub fn build_executor(
         .secrets(secrets)
         .audit_policy(audit_policy)
         .allow_missing_secrets(config.allow_missing_secrets())
+        .expose_raw_secrets(config.expose_raw_secrets())
         .build()?;
 
     Ok(Arc::new(LocalExecutor::new(

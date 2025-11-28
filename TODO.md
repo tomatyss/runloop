@@ -470,14 +470,15 @@ freeze updates.
 
 ### K2. Secrets handling
 
-- [ ] `secret_id` indirection only; no raw secrets in KB/events. Env provider
-      currently hands the raw env value to agents—replace with real backends or
-      add masking.
+- [ ] `secret_id` indirection only; no raw secrets in KB/events. Hostcall can
+      emit opaque handles when `expose_raw_secrets=false`; default still returns
+      raw for compatibility. Remaining: shared redactor across broker/KB/log
+      sinks and age backend encryption.
 - [ ] Stub “keyring” provider that returns opaque tokens (no real secrets for
-      MVP). Default provider remains `stub` and currently consults env vars for
-      backward compatibility; add real providers (secret-service|pass|age) and
-      a fail-fast path when secrets are missing.
-- [ ] Fail agent launch when declared secrets are absent unless an explicit
+      MVP). Providers wired: stub/env, secret-service (stub), pass, age
+      plaintext; add real secret-service/age encryption, CLI tooling, and
+      finish auto-probe coverage.
+- [x] Fail agent launch when declared secrets are absent unless an explicit
       dev override is set; avoid silently returning the ID itself.
 
 **DoD:** Search repo for “api_key” yields no values; unit tests pass with fake

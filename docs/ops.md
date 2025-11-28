@@ -73,10 +73,10 @@ unavailable. It fails fast with guidance to start the daemon (or re-run with
 ### 1.3 Model broker configuration _(MVP)_
 
 - `models.broker.providers` lists named backends. `kind` may be `local`, `http`
-  (OpenAI-compatible completions), `http_openai_chat` (OpenAI chat), `http_anthropic`
-  (Claude `/v1/messages`), `http_ollama` (local Ollama), or `http_gemini`
-  (Google Gemini `generateContent`). These HTTP kinds accept `base_url`,
-  `secret_id`, and optional static headers.
+  (OpenAI-compatible completions), `http_openai_chat` (OpenAI chat),
+  `http_anthropic` (Claude `/v1/messages`), `http_ollama` (local Ollama), or
+  `http_gemini` (Google Gemini `generateContent`). These HTTP kinds accept
+  `base_url`, `secret_id`, and optional static headers.
 - `models.broker.route` is an ordered array of
   `{ pattern, provider, target_model? }` entries; the first matching pattern
   wins. Legacy map syntax like `{ "*": "local" }` (or the legacy key `routing`)
@@ -89,9 +89,9 @@ unavailable. It fails fast with guidance to start the daemon (or re-run with
   and config-provided values.
 - Provider `secret_id` values resolve at runtime via the configured secret
   store; raw API keys should never be stored in YAML.
-- To use Gemini, add a provider entry with `kind: http_gemini`, `base_url:
-  https://generativelanguage.googleapis.com`, and a `secret_id` such as
-  `runloop/models/gemini` (the runtime will also look for the environment
+- To use Gemini, add a provider entry with `kind: http_gemini`,
+  `base_url: https://generativelanguage.googleapis.com`, and a `secret_id` such
+  as `runloop/models/gemini` (the runtime will also look for the environment
   variable `RUNLOOP_MODELS_GEMINI`). Agents that invoke Gemini still need
   `model = true` in `policy.caps`; automation agents that shell out (e.g., to
   manage tmux) also require `exec = true` plus explicit filesystem whitelists
@@ -315,9 +315,9 @@ dev = {
 See `docs/security-model.md` for secret-store details. Ops tasks:
 
 > **Status:** `rlp secrets ...` tooling is being wired up; use your platform's
-> secret store CLI until the native commands ship. Default provider is
-> `stub` (in-memory, for dev) but it will consult environment variables first
-> to preserve existing env-only setups. Prefer a real backend for anything
+> secret store CLI until the native commands ship. Default provider is `stub`
+> (in-memory, for dev) but it will consult environment variables first to
+> preserve existing env-only setups. Prefer a real backend for anything
 > sensitive.
 
 - Planned: `rlp secrets init --backend=secret-service|pass|age`

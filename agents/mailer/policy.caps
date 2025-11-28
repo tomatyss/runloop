@@ -5,3 +5,4 @@ model = false
 net = []
 fs = []
 time = false
+secrets = ["mail.smtp.key"]

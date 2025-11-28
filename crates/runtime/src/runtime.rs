@@ -32,7 +32,7 @@ use crate::hostcalls::{self, AgentEnvelope, AgentMailbox, HostState, HostcallSta
 use crate::module_cache::ModuleCache;
 use crate::output::OutputRing;
 use crate::ready::{ReadyAckKind, ReadyFailure, ready_barrier};
-use crate::secrets::{SecretProvider, SecretStore};
+use crate::secrets::{SecretHandleStore, SecretProvider, SecretStore};
 use crate::spec::{AgentIdentity, AgentSpec};
 use crate::stats::{AgentStats, read_stats};
 
@@ -94,6 +94,8 @@ struct RuntimeInner {
     audit_policy: AuditPolicy,
     /// When false (default), agent launch fails if declared secrets cannot be resolved.
     allow_missing_secrets: bool,
+    /// Dev-only: when true, hostcalls will expose raw secret values to guests.
+    expose_raw_secrets: bool,
 }
 
 struct AsyncSpawner {
@@ -198,6 +200,7 @@ pub struct RuntimeBuilder {
     ready_timeout: Duration,
     audit_policy: AuditPolicy,
     allow_missing_secrets: bool,
+    expose_raw_secrets: bool,
 }
 
 impl RuntimeBuilder {
@@ -218,6 +221,7 @@ impl RuntimeBuilder {
             ready_timeout: default_ready_timeout(),
             audit_policy: AuditPolicy::default(),
             allow_missing_secrets: false,
+            expose_raw_secrets: true,
         }
     }
 
@@ -282,6 +286,14 @@ impl RuntimeBuilder {
         self
     }
 
+    /// Dev-only: expose raw secrets to guests instead of opaque handles.
+    /// Defaults to false and will be removed in a future breaking release.
+    #[must_use]
+    pub fn expose_raw_secrets(mut self, expose: bool) -> Self {
+        self.expose_raw_secrets = expose;
+        self
+    }
+
     pub fn build(self) -> Result<Runtime, Error> {
         let mut config = wasmtime::Config::default();
         config
@@ -327,6 +339,7 @@ impl RuntimeBuilder {
             ready_timeout: self.ready_timeout,
             audit_policy: self.audit_policy,
             allow_missing_secrets: self.allow_missing_secrets,
+            expose_raw_secrets: self.expose_raw_secrets,
         };
 
         Ok(Runtime {
@@ -441,6 +454,7 @@ impl Runtime {
             self.inner.kb.clone(),
             self.inner.broker.clone(),
             self.inner.secrets.clone(),
+            SecretHandleStore::new(),
             self.inner.hostcall_stats.clone(),
             id,
             identity_label.clone(),
@@ -450,6 +464,7 @@ impl Runtime {
                 .map(|spawner| spawner.handle()),
             ready_emitter.clone(),
             self.inner.audit_policy,
+            self.inner.expose_raw_secrets,
         ));
 
         let process = Arc::new(AgentProcess {
