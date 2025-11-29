@@ -45,8 +45,9 @@ rlp shell disable --shell zsh
 Key behaviors:
 
 - The helper looks for snippets under `/usr/share/runloop/shell` (packaged
-  installs), `/usr/local/share/runloop/shell`, `~/.runloop/shell`, and—as a
-  convenience when working inside the repo—`packaging/shell/`.
+  installs), `/usr/local/share/runloop/shell`,
+  `/opt/homebrew/share/runloop/shell`, `~/.runloop/shell`, and—as a convenience
+  when working inside the repo—`packaging/shell/`.
 - `--snippet <path>` overrides discovery; the command errors if the file does
   not exist (use `--dry-run` to preview). The helper canonicalizes snippet and
   opening paths before writing, so relative inputs like
@@ -54,9 +55,10 @@ Key behaviors:
   sessions elsewhere (the block stores an absolute path).
 - `--opening <path>` injects an `export RUNLOOP_ROUTER_OPENING_PATH=...` line so
   the snippet knows which YAML opening to use when routing to agents. If you
-  omit `--opening`, the helper copies
-  `/usr/share/runloop/openings/router-default.yaml` (identical to
-  `examples/openings/compose_email.yaml`) into
+  omit `--opening`, the helper copies a packaged default (from
+  `/usr/share/runloop/openings/router-default.yaml`,
+  `/usr/local/share/runloop/openings/router-default.yaml`, or
+  `/opt/homebrew/share/runloop/openings/router-default.yaml`) into
   `~/.runloop/openings/router-default.yaml` **if that file is absent**, and
   points the env var at the user copy. Existing user copies are never
   overwritten; if neither path exists you can still pass `--opening` later.
@@ -122,6 +124,14 @@ handler inspects `$READLINE_LINE`, calls `rlp route`, and either evaluates the
 line via `eval` (shell route) or invokes the opening (agent route). Behavior
 mirrors the zsh widget with bash-specific nuances:
 
+- Guardrails: interactive shells only; skips when `RUNLOOP_ROUTER_DISABLE=1`,
+  when `TERM=dumb` or `PS1` is empty, or when common CI/SSH envs are present
+  (`CI|GITHUB_ACTIONS|BUILDKITE|TEAMCITY_VERSION|JENKINS_URL|GITLAB_CI|CIRCLECI|SSH_CONNECTION|SSH_TTY`).
+  Override with `RUNLOOP_ROUTER_FORCE=1`.
+- Version gate: requires Bash ≥5.1. Older shells (e.g., macOS system Bash 3.2)
+  emit a warning and skip to avoid readline/bind incompatibilities.
+- Routing path: passes `RUNLOOP_ROUTER_TIMEOUT_MS` through to `rlp route` and
+  treats exit `12` as a timeout (warns, then executes the line via the shell).
 - Execution records history using the same `HISTCONTROL` / `HISTIGNORE`
   semantics as readline (leading-space secrets and ignored patterns remain out
   of history).
@@ -129,7 +139,10 @@ mirrors the zsh widget with bash-specific nuances:
   return to the prompt without executing the buffer.
 - Exit codes propagate: `$?`, `&&`/`||`, and `set -e` behave as if the user
   executed the command or opening manually.
-- `runloop_router_off` / `runloop_router_on` work just like the zsh helpers.
+- `runloop_router_off` / `runloop_router_on` mirror the zsh helpers; key binding
+  defaults to Enter (`^M`) plus `^J` unless `RUNLOOP_ROUTER_BINDKEY` overrides
+  with a single binding (invalid bindings log a warning and fall back to
+  `^M`/`^J`).
 - Because bash lacks a native status bar, errors are printed to stderr.
 - The snippet avoids non-interactive shells by examining `$-`; sourcing it in
   scripts is a no-op.
@@ -145,16 +158,16 @@ Limitations (MVP):
 
 <!-- markdownlint-disable MD013 -->
 
-| Toggle / Command                      | Effect                                                                          |
-| ------------------------------------- | ------------------------------------------------------------------------------- |
-| `RUNLOOP_ROUTER_DISABLE=1`            | Globally disable routing (shells fall back to normal behavior).                 |
-| `RUNLOOP_ROUTER_FORCE=1`              | Override CI/SSH auto-disable and force routing on.                              |
-| `runloop_router_off/on`               | Convenience helpers provided by both snippets.                                  |
-| `RUNLOOP_ROUTER_OPENING_PATH`         | Absolute path to the YAML opening to invoke for agent routes.                   |
-| `RUNLOOP_ROUTER_OPENING_PATH_DEFAULT` | Optional fallback path (defaults to `~/.runloop/openings/router-default.yaml`). |
-| `RUNLOOP_ROUTER_TIMEOUT_MS`           | Timeout for `rlp route` (default 200); exit code 12 on expiry.                  |
-| `RUNLOOP_ROUTER_BINDKEY`              | Key sequence to bind the widget (default `^M`).                                 |
-| `RUNLOOP_ROUTER_DEBUG=1` _(future)_   | Reserved for verbose logging (not yet implemented).                             |
+| Toggle / Command                      | Effect                                                                           |
+| ------------------------------------- | -------------------------------------------------------------------------------- |
+| `RUNLOOP_ROUTER_DISABLE=1`            | Globally disable routing (shells fall back to normal behavior).                  |
+| `RUNLOOP_ROUTER_FORCE=1`              | Override CI/SSH auto-disable and force routing on.                               |
+| `runloop_router_off/on`               | Convenience helpers provided by both snippets.                                   |
+| `RUNLOOP_ROUTER_OPENING_PATH`         | Absolute path to the YAML opening to invoke for agent routes.                    |
+| `RUNLOOP_ROUTER_OPENING_PATH_DEFAULT` | Optional fallback path (defaults to `~/.runloop/openings/router-default.yaml`).  |
+| `RUNLOOP_ROUTER_TIMEOUT_MS`           | Timeout for `rlp route` (default 200); exit code 12 on expiry.                   |
+| `RUNLOOP_ROUTER_BINDKEY`              | Key sequence to bind the widget (default `^M`; bash also binds `^J` unless set). |
+| `RUNLOOP_ROUTER_DEBUG=1` _(future)_   | Reserved for verbose logging (not yet implemented).                              |
 
 <!-- markdownlint-enable MD013 -->
 

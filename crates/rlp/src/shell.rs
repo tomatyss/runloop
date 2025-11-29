@@ -236,6 +236,7 @@ fn resolve_snippet_path(
 fn default_snippet_candidates(flavor: ShellFlavor) -> Vec<PathBuf> {
     let mut paths = vec![PathBuf::from("/usr/share/runloop/shell").join(snippet_name(flavor))];
     paths.push(PathBuf::from("/usr/local/share/runloop/shell").join(snippet_name(flavor)));
+    paths.push(PathBuf::from("/opt/homebrew/share/runloop/shell").join(snippet_name(flavor)));
     if let Some(home) = home_dir() {
         paths.push(home.join(USER_SHELL_DIR).join(snippet_name(flavor)));
     }
@@ -333,6 +334,7 @@ fn default_opening_source() -> Result<Option<PathBuf>, ShellError> {
     let mut candidates = vec![
         PathBuf::from("/usr/share/runloop/openings/router-default.yaml"),
         PathBuf::from("/usr/local/share/runloop/openings/router-default.yaml"),
+        PathBuf::from("/opt/homebrew/share/runloop/openings/router-default.yaml"),
     ];
     if let Ok(cwd) = std::env::current_dir() {
         candidates.push(
@@ -660,5 +662,16 @@ mod tests {
         );
         assert_eq!(result.action, ShellAction::Added);
         assert!(result.dry_run);
+    }
+
+    #[test]
+    fn default_snippet_candidates_include_homebrew_prefix() {
+        let paths = default_snippet_candidates(ShellFlavor::Bash);
+        let expected = PathBuf::from("/opt/homebrew/share/runloop/shell")
+            .join(snippet_name(ShellFlavor::Bash));
+        assert!(
+            paths.contains(&expected),
+            "expected Homebrew share path to be included"
+        );
     }
 }
