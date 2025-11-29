@@ -376,7 +376,7 @@ draft artifact.
       `CT_RUN_EVENT`; KB persistence of run/node events is owned by the daemon._
 - [x] `rlp why "<prompt>"` (table output by default, `--json` flag shared with
       other subcommands). _Shared renderer now enforces table-by-default when
-      TTY; honors `--json/--table`/`--max-_`.\*
+      TTY; honors `--json/--table`/`--max-_`.
 - [x] `rlp replay <trace_id>` (reads stored traces from KB; still accepts
       `<trace.json>` for dev).
 - [x] `rlp kb query "<sql>"` (table default + `--json`).
@@ -409,8 +409,7 @@ draft artifact.
 - [x] Status bar (mode, opening name + trace, active pane, token/health summary,
       confirm badge).
 - [x] Panes: **Log** (streaming), **Plan** (table with node statuses + dep
-      counts), **agtop** (system + per-agent metrics), **Trace** (ladder text).
-      Navigation keys: `Tab`, `Shift+Tab`, `q`, `?`, `/`, `.`, `!`.
+      counts), **agtop** (system + per-agent metrics), **Trace** (ladder text). Navigation keys: `Tab`, `Shift+Tab`, `q`, `?`, `/`, `.`, `!`.
 - [x] Subscribes to `rlp/runs/<trace_id>/events` (unified stream) plus
       `rlp/sys/metrics`; per-agent metrics via `rlp/agents/<agent>/metrics`
       when provided with `--monitor-agents` (auto-discovery TBD).
@@ -521,11 +520,9 @@ cleanly.
 ### M1. Golden corpus
 
 
-
 - [x] `tests/golden/compose_email/inputs.json` variants (recipient known/unknown, long/short topics).
 
 - [x] Expected outputs (properties, not exact strings): recipient email equals, word count range, citations present.
-
 
 
 **DoD:** `cargo test --package runloop-executor-local --test golden -- --ignored` runs opening end‑to‑end (with `NullProvider`) and checks properties.
@@ -593,13 +590,13 @@ cleanly.
 
 **O3. Bash integration (best‑effort)**
 
-- [ ] Ship a `runloop.bash` snippet that wires an interactive‑only hook (e.g.
+- [x] Ship a `runloop.bash` snippet that wires an interactive‑only hook (e.g.
       `PROMPT_COMMAND` + `DEBUG` trap or a `bind -x` wrapper) to inspect the
       pending command line and call `rlp route`.
-- [ ] For route=`agent`, run the opening via `rlp` and prevent the original
+- [x] For route=`agent`, run the opening via `rlp` and prevent the original
       command from executing (e.g. by clearing `READLINE_LINE` / skipping
       execution); for route=`shell`, fall through with minimal latency.
-- [ ] Ensure non‑interactive shells (scripts, CI) never route through Runloop
+- [x] Ensure non‑interactive shells (scripts, CI) never route through Runloop
       unless explicitly enabled.
 
 **O4. Packaging & opt‑in flow**
@@ -673,6 +670,54 @@ disable integration via a documented toggle.
 
 ---
 
+## Epic Q — Refactoring & Optimization (Post-MVP)
+
+### Q1. Unified Agent Architecture
+
+- [ ] **Common Data Access Layer:** Define a trait in `crates/agents/common` that
+      abstracts data access (e.g., `resolve_contact(query) -> Contact`).
+- [ ] **WASM Hostcalls:** Ensure `kb.query` hostcall is exposed to agents.
+- [ ] **Refactor Agents:** Update `crates/agents-wasm` (e.g., `contact_resolver`)
+      to use hostcalls for data access instead of static stubs.
+- [ ] **Shared Domain Logic:** Move scoring, normalization, and other non-I/O logic
+      from `crates/agents` into `crates/agents/common` to be reused by both
+      native and WASM implementations.
+
+### Q2. Bus Scalability
+
+- [ ] **Lock Granularity:** Replace `RwLock<HashMap<String, TopicState>>` in
+      `crates/bus` with `DashMap<String, TopicState>` to reduce contention during
+      high-frequency publish/subscribe operations.
+
+### Q3. Router Optimization
+
+- [ ] **Zero-allocation Classification:** Refactor `token_candidates` and
+      matching logic in `crates/router` to operate on `&str` slices and use
+      case-insensitive comparisons without allocating intermediate `String`s.
+
+### Q4. Build & CI Maintenance
+
+- [ ] **WASM Build Profile:** Add a `cargo` profile or alias (e.g., `cargo build`
+      `--profile=agents`) that explicitly includes `crates/agents-wasm` to prevent
+      code rot.
+- [ ] **CI Enforcement:** Ensure CI pipelines build WASM agents strictly using
+      the `wasm32-wasip1` target.
+
+### Q5. Security & Sandboxing
+
+- [ ] **Deprecate Native Execution:** Mark `executor-local`'s native agent path
+      as deprecated/dev-only to enforce uniform sandboxing via WASM.
+- [ ] **Audit:** Verify that all production paths use the WASM runtime.
+
+### Q6. Testing Gaps
+
+- [ ] **WASM Unit Tests:** Add unit tests for logic in `crates/agents-wasm`
+      (e.g., slug generation, text processing).
+- [ ] **Integration Tests:** Verify WASM bundles produce valid JSON output for
+      known inputs using a test harness that mocks hostcalls.
+
+---
+
 ## MVP Acceptance (end‑to‑end manual test)
 
 1. **Start daemon & monitor**
@@ -729,5 +774,5 @@ disable integration via a documented toggle.
 10. Security polish (K)
 11. Packaging + ISO (L)
 12. Golden harness + docs sync (M & N)
-
 13. Prompt routing & shell integration (O)
+14. Refactoring & Optimization (Q)
