@@ -463,7 +463,8 @@ freeze updates.
 
 - [x] Ensure **every** hostcall mapping checks caps (fs, net, time, kb, model,
       secrets, exec).
-- [ ] Deny by default; empty caps = inert agent.
+- [x] Deny by default; empty caps = inert agent (launch still permitted, emits
+      `caps.empty` audit on start; hostcalls remain denied).
 
 **DoD:** Static audit (grep/inspection) & tests verify enforcement paths.
 
