@@ -346,14 +346,58 @@ fn workspace_root(cwd: Option<&Path>) -> Option<PathBuf> {
 
 fn walk_for_workspace_root(cwd: Option<&Path>) -> Option<PathBuf> {
     let mut dir = cwd.map(PathBuf::from).or_else(|| env::current_dir().ok())?;
+    let mut first_manifest_dir = None;
     loop {
-        if dir.join("Cargo.toml").is_file() {
-            return Some(dir);
+        let manifest = dir.join("Cargo.toml");
+        if manifest.is_file() {
+            if let Some(root) = manifest_workspace_root(&manifest) {
+                return Some(root);
+            }
+            if first_manifest_dir.is_none() {
+                first_manifest_dir = Some(dir.clone());
+            }
         }
         if !dir.pop() {
             break;
         }
     }
+    first_manifest_dir
+}
+
+fn manifest_workspace_root(manifest: &Path) -> Option<PathBuf> {
+    let doc = fs::read_to_string(manifest)
+        .ok()
+        .and_then(|raw| toml::from_str::<toml::Value>(&raw).ok())?;
+
+    let ws = doc.get("workspace")?;
+
+    // Table means this manifest is the workspace root.
+    if ws.is_table() {
+        return manifest.parent().map(PathBuf::from);
+    }
+
+    // String/path: follow it and accept the pointed manifest only if it has a workspace table.
+    if let Some(rel) = ws.as_str() {
+        let target = manifest
+            .parent()
+            .map(|p| p.join(rel))
+            .unwrap_or_else(|| PathBuf::from(rel));
+        let target_manifest = if target.is_dir() {
+            target.join("Cargo.toml")
+        } else {
+            target.clone()
+        };
+        if target_manifest.is_file()
+            && fs::read_to_string(&target_manifest)
+                .ok()
+                .and_then(|raw| toml::from_str::<toml::Value>(&raw).ok())
+                .and_then(|doc| doc.get("workspace").map(|val| val.is_table()))
+                == Some(true)
+        {
+            return target_manifest.parent().map(PathBuf::from);
+        }
+    }
+
     None
 }
 
@@ -1264,6 +1308,55 @@ exit 0
         (rustc, cargo)
     }
 
+    fn install_fake_toolchain_with_target_root(
+        bin_dir: &Path,
+        target_root: &Path,
+    ) -> (PathBuf, PathBuf) {
+        fs::create_dir_all(bin_dir).expect("toolchain bin dir");
+        let rustc = bin_dir.join("rustc");
+        fs::write(
+            &rustc,
+            r#"#!/usr/bin/env bash
+if [[ "$1" == "--print" && "$2" == "target-list" ]]; then
+  echo "wasm32-wasip1"
+  exit 0
+fi
+exit 0
+"#,
+        )
+        .expect("write rustc");
+        let cargo = bin_dir.join("cargo");
+        fs::write(
+            &cargo,
+            format!(
+                r#"#!/usr/bin/env bash
+set -euo pipefail
+target="{target_root}/wasm32-wasip1/release"
+mkdir -p "$target"
+bin_name=""
+while [[ $# -gt 0 ]]; do
+  if [[ "$1" == "--bin" ]]; then
+    shift
+    bin_name="$1"
+  fi
+  shift || true
+done
+: "${{bin_name:=agent_wasm}}"
+echo "stub wasm" > "$target/${{bin_name}}.wasm"
+exit 0
+"#,
+                target_root = target_root.display()
+            ),
+        )
+        .expect("write cargo");
+        for path in [&rustc, &cargo] {
+            let mut perms = fs::metadata(path).expect("metadata").permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(path, perms).expect("chmod");
+        }
+        (rustc, cargo)
+    }
+
     #[test]
     fn resolve_defaults_to_workspace_agents_dir() {
         let temp = tempdir().expect("temp");
@@ -1304,6 +1397,80 @@ exit 0
         assert_eq!(agent_root, agents_root);
         let crate_root = resolve_crate_root_with_cwd(&None, Some(temp.path()));
         assert_eq!(crate_root, default_user_agents_wasm_dir());
+    }
+
+    #[test]
+    fn workspace_root_prefers_nearest_workspace_manifest() {
+        let temp = tempdir().expect("temp");
+        let outer_ws = temp.path().join("outer");
+        let inner_ws = outer_ws.join("inner");
+        let member = inner_ws.join("member");
+        fs::create_dir_all(&member).expect("member dir");
+
+        fs::write(
+            outer_ws.join("Cargo.toml"),
+            "[workspace]\nmembers=[\"inner/member\"]",
+        )
+        .expect("outer manifest");
+        fs::write(
+            inner_ws.join("Cargo.toml"),
+            "[workspace]\nmembers=[\"member\"]",
+        )
+        .expect("inner manifest");
+        fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname=\"member\"\nversion=\"0.1.0\"",
+        )
+        .expect("member manifest");
+
+        let found = workspace_root(Some(member.as_path()));
+        assert_eq!(found, Some(inner_ws));
+    }
+
+    #[test]
+    fn workspace_root_follows_string_workspace_pointer() {
+        let temp = tempdir().expect("temp");
+        let ws_root = temp.path().join("ws");
+        let member = ws_root.join("crates").join("member");
+        fs::create_dir_all(&member).expect("member dir");
+
+        fs::write(
+            ws_root.join("Cargo.toml"),
+            "[workspace]\nmembers=[\"crates/member\"]",
+        )
+        .expect("ws manifest");
+        fs::write(
+            member.join("Cargo.toml"),
+            "workspace = \"..\"\n[package]\nname=\"member\"\nversion=\"0.1.0\"",
+        )
+        .expect("member manifest");
+
+        let found = workspace_root(Some(member.as_path()));
+        assert_eq!(found, Some(ws_root));
+    }
+
+    #[test]
+    fn locate_wasm_artifact_uses_workspace_target() {
+        let temp = tempdir().expect("temp");
+        let ws_root = temp.path().join("ws");
+        let member = ws_root.join("agent");
+        fs::create_dir_all(&member).expect("member dir");
+        fs::write(
+            ws_root.join("Cargo.toml"),
+            "[workspace]\nmembers=[\"agent\"]",
+        )
+        .expect("ws manifest");
+        fs::write(
+            member.join("Cargo.toml"),
+            "[package]\nname=\"agent\"\nversion=\"0.1.0\"",
+        )
+        .expect("member manifest");
+
+        let located = locate_wasm_artifact(&member, "agent_wasm");
+        assert_eq!(
+            located,
+            ws_root.join("target/wasm32-wasip1/release/agent_wasm.wasm")
+        );
     }
 
     #[test]
@@ -1416,6 +1583,59 @@ exit 0
         assert_eq!(
             parsed["artifacts"]["tools"]["path"].as_str(),
             Some("tools.json")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_uses_workspace_target_dir_when_present() {
+        let temp = tempdir().expect("temp");
+        let agents_root = temp.path().join("agents");
+        let workspace_root = temp.path().join("crates").join("agents-wasm");
+        let agent_dir = agents_root.join("demo");
+        let crate_dir = workspace_root.join("demo");
+        fs::create_dir_all(agent_dir.join("bin")).expect("agent bin dir");
+        fs::create_dir_all(&crate_dir).expect("crate dir");
+
+        fs::write(
+            workspace_root.join("Cargo.toml"),
+            "[workspace]\nmembers=[\"demo\"]",
+        )
+        .expect("workspace manifest");
+        fs::write(
+            crate_dir.join("Cargo.toml"),
+            "[package]\nname=\"demo\"\nversion=\"0.1.0\"",
+        )
+        .expect("crate manifest");
+
+        write_manifest(&agent_dir, "demo");
+        write_policy(&agent_dir);
+        write_tools_file(&agent_dir);
+
+        let toolchain_bin = temp.path().join("toolchain-bin");
+        let (rustc_path, cargo_path) =
+            install_fake_toolchain_with_target_root(&toolchain_bin, &workspace_root.join("target"));
+
+        let config = Config::default();
+        let args = BuildArgs {
+            name: "demo".into(),
+            root_dir: Some(agents_root.clone()),
+            crates_dir: Some(workspace_root.clone()),
+        };
+        let result = build_with_toolchain(
+            args,
+            &config,
+            rustc_path.to_str().unwrap(),
+            cargo_path.to_str().unwrap(),
+        )
+        .expect("build");
+
+        assert!(result.wasm_path.is_file(), "wasm should be copied");
+        assert!(
+            workspace_root
+                .join("target/wasm32-wasip1/release/demo_wasm.wasm")
+                .is_file(),
+            "wasm should be written under workspace target",
         );
     }
 
