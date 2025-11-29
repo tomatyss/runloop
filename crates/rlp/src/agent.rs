@@ -2,7 +2,7 @@ use clap::{Args, Subcommand};
 use dirs::home_dir;
 use is_terminal::IsTerminal;
 use runloop_agent_registry::{
-    Budget, Observability, ToolEntry, ToolsDoc, Transport, digest_file_hex,
+    Budget, Observability, ToolEntry, ToolsDoc, Transport, digest_file_hex, load_tools,
 };
 use runloop_core::Config;
 use serde_json::json;
@@ -10,7 +10,9 @@ use std::env;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use thiserror::Error;
+use toml_edit::{DocumentMut, value};
 use url::Url;
 
 const ZERO_DIGEST: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -18,6 +20,7 @@ const ZERO_DIGEST: &str = "00000000000000000000000000000000000000000000000000000
 #[derive(Subcommand, Debug)]
 pub enum AgentCommands {
     Scaffold(ScaffoldArgs),
+    Build(BuildArgs),
 }
 
 #[derive(Args, Debug)]
@@ -62,6 +65,18 @@ pub struct ScaffoldArgs {
     pub force: bool,
 }
 
+#[derive(Args, Debug)]
+pub struct BuildArgs {
+    /// Agent name (snake_case).
+    pub name: String,
+    /// Root directory for agent bundles (defaults to workspace ./agents or ~/.runloop/agents).
+    #[arg(long = "root", value_name = "PATH")]
+    pub root_dir: Option<PathBuf>,
+    /// Root directory for wasm agent crates (defaults to crates/agents-wasm or ~/.runloop/agents-wasm).
+    #[arg(long = "crates-dir", value_name = "PATH")]
+    pub crates_dir: Option<PathBuf>,
+}
+
 #[derive(Debug)]
 pub struct ScaffoldResult {
     pub agent_dir: PathBuf,
@@ -71,14 +86,34 @@ pub struct ScaffoldResult {
     pub opening_path: Option<PathBuf>,
 }
 
+#[derive(Debug)]
+pub struct BuildResult {
+    pub agent_dir: PathBuf,
+    pub crate_dir: PathBuf,
+    pub manifest_path: PathBuf,
+    pub wasm_path: PathBuf,
+}
+
 #[derive(Debug, Error)]
-pub enum ScaffoldError {
+pub enum AgentError {
     #[error(
         "invalid agent name '{0}' (use lowercase letters, digits, and underscores; must start with a letter)"
     )]
     InvalidName(String),
     #[error("path already exists: {0}")]
     Exists(PathBuf),
+    #[error("agent crate not found at {0}")]
+    MissingCrate(PathBuf),
+    #[error("manifest not found at {0}")]
+    MissingManifest(PathBuf),
+    #[error("wasm binary not found at {0}")]
+    MissingBinary(PathBuf),
+    #[error("manifest error: {0}")]
+    Manifest(String),
+    #[error("capabilities file error: {0}")]
+    Caps(String),
+    #[error("build failed: {0}")]
+    BuildFailed(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -89,7 +124,7 @@ pub enum ScaffoldError {
     Tools(String),
 }
 
-pub fn handle_agent(cmd: AgentCommands, config: &Config) -> Result<(), ScaffoldError> {
+pub fn handle_agent(cmd: AgentCommands, config: &Config) -> Result<(), AgentError> {
     match cmd {
         AgentCommands::Scaffold(args) => {
             let result = scaffold(args, config)?;
@@ -101,11 +136,18 @@ pub fn handle_agent(cmd: AgentCommands, config: &Config) -> Result<(), ScaffoldE
                 println!("opening: {}", path.display());
             }
         }
+        AgentCommands::Build(args) => {
+            let result = build(args, config)?;
+            println!("built wasm to {}", result.wasm_path.display());
+            println!("updated manifest: {}", result.manifest_path.display());
+            println!("agent bundle at {}", result.agent_dir.display());
+            println!("wasm crate at {}", result.crate_dir.display());
+        }
     }
     Ok(())
 }
 
-fn scaffold(args: ScaffoldArgs, config: &Config) -> Result<ScaffoldResult, ScaffoldError> {
+fn scaffold(args: ScaffoldArgs, config: &Config) -> Result<ScaffoldResult, AgentError> {
     validate_name(&args.name)?;
     let interactive = !args.non_interactive && io::stdin().is_terminal();
     let answers = gather_answers(&args, config, interactive)?;
@@ -127,21 +169,21 @@ fn scaffold(args: ScaffoldArgs, config: &Config) -> Result<ScaffoldResult, Scaff
     if !args.force {
         for path in [&agent_dir, &crate_dir] {
             if path.exists() {
-                return Err(ScaffoldError::Exists(path.to_path_buf()));
+                return Err(AgentError::Exists(path.to_path_buf()));
             }
         }
         if let Some(path) = &opening_path
             && path.exists()
         {
-            return Err(ScaffoldError::Exists(path.to_path_buf()));
+            return Err(AgentError::Exists(path.to_path_buf()));
         }
     }
 
-    write_bundle(&answers, &agent_dir)?;
+    write_bundle(&answers, &agent_dir, &crate_dir)?;
     let tools_path = agent_dir.join("tools.json");
     write_tools(&answers.tools, &tools_path)?;
     let tools_digest =
-        digest_file_hex(&tools_path).map_err(|err| ScaffoldError::Digest(err.to_string()))?;
+        digest_file_hex(&tools_path).map_err(|err| AgentError::Digest(err.to_string()))?;
     write_manifest(&answers, &agent_dir, &tools_digest)?;
     write_policy_caps(&answers, &agent_dir)?;
     write_crate(&args.name, &crate_dir)?;
@@ -160,16 +202,90 @@ fn scaffold(args: ScaffoldArgs, config: &Config) -> Result<ScaffoldResult, Scaff
     })
 }
 
-fn validate_name(name: &str) -> Result<(), ScaffoldError> {
+fn build(args: BuildArgs, config: &Config) -> Result<BuildResult, AgentError> {
+    build_with_toolchain(args, config, "rustc", "cargo")
+}
+
+fn build_with_toolchain(
+    args: BuildArgs,
+    config: &Config,
+    rustc_cmd: &str,
+    cargo_cmd: &str,
+) -> Result<BuildResult, AgentError> {
+    validate_name(&args.name)?;
+    let agent_root = resolve_agent_root(&args.root_dir, config);
+    let crate_root = resolve_crate_root(&args.crates_dir);
+    let agent_dir = agent_root.join(&args.name);
+    let crate_dir = crate_root.join(&args.name);
+    let manifest_path = agent_dir.join("manifest.toml");
+    let policy_path = agent_dir.join("policy.caps");
+    let crate_manifest = crate_dir.join("Cargo.toml");
+    if !crate_manifest.is_file() {
+        return Err(AgentError::MissingCrate(crate_dir));
+    }
+    if !manifest_path.is_file() {
+        return Err(AgentError::MissingManifest(manifest_path));
+    }
+
+    ensure_wasm_target(rustc_cmd)?;
+    let bin_name = format!("{}_wasm", args.name);
+    build_wasm_binary(&crate_dir, &bin_name, cargo_cmd)?;
+    let wasm_src = locate_wasm_artifact(&crate_dir, &bin_name);
+    if !wasm_src.is_file() {
+        return Err(AgentError::MissingBinary(wasm_src));
+    }
+
+    let wasm_dest = agent_dir.join("bin").join(format!("{}.wasm", args.name));
+    if let Some(parent) = wasm_dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::copy(&wasm_src, &wasm_dest)?;
+    if let Some(bin_dir) = wasm_dest.parent() {
+        let _ = fs::remove_file(bin_dir.join(".gitkeep"));
+    }
+
+    validate_policy_caps(&policy_path)?;
+    let manifest_raw = fs::read_to_string(&manifest_path)?;
+    let mut manifest_doc: DocumentMut = manifest_raw.parse().map_err(|err| {
+        AgentError::Manifest(format!("parse {} failed: {err}", manifest_path.display()))
+    })?;
+    let expected_tools_path = manifest_doc
+        .get("artifacts")
+        .and_then(|a| a.get("tools"))
+        .and_then(|t| t.get("path"))
+        .and_then(|p| p.as_str())
+        .map(|s| s.to_string());
+
+    let wasm_digest =
+        digest_file_hex(&wasm_dest).map_err(|err| AgentError::Digest(err.to_string()))?;
+    let tools_digest = load_tools_digest(&agent_dir, expected_tools_path.as_deref())?;
+    let wasm_rel = relative_path(&agent_dir, &wasm_dest);
+    update_manifest_digests(
+        &mut manifest_doc,
+        &wasm_rel,
+        &wasm_digest,
+        tools_digest.as_ref(),
+    )?;
+    fs::write(&manifest_path, manifest_doc.to_string())?;
+
+    Ok(BuildResult {
+        agent_dir,
+        crate_dir,
+        manifest_path,
+        wasm_path: wasm_dest,
+    })
+}
+
+fn validate_name(name: &str) -> Result<(), AgentError> {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
-        return Err(ScaffoldError::InvalidName(name.into()));
+        return Err(AgentError::InvalidName(name.into()));
     };
     if !first.is_ascii_lowercase() {
-        return Err(ScaffoldError::InvalidName(name.into()));
+        return Err(AgentError::InvalidName(name.into()));
     }
     if !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
-        return Err(ScaffoldError::InvalidName(name.into()));
+        return Err(AgentError::InvalidName(name.into()));
     }
     Ok(())
 }
@@ -203,7 +319,7 @@ fn resolve_crate_root_with_cwd(root: &Option<PathBuf>, cwd: Option<&Path>) -> Pa
     if let Some(workspace) = workspace_root(cwd) {
         return workspace.join("crates/agents-wasm");
     }
-    PathBuf::from("crates/agents-wasm")
+    default_user_agents_wasm_dir()
 }
 
 fn preferred_config_agent_dir(config: &Config) -> Option<PathBuf> {
@@ -250,11 +366,25 @@ fn expand_tilde(path: PathBuf) -> PathBuf {
     }
 }
 
-fn write_bundle(answers: &WizardAnswers, agent_dir: &Path) -> Result<(), ScaffoldError> {
+fn default_user_agents_wasm_dir() -> PathBuf {
+    home_dir()
+        .map(|h| h.join(".runloop").join("agents-wasm"))
+        .unwrap_or_else(|| PathBuf::from("crates/agents-wasm"))
+}
+
+fn write_bundle(
+    answers: &WizardAnswers,
+    agent_dir: &Path,
+    crate_dir: &Path,
+) -> Result<(), AgentError> {
     let bin_dir = agent_dir.join("bin");
     fs::create_dir_all(&bin_dir)?;
     fs::create_dir_all(agent_dir)?;
-    fs::write(agent_dir.join("README.md"), readme_md(answers))?;
+    // README lives alongside the bundle; manual build hint includes the resolved crate path.
+    fs::write(
+        agent_dir.join("README.md"),
+        readme_md(answers, agent_dir, crate_dir),
+    )?;
     let gitkeep = bin_dir.join(".gitkeep");
     if !gitkeep.exists() {
         File::create(&gitkeep)?;
@@ -266,7 +396,7 @@ fn write_manifest(
     answers: &WizardAnswers,
     agent_dir: &Path,
     tools_digest: &str,
-) -> Result<(), ScaffoldError> {
+) -> Result<(), AgentError> {
     let with_schema = r#"[schemas.with]
 type = "object"
 additionalProperties = false
@@ -305,14 +435,14 @@ version = 1
     Ok(())
 }
 
-fn write_crate(name: &str, crate_dir: &Path) -> Result<(), ScaffoldError> {
+fn write_crate(name: &str, crate_dir: &Path) -> Result<(), AgentError> {
     fs::create_dir_all(crate_dir.join("src"))?;
     let cargo = format!(
         r#"[package]
 name = "runloop-agent-{name}-wasm"
 version = "0.1.0"
 edition = "2024"
-license.workspace = true
+license = "Apache-2.0"
 
 [[bin]]
 name = "{name}_wasm"
@@ -323,9 +453,6 @@ anyhow = "1.0"
 clap = {{ version = "4.5", features = ["derive"] }}
 serde = {{ version = "1.0", features = ["derive"] }}
 serde_json = "1.0"
-
-[lints]
-workspace = true
 "#
     );
     fs::write(crate_dir.join("Cargo.toml"), cargo)?;
@@ -333,7 +460,7 @@ workspace = true
     Ok(())
 }
 
-fn write_policy_caps(answers: &WizardAnswers, agent_dir: &Path) -> Result<(), ScaffoldError> {
+fn write_policy_caps(answers: &WizardAnswers, agent_dir: &Path) -> Result<(), AgentError> {
     let secrets = answers
         .secrets
         .iter()
@@ -386,13 +513,15 @@ fn render_array_or_empty(values: &[String]) -> String {
     }
 }
 
-fn write_tools(doc: &ToolsDoc, tools_path: &Path) -> Result<(), ScaffoldError> {
+fn write_tools(doc: &ToolsDoc, tools_path: &Path) -> Result<(), AgentError> {
     let tools_json = serde_json::to_string_pretty(doc)?;
     fs::write(tools_path, tools_json)?;
     Ok(())
 }
 
-fn readme_md(answers: &WizardAnswers) -> String {
+fn readme_md(answers: &WizardAnswers, agent_dir: &Path, crate_dir: &Path) -> String {
+    let crate_path = crate_dir.display().to_string();
+    let agent_path = agent_dir.display().to_string();
     format!(
         r#"# {name} agent
 {description}
@@ -400,7 +529,13 @@ fn readme_md(answers: &WizardAnswers) -> String {
 Scaffolded by `rlp agent scaffold`. Build the wasm artifact with:
 
 ```
-just build-agents-wasm
+rlp agent build {name}
+```
+
+Or manually:
+
+```
+cargo build --target wasm32-wasip1 --manifest-path {crate_path}/Cargo.toml
 ```
 
 Model: `{model}` (secret: {secret})
@@ -410,15 +545,15 @@ KB read: {kb_read}
 KB write: {kb_write}
 
 Generated files:
-- `agents/{name}/manifest.toml`
-- `agents/{name}/policy.caps`
-- `agents/{name}/tools.json`
-- `agents/{name}/README.md`
-- `crates/agents-wasm/{name}/` (wasm stub)
+- `{agent_path}/manifest.toml`
+- `{agent_path}/policy.caps`
+- `{agent_path}/tools.json`
+- `{agent_path}/README.md`
+- `{crate_path}` (wasm stub)
 - `{opening}`
 
-Edit `crates/agents-wasm/{name}/src/main.rs` to implement your logic and
-re-run `just build-agents-wasm` to refresh digests.
+Edit `{crate_path}/src/main.rs` to implement your logic and
+re-run `rlp agent build {name}` to refresh digests.
 "#,
         name = answers.name,
         description = answers.description,
@@ -495,7 +630,7 @@ fn main() -> Result<()> {
     TEMPLATE.replace("{name}", name)
 }
 
-fn write_opening(answers: &WizardAnswers, path: &Path) -> Result<(), ScaffoldError> {
+fn write_opening(answers: &WizardAnswers, path: &Path) -> Result<(), AgentError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -562,7 +697,7 @@ fn gather_answers(
     args: &ScaffoldArgs,
     config: &Config,
     interactive: bool,
-) -> Result<WizardAnswers, ScaffoldError> {
+) -> Result<WizardAnswers, AgentError> {
     let mut prompter = Prompter::new(interactive);
     let default_desc = args
         .description
@@ -635,7 +770,7 @@ fn gather_answers(
     }
     let tools_doc = ToolsDoc { version: 1, tools };
     if let Err(detail) = tools_doc.validate() {
-        return Err(ScaffoldError::Tools(detail));
+        return Err(AgentError::Tools(detail));
     }
 
     let mut secrets = Vec::new();
@@ -722,6 +857,152 @@ fn tool_hosts(doc: &ToolsDoc) -> Vec<String> {
     hosts
 }
 
+fn ensure_wasm_target(rustc_cmd: &str) -> Result<(), AgentError> {
+    let output = Command::new(rustc_cmd)
+        .args(["--print", "target-list"])
+        .output()
+        .map_err(|err| AgentError::BuildFailed(format!("{rustc_cmd} not available: {err}")))?;
+    if !output.status.success() {
+        return Err(AgentError::BuildFailed(format!(
+            "{rustc_cmd} --print target-list failed with status {}",
+            output.status
+        )));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !stdout.split_whitespace().any(|t| t == "wasm32-wasip1") {
+        return Err(AgentError::BuildFailed(
+            "rustc missing wasm32-wasip1 target (install via 'rustup target add wasm32-wasip1')"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+fn build_wasm_binary(crate_dir: &Path, bin_name: &str, cargo_cmd: &str) -> Result<(), AgentError> {
+    let output = Command::new(cargo_cmd)
+        .current_dir(crate_dir)
+        .args([
+            "build",
+            "--release",
+            "--target",
+            "wasm32-wasip1",
+            "--bin",
+            bin_name,
+        ])
+        .output()
+        .map_err(|err| {
+            AgentError::BuildFailed(format!("failed to spawn {cargo_cmd} build: {err}"))
+        })?;
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let mut detail = stdout.trim().to_string();
+        if !stderr.trim().is_empty() {
+            if !detail.is_empty() {
+                detail.push_str(" | ");
+            }
+            detail.push_str(stderr.trim());
+        }
+        return Err(AgentError::BuildFailed(format!(
+            "{cargo_cmd} build failed (status {}): {}",
+            output.status, detail
+        )));
+    }
+    Ok(())
+}
+
+fn locate_wasm_artifact(crate_dir: &Path, bin_name: &str) -> PathBuf {
+    let target_dir = env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .or_else(|| workspace_root(Some(crate_dir)).map(|ws| ws.join("target")))
+        .unwrap_or_else(|| crate_dir.join("target"));
+    target_dir
+        .join("wasm32-wasip1")
+        .join("release")
+        .join(format!("{bin_name}.wasm"))
+}
+
+fn load_tools_digest(
+    agent_dir: &Path,
+    expected_rel: Option<&str>,
+) -> Result<Option<(String, String, u32)>, AgentError> {
+    let resolved = match expected_rel {
+        Some(rel) => {
+            let path = agent_dir.join(rel);
+            if !path.is_file() {
+                return Err(AgentError::Tools(format!(
+                    "tools.json missing at {} (referenced by manifest)",
+                    path.display()
+                )));
+            }
+            path
+        }
+        None => {
+            let path = agent_dir.join("tools.json");
+            if !path.is_file() {
+                return Ok(None);
+            }
+            path
+        }
+    };
+    let doc = load_tools(&resolved).map_err(|err| AgentError::Tools(err.to_string()))?;
+    let digest = digest_file_hex(&resolved).map_err(|err| AgentError::Digest(err.to_string()))?;
+    Ok(Some((
+        relative_path(agent_dir, &resolved),
+        digest,
+        doc.version,
+    )))
+}
+
+fn validate_policy_caps(policy_path: &Path) -> Result<(), AgentError> {
+    if !policy_path.is_file() {
+        return Err(AgentError::Caps(format!(
+            "policy.caps missing at {}",
+            policy_path.display()
+        )));
+    }
+    let raw = fs::read_to_string(policy_path)?;
+    let parsed: toml::Value = toml::from_str(&raw).map_err(|err| {
+        AgentError::Caps(format!(
+            "invalid policy.caps {}: {err}",
+            policy_path.display()
+        ))
+    })?;
+    if parsed.get("capabilities").is_none() {
+        return Err(AgentError::Caps(format!(
+            "policy.caps {} missing [capabilities] table",
+            policy_path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn relative_path(base: &Path, target: &Path) -> String {
+    target
+        .strip_prefix(base)
+        .unwrap_or(target)
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn update_manifest_digests(
+    doc: &mut DocumentMut,
+    wasm_rel_path: &str,
+    wasm_digest: &str,
+    tools: Option<&(String, String, u32)>,
+) -> Result<(), AgentError> {
+    doc["agent"]["entry_wasm"]["path"] = value(wasm_rel_path);
+    doc["agent"]["entry_wasm"]["blake3"] = value(wasm_digest);
+    if let Some((path, digest, version)) = tools {
+        doc["artifacts"]["tools"]["path"] = value(path.clone());
+        doc["artifacts"]["tools"]["blake3"] = value(digest.clone());
+        doc["artifacts"]["tools"]["version"] = value(*version as i64);
+    }
+    Ok(())
+}
+
 struct Prompter {
     interactive: bool,
 }
@@ -731,7 +1012,7 @@ impl Prompter {
         Self { interactive }
     }
 
-    fn prompt_string(&self, prompt: &str, default: Option<&str>) -> Result<String, ScaffoldError> {
+    fn prompt_string(&self, prompt: &str, default: Option<&str>) -> Result<String, AgentError> {
         if !self.interactive {
             return Ok(default.unwrap_or("").to_string());
         }
@@ -750,7 +1031,7 @@ impl Prompter {
         &self,
         prompt: &str,
         default: Option<String>,
-    ) -> Result<Option<String>, ScaffoldError> {
+    ) -> Result<Option<String>, AgentError> {
         if !self.interactive {
             return Ok(default);
         }
@@ -765,7 +1046,7 @@ impl Prompter {
         }
     }
 
-    fn prompt_bool(&self, prompt: &str, default: bool) -> Result<bool, ScaffoldError> {
+    fn prompt_bool(&self, prompt: &str, default: bool) -> Result<bool, AgentError> {
         if !self.interactive {
             return Ok(default);
         }
@@ -785,11 +1066,7 @@ impl Prompter {
         }
     }
 
-    fn prompt_list(
-        &mut self,
-        prompt: &str,
-        default: &[String],
-    ) -> Result<Vec<String>, ScaffoldError> {
+    fn prompt_list(&mut self, prompt: &str, default: &[String]) -> Result<Vec<String>, AgentError> {
         if !self.interactive {
             return Ok(default.to_vec());
         }
@@ -815,7 +1092,7 @@ impl Prompter {
         Ok(values)
     }
 
-    fn prompt_tool(&mut self) -> Result<ToolEntry, ScaffoldError> {
+    fn prompt_tool(&mut self) -> Result<ToolEntry, AgentError> {
         let id = self.prompt_string("Tool id (e.g., mail.smtp_send)", None)?;
         let description = self.prompt_string("Tool description", None)?;
         let transport_kind = self.prompt_string("Transport kind (http/exec)", Some("http"))?;
@@ -892,8 +1169,100 @@ fn print_prompt(prompt: &str, default: Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use runloop_agent_registry::digest_file_hex;
     use runloop_core::Config;
+    use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
+    use toml;
+
+    fn write_manifest(agent_dir: &Path, name: &str) {
+        let manifest = format!(
+            r#"[agent]
+name = "{name}"
+version = "0.1.0"
+entry_wasm = {{ path = "bin/{name}.wasm", blake3 = "{ZERO_DIGEST}" }}
+
+[ports]
+in = []
+out = []
+
+[caps]
+file = "policy.caps"
+
+[artifacts.tools]
+path = "tools.json"
+blake3 = "{ZERO_DIGEST}"
+version = 1
+"#
+        );
+        fs::write(agent_dir.join("manifest.toml"), manifest).expect("write manifest");
+    }
+
+    fn write_policy(agent_dir: &Path) {
+        let policy = r#"[capabilities]
+fs = []
+net = []
+time = false
+kb_read = false
+kb_write = false
+secrets = []
+model = false
+exec = false
+"#;
+        fs::write(agent_dir.join("policy.caps"), policy).expect("write policy");
+    }
+
+    fn write_tools_file(agent_dir: &Path) {
+        fs::write(
+            agent_dir.join("tools.json"),
+            r#"{ "version": 1, "tools": [] }"#,
+        )
+        .expect("write tools");
+    }
+
+    fn install_fake_toolchain(bin_dir: &Path) -> (PathBuf, PathBuf) {
+        fs::create_dir_all(bin_dir).expect("toolchain bin dir");
+        let rustc = bin_dir.join("rustc");
+        fs::write(
+            &rustc,
+            r#"#!/usr/bin/env bash
+if [[ "$1" == "--print" && "$2" == "target-list" ]]; then
+  echo "wasm32-wasip1"
+  exit 0
+fi
+exit 0
+"#,
+        )
+        .expect("write rustc");
+        let cargo = bin_dir.join("cargo");
+        fs::write(
+            &cargo,
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+crate="$(pwd)"
+target="$crate/target/wasm32-wasip1/release"
+mkdir -p "$target"
+bin_name=""
+while [[ $# -gt 0 ]]; do
+  if [[ "$1" == "--bin" ]]; then
+    shift
+    bin_name="$1"
+  fi
+  shift || true
+done
+: "${bin_name:=agent_wasm}"
+echo "stub wasm" > "$target/${bin_name}.wasm"
+exit 0
+"#,
+        )
+        .expect("write cargo");
+        for path in [&rustc, &cargo] {
+            let mut perms = fs::metadata(path).expect("metadata").permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(path, perms).expect("chmod");
+        }
+        (rustc, cargo)
+    }
 
     #[test]
     fn resolve_defaults_to_workspace_agents_dir() {
@@ -920,7 +1289,7 @@ mod tests {
         let agent_root = resolve_agent_root_with_cwd(&None, &config, Some(temp.path()));
         let crate_root = resolve_crate_root_with_cwd(&None, Some(temp.path()));
         assert_eq!(agent_root, agents_root);
-        assert_eq!(crate_root, PathBuf::from("crates/agents-wasm"));
+        assert_eq!(crate_root, default_user_agents_wasm_dir());
     }
 
     #[test]
@@ -933,6 +1302,8 @@ mod tests {
 
         let agent_root = resolve_agent_root_with_cwd(&None, &config, Some(temp.path()));
         assert_eq!(agent_root, agents_root);
+        let crate_root = resolve_crate_root_with_cwd(&None, Some(temp.path()));
+        assert_eq!(crate_root, default_user_agents_wasm_dir());
     }
 
     #[test]
@@ -979,6 +1350,108 @@ mod tests {
             policy.contains("net = []"),
             "empty net caps should render as an empty array"
         );
+        let cargo_toml =
+            fs::read_to_string(result.crate_dir.join("Cargo.toml")).expect("cargo contents");
+        assert!(
+            cargo_toml.contains("license = \"Apache-2.0\""),
+            "scaffolded crate should declare a license"
+        );
+        assert!(
+            !cargo_toml.contains("license.workspace"),
+            "scaffolded crate should not rely on workspace metadata"
+        );
         assert_eq!(result.opening_path.unwrap(), opening);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_updates_manifest_and_tool_digests() {
+        let temp = tempdir().expect("temp");
+        let agents_root = temp.path().join("agents");
+        let crates_root = temp.path().join("crates").join("agents-wasm");
+        let agent_dir = agents_root.join("demo");
+        let crate_dir = crates_root.join("demo");
+        fs::create_dir_all(agent_dir.join("bin")).expect("agent bin dir");
+        fs::create_dir_all(&crate_dir).expect("crate dir");
+
+        write_manifest(&agent_dir, "demo");
+        write_policy(&agent_dir);
+        write_tools_file(&agent_dir);
+        fs::write(crate_dir.join("Cargo.toml"), "").expect("cargo file");
+
+        let toolchain_bin = temp.path().join("toolchain-bin");
+        let (rustc_path, cargo_path) = install_fake_toolchain(&toolchain_bin);
+
+        let config = Config::default();
+        let args = BuildArgs {
+            name: "demo".into(),
+            root_dir: Some(agents_root.clone()),
+            crates_dir: Some(crates_root.clone()),
+        };
+        let result = build_with_toolchain(
+            args,
+            &config,
+            rustc_path.to_str().unwrap(),
+            cargo_path.to_str().unwrap(),
+        )
+        .expect("build");
+
+        let manifest = fs::read_to_string(agent_dir.join("manifest.toml")).expect("manifest");
+        let parsed: toml::Value = toml::from_str(&manifest).expect("parse manifest");
+
+        let wasm_path = result.wasm_path;
+        assert!(wasm_path.is_file(), "wasm should be copied");
+        let wasm_digest = digest_file_hex(&wasm_path).expect("wasm digest");
+        assert_eq!(
+            parsed["agent"]["entry_wasm"]["blake3"].as_str(),
+            Some(wasm_digest.as_str())
+        );
+
+        let tools_path = agent_dir.join("tools.json");
+        let tools_digest = digest_file_hex(&tools_path).expect("tools digest");
+        assert_eq!(
+            parsed["artifacts"]["tools"]["blake3"].as_str(),
+            Some(tools_digest.as_str())
+        );
+        assert_eq!(
+            parsed["artifacts"]["tools"]["path"].as_str(),
+            Some("tools.json")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_fails_when_tools_missing() {
+        let temp = tempdir().expect("temp");
+        let agents_root = temp.path().join("agents");
+        let crates_root = temp.path().join("crates").join("agents-wasm");
+        let agent_dir = agents_root.join("demo");
+        let crate_dir = crates_root.join("demo");
+        fs::create_dir_all(agent_dir.join("bin")).expect("agent bin dir");
+        fs::create_dir_all(&crate_dir).expect("crate dir");
+
+        write_manifest(&agent_dir, "demo");
+        write_policy(&agent_dir);
+        fs::write(crate_dir.join("Cargo.toml"), "").expect("cargo file");
+
+        let toolchain_bin = temp.path().join("toolchain-bin");
+        let (rustc_path, cargo_path) = install_fake_toolchain(&toolchain_bin);
+
+        let config = Config::default();
+        let args = BuildArgs {
+            name: "demo".into(),
+            root_dir: Some(agents_root.clone()),
+            crates_dir: Some(crates_root.clone()),
+        };
+        let result = build_with_toolchain(
+            args,
+            &config,
+            rustc_path.to_str().unwrap(),
+            cargo_path.to_str().unwrap(),
+        );
+        assert!(
+            matches!(result, Err(AgentError::Tools(_))),
+            "missing tools should fail build"
+        );
     }
 }

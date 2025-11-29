@@ -3302,6 +3302,8 @@ dependencies = [
  "textwrap",
  "thiserror 2.0.17",
  "tokio",
+ "toml",
+ "toml_edit",
  "tracing",
  "unicode-width",
  "url",
