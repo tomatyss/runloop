@@ -1,4 +1,6 @@
 # runloop router integration for bash
+# Optional knobs: RUNLOOP_ROUTER_BINDKEY='\C-j', RUNLOOP_ROUTER_TIMEOUT_MS=200,
+# RUNLOOP_ROUTER_DISABLE=1, RUNLOOP_ROUTER_FORCE=1
 
 case $- in
   *i*) ;;
@@ -6,6 +8,12 @@ case $- in
 esac
 
 if [[ -n ${RUNLOOP_ROUTER_BASH_INIT:-} ]]; then
+  return
+fi
+
+# Bash 5.1+ required for reliable readline/bind -x behavior; fail open on older.
+if [[ -z ${BASH_VERSINFO[0]:-} || ${BASH_VERSINFO[0]} -lt 5 || ( ${BASH_VERSINFO[0]} -eq 5 && ${BASH_VERSINFO[1]:-0} -lt 1 ) ]]; then
+  printf 'runloop: bash router requires Bash >=5.1; detected %s; skipping\n' "${BASH_VERSION:-unknown}" >&2
   return
 fi
 
@@ -27,8 +35,18 @@ runloop_router_on() {
 }
 
 __runloop_router_should_handle() {
+  [[ -n ${RUNLOOP_ROUTER_FORCE:-} ]] && return 0
   [[ -n ${RUNLOOP_ROUTER_DISABLE:-} ]] && return 1
   [[ $TERM == dumb ]] && return 1
+  [[ -z ${PS1:-} ]] && return 1
+  local auto_envs=(
+    CI GITHUB_ACTIONS BUILDKITE TEAMCITY_VERSION JENKINS_URL
+    GITLAB_CI CIRCLECI SSH_CONNECTION SSH_TTY
+  )
+  local name
+  for name in "${auto_envs[@]}"; do
+    [[ -n ${!name:-} ]] && return 1
+  done
   return 0
 }
 
@@ -77,13 +95,21 @@ __runloop_router_accept_line() {
     return $?
   fi
   local route_output
-  route_output=$(printf '%s' "$line" | rlp route --stdin 2>&1)
+  local route_cmd=(rlp route --stdin)
+  if [[ -n ${RUNLOOP_ROUTER_TIMEOUT_MS:-} ]]; then
+    route_cmd+=(--timeout-ms "$RUNLOOP_ROUTER_TIMEOUT_MS")
+  fi
+  route_output=$(printf '%s' "$line" | "${route_cmd[@]}" 2>&1)
   local route_status=$?
   if (( route_status == 10 )); then
     __runloop_router_execute_line "$line"
     return $?
   elif (( route_status == 11 )); then
     __runloop_router_run_opening "$line"
+    return $?
+  elif (( route_status == 12 )); then
+    printf 'runloop: router timeout; executing in shell\n' >&2
+    __runloop_router_execute_line "$line"
     return $?
   fi
   printf 'runloop: router error (%d): %s\n' "$route_status" "$route_output" >&2
@@ -143,6 +169,14 @@ __runloop_router_should_record_history() {
 }
 
 if bind -V >/dev/null 2>&1; then
-  bind -x '"\C-m":__runloop_router_accept_line'
-  bind -x '"\C-j":__runloop_router_accept_line'
+  if [[ -n ${RUNLOOP_ROUTER_BINDKEY:-} ]]; then
+    if ! bind -x "\"${RUNLOOP_ROUTER_BINDKEY}\":__runloop_router_accept_line" 2>/dev/null; then
+      printf 'runloop: failed to bind RUNLOOP_ROUTER_BINDKEY=%s; using default Enter/\\C-j\n' "${RUNLOOP_ROUTER_BINDKEY}" >&2
+      bind -x '"\C-m":__runloop_router_accept_line'
+      bind -x '"\C-j":__runloop_router_accept_line'
+    fi
+  else
+    bind -x '"\C-m":__runloop_router_accept_line'
+    bind -x '"\C-j":__runloop_router_accept_line'
+  fi
 fi
