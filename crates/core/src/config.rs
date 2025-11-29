@@ -7,6 +7,7 @@ use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use tracing::warn;
 
@@ -967,12 +968,22 @@ fn load_yaml_value(path: &Path) -> Result<Option<Value>, Error> {
     if !path.exists() {
         return Ok(None);
     }
-    let content = fs::read(path).map_err(|err| {
-        Error::Config(format!(
-            "failed reading config file {}: {err}",
-            path.display()
-        ))
-    })?;
+    let content = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            warn!(
+                "config file {} is unreadable (permission denied); skipping",
+                path.display()
+            );
+            return Ok(None);
+        }
+        Err(err) => {
+            return Err(Error::Config(format!(
+                "failed reading config file {}: {err}",
+                path.display()
+            )));
+        }
+    };
     let value: serde_yaml::Value = serde_yaml::from_slice(&content)
         .map_err(|err| Error::Config(format!("invalid YAML in {}: {err}", path.display())))?;
     let value = serde_json::to_value(value).map_err(|err| {
@@ -1374,6 +1385,8 @@ fn path_string(path: &Path) -> String {
 mod tests {
     use super::Config;
     use std::io::Write;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn defaults_validate() {
@@ -1505,6 +1518,19 @@ runtime:
             "sockets_dir rewrite failed: {}",
             config.runtime.sockets_dir
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_config_is_warned_and_skipped() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let unreadable = temp.path().join("config.yaml");
+        std::fs::write(&unreadable, "version: 1").expect("write config");
+        let perms = PermissionsExt::from_mode(0o000);
+        std::fs::set_permissions(&unreadable, perms).expect("chmod unreadable");
+        let config =
+            Config::load_from_sources(vec![unreadable], Vec::new()).expect("config should load");
+        assert_eq!(config.version, 1, "default config should still apply");
     }
 
     #[test]

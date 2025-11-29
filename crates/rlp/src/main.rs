@@ -330,8 +330,8 @@ enum CliError {
     AcceptTimeout,
     #[error("shell integration error: {0}")]
     ShellIntegration(String),
-    #[error("agent scaffold error: {0}")]
-    AgentScaffold(String),
+    #[error("agent command error: {0}")]
+    AgentCommand(String),
     #[error("run rejected: {code} — {message}")]
     RunRejected { code: String, message: String },
     #[error("parameter validation failed")]
@@ -359,9 +359,9 @@ impl From<shell::ShellError> for CliError {
     }
 }
 
-impl From<agent::ScaffoldError> for CliError {
-    fn from(err: agent::ScaffoldError) -> Self {
-        CliError::AgentScaffold(err.to_string())
+impl From<agent::AgentError> for CliError {
+    fn from(err: agent::AgentError) -> Self {
+        CliError::AgentCommand(err.to_string())
     }
 }
 

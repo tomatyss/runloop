@@ -101,6 +101,12 @@ gain real outputs; until then they serve as interface contracts.
    `sudo systemctl restart runloopd`. Purging the package removes the config,
    state, and the `runloop` system user.
 
+## Authoring an agent on a Debian install
+
+If you install Runloop from the packages and want to add your own agent without
+cloning the source tree, follow `docs/authoring-on-deb.md` for the scaffold →
+edit → build → run loop (Rust + wasm32-wasip1 target required).
+
 ## Finding work items
 
 - `TODO.md` → repo scaffolding checklist
