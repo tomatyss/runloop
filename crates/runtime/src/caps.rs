@@ -122,6 +122,18 @@ impl Caps {
         Self::default()
     }
 
+    /// Returns true when no effective capabilities are granted.
+    pub fn is_effectively_empty(&self) -> bool {
+        self.fs.is_empty()
+            && self.net_hosts.is_empty()
+            && !self.time
+            && matches!(self.kb_read, CapabilitySet::None)
+            && matches!(self.kb_write, CapabilitySet::None)
+            && !self.model
+            && self.secrets.is_empty()
+            && !self.exec
+    }
+
     pub fn permits_secret(&self, secret_id: &str) -> bool {
         self.secrets.contains(secret_id)
     }

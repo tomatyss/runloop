@@ -467,6 +467,10 @@ impl Runtime {
             self.inner.expose_raw_secrets,
         ));
 
+        if spec.caps.is_effectively_empty() {
+            host_state.record_caps_empty();
+        }
+
         let process = Arc::new(AgentProcess {
             _id: id,
             _identity: spec.identity.clone(),

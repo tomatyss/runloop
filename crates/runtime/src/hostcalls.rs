@@ -96,6 +96,31 @@ impl HostState {
         }
     }
 
+    /// Emit a single audit/warning when an agent launches with no effective capabilities.
+    pub(crate) fn record_caps_empty(&self) {
+        self.audit.record(
+            AuditCategory::CapabilityDenied,
+            format!(
+                "agent launched with empty capabilities; hostcalls will be denied (identity={})",
+                self.identity
+            ),
+        );
+        if self.audit_policy.should_emit(AuditDecision::Deny) {
+            let record = CapAuditRecord::new(
+                self.trace_id,
+                self.agent_id,
+                "caps.empty",
+                "_start",
+                &self.identity,
+                &[],
+                AuditDecision::Deny,
+                "caps_empty",
+                AuditSeverity::Warn,
+            );
+            self.kb.record_cap_audit(record);
+        }
+    }
+
     fn allow(&self, cap: &str, op: &str, target: &str, args: &[u8]) {
         self.hostcall_stats.allowed.fetch_add(1, Ordering::Relaxed);
         self.record_cap_audit(
