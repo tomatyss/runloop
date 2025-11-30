@@ -10,7 +10,7 @@ use runloop_core::{
 pub use schema::{SchemaValidationError, SchemaViolation, validate_instance};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 pub use tools::{Budget, Observability, ToolEntry, ToolsDoc, Transport, load_tools};
@@ -64,6 +64,12 @@ impl AgentArtifact {
 #[derive(Clone, Debug)]
 pub struct AgentRegistry {
     search_dirs: Vec<PathBuf>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ListedAgent {
+    pub described: DescribedAgent,
+    pub manifest_path: PathBuf,
 }
 
 impl AgentRegistry {
@@ -145,6 +151,30 @@ impl AgentRegistry {
         Ok(result)
     }
 
+    /// Discover all manifests across configured search directories.
+    pub fn list(&self) -> Result<Vec<ListedAgent>, AgentRegistryError> {
+        let mut seen = BTreeSet::new();
+        let mut listed = Vec::new();
+        for base in &self.search_dirs {
+            if !base.is_dir() && !base.is_file() {
+                continue;
+            }
+            for manifest_path in discover_manifest_paths(base) {
+                let (raw, doc) = read_manifest(&manifest_path)?;
+                let reference = AgentRef::new(doc.agent.name.clone(), doc.agent.variant.clone());
+                if !seen.insert(reference.clone()) {
+                    continue;
+                }
+                let (_, described) = build_described(&reference, doc, raw)?;
+                listed.push(ListedAgent {
+                    described,
+                    manifest_path: manifest_path.clone(),
+                });
+            }
+        }
+        Ok(listed)
+    }
+
     fn find_manifest(&self, reference: &AgentRef) -> Result<PathBuf, AgentRegistryError> {
         let relative_roots = candidate_roots(reference);
         for base in &self.search_dirs {
@@ -165,81 +195,8 @@ impl AgentRegistry {
         reference: &AgentRef,
         path: &Path,
     ) -> Result<(ManifestDoc, DescribedAgent), AgentRegistryError> {
-        let raw = fs::read_to_string(path).map_err(|source| AgentRegistryError::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        let doc: ManifestDoc =
-            toml::from_str(&raw).map_err(|source| AgentRegistryError::Parse {
-                path: path.to_path_buf(),
-                source,
-            })?;
-        let agent_section = doc.agent.clone();
-        let ports_section = doc.ports.clone();
-        let schemas_section = doc.schemas.clone();
-        let artifacts_section = doc.artifacts.clone().unwrap_or_default();
-        let AgentSection {
-            name,
-            version,
-            variant: agent_variant,
-        } = agent_section;
-        if name != reference.name {
-            return Err(AgentRegistryError::Mismatch {
-                reference: reference.clone(),
-                detail: format!("manifest declares agent '{}'", name),
-            });
-        }
-        if let Some(ref_variant) = &reference.variant
-            && let Some(man_variant) = &agent_variant
-            && man_variant != ref_variant
-        {
-            return Err(AgentRegistryError::Mismatch {
-                reference: reference.clone(),
-                detail: format!(
-                    "variant mismatch (manifest {man_variant}, requested {ref_variant})"
-                ),
-            });
-        }
-        let variant = reference.variant.clone().or_else(|| agent_variant.clone());
-        let descriptor_ref = AgentRef::new(name, variant);
-        let digest = hash(raw.as_bytes()).to_hex().to_string();
-        let schema = schemas_section
-            .map(|section| section.into_bundle())
-            .unwrap_or_default();
-        let tools_digest = artifacts_section
-            .tools
-            .as_ref()
-            .map(|spec| {
-                let version = spec.version.unwrap_or(1);
-                if version != 1 {
-                    return Err(AgentRegistryError::Artifact {
-                        reference: reference.clone(),
-                        detail: format!("unsupported tools.json version {version} (supported: 1)"),
-                    });
-                }
-                Ok(AgentArtifactDigest {
-                    path: spec.path.clone(),
-                    blake3: spec.blake3.clone(),
-                    version,
-                })
-            })
-            .transpose()?;
-        let artifacts = AgentArtifacts {
-            tools: tools_digest,
-        };
-        let ports = AgentPorts {
-            inputs: ports_section.inputs,
-            outputs: ports_section.outputs,
-        };
-        let described = DescribedAgent {
-            reference: descriptor_ref,
-            version,
-            digest,
-            schema,
-            ports,
-            artifacts,
-        };
-        Ok((doc, described))
+        let (raw, doc) = read_manifest(path)?;
+        build_described(reference, doc, raw)
     }
 }
 
@@ -287,6 +244,138 @@ fn candidate_roots(reference: &AgentRef) -> Vec<PathBuf> {
     }
     roots.push(PathBuf::from(&reference.name));
     roots
+}
+
+fn read_manifest(path: &Path) -> Result<(String, ManifestDoc), AgentRegistryError> {
+    let raw = fs::read_to_string(path).map_err(|source| AgentRegistryError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let doc: ManifestDoc = toml::from_str(&raw).map_err(|source| AgentRegistryError::Parse {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok((raw, doc))
+}
+
+fn build_described(
+    reference: &AgentRef,
+    doc: ManifestDoc,
+    raw: String,
+) -> Result<(ManifestDoc, DescribedAgent), AgentRegistryError> {
+    let agent_section = doc.agent.clone();
+    let ports_section = doc.ports.clone();
+    let schemas_section = doc.schemas.clone();
+    let artifacts_section = doc.artifacts.clone().unwrap_or_default();
+    let AgentSection {
+        name,
+        version,
+        variant: agent_variant,
+    } = agent_section;
+    if name != reference.name {
+        return Err(AgentRegistryError::Mismatch {
+            reference: reference.clone(),
+            detail: format!("manifest declares agent '{name}'"),
+        });
+    }
+    if let Some(ref_variant) = &reference.variant
+        && let Some(man_variant) = &agent_variant
+        && man_variant != ref_variant
+    {
+        return Err(AgentRegistryError::Mismatch {
+            reference: reference.clone(),
+            detail: format!("variant mismatch (manifest {man_variant}, requested {ref_variant})"),
+        });
+    }
+    let variant = reference.variant.clone().or_else(|| agent_variant.clone());
+    let descriptor_ref = AgentRef::new(name, variant);
+    let digest = hash(raw.as_bytes()).to_hex().to_string();
+    let schema = schemas_section
+        .map(|section| section.into_bundle())
+        .unwrap_or_default();
+    let tools_digest = artifacts_section
+        .tools
+        .as_ref()
+        .map(|spec| {
+            let version = spec.version.unwrap_or(1);
+            if version != 1 {
+                return Err(AgentRegistryError::Artifact {
+                    reference: reference.clone(),
+                    detail: format!("unsupported tools.json version {version} (supported: 1)"),
+                });
+            }
+            Ok(AgentArtifactDigest {
+                path: spec.path.clone(),
+                blake3: spec.blake3.clone(),
+                version,
+            })
+        })
+        .transpose()?;
+    let artifacts = AgentArtifacts {
+        tools: tools_digest,
+    };
+    let ports = AgentPorts {
+        inputs: ports_section.inputs,
+        outputs: ports_section.outputs,
+    };
+    let described = DescribedAgent {
+        reference: descriptor_ref,
+        version,
+        digest,
+        schema,
+        ports,
+        artifacts,
+    };
+    Ok((doc, described))
+}
+
+fn discover_manifest_paths(base: &Path) -> Vec<PathBuf> {
+    if base.is_file() {
+        if base.file_name().is_some_and(|name| name == "manifest.toml") {
+            return vec![base.to_path_buf()];
+        }
+        return Vec::new();
+    }
+    if !base.is_dir() {
+        return Vec::new();
+    }
+
+    let mut manifests = Vec::new();
+    let mut queue = VecDeque::new();
+    queue.push_back((base.to_path_buf(), 0usize));
+
+    while let Some((dir, depth)) = queue.pop_front() {
+        let manifest = dir.join("manifest.toml");
+        if manifest.is_file() {
+            manifests.push(manifest);
+            continue;
+        }
+        if depth >= 3 {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut dirs = entries
+            .flatten()
+            .filter_map(|entry| {
+                let Ok(ft) = entry.file_type() else {
+                    return None;
+                };
+                if ft.is_dir() {
+                    Some(entry.path())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        dirs.sort();
+        for entry in dirs {
+            queue.push_back((entry, depth + 1));
+        }
+    }
+
+    manifests
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -439,6 +528,81 @@ out = []
             msg.contains("variant mismatch"),
             "expected mismatch detail, got {msg}"
         );
+    }
+
+    #[test]
+    fn list_discovers_manifests() {
+        let tmp = tempdir().expect("tmp dir");
+        let manifest = write_manifest(tmp.path(), basic_manifest());
+        let registry = AgentRegistry::new([tmp.path()]);
+        let listed = registry.list().expect("list agents");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].described.reference.name, "writer");
+        assert_eq!(listed[0].described.version, "1.0.0");
+        assert_eq!(listed[0].manifest_path, manifest);
+    }
+
+    #[test]
+    fn list_prefers_first_search_dir() {
+        let first = tempdir().expect("first dir");
+        let second = tempdir().expect("second dir");
+        write_manifest(
+            first.path(),
+            r#"[agent]
+name = "writer"
+version = "1.0.0"
+
+[ports]
+in = []
+out = []
+"#,
+        );
+        write_manifest(
+            second.path(),
+            r#"[agent]
+name = "writer"
+version = "2.0.0"
+
+[ports]
+in = []
+out = []
+"#,
+        );
+        let registry =
+            AgentRegistry::new([first.path().to_path_buf(), second.path().to_path_buf()]);
+        let listed = registry.list().expect("list agents");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].described.version, "1.0.0");
+    }
+
+    #[test]
+    fn list_discovers_variant_layout() {
+        let tmp = tempdir().expect("variant dir");
+        let variant_dir = tmp.path().join("writer").join("variants").join("pro");
+        std::fs::create_dir_all(&variant_dir).expect("variant dir");
+        let manifest_path = variant_dir.join("manifest.toml");
+        std::fs::write(
+            &manifest_path,
+            r#"[agent]
+name = "writer"
+version = "1.1.0"
+variant = "pro"
+
+[ports]
+in = []
+out = []
+"#,
+        )
+        .expect("write manifest");
+
+        let registry = AgentRegistry::new([tmp.path()]);
+        let listed = registry.list().expect("list agents");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(
+            listed[0].described.reference.variant.as_deref(),
+            Some("pro")
+        );
+        assert_eq!(listed[0].manifest_path, manifest_path);
     }
 
     #[test]

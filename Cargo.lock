@@ -3275,7 +3275,7 @@ dependencies = [
 
 [[package]]
 name = "rlp"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3334,7 +3334,7 @@ dependencies = [
 
 [[package]]
 name = "runloop"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "runloop-agent-contact-resolver"
@@ -3387,7 +3387,7 @@ dependencies = [
 
 [[package]]
 name = "runloop-agent-registry"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "blake3",
  "jsonschema",

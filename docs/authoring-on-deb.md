@@ -11,8 +11,8 @@ installed from the `.deb` packages (no source checkout required).
 - Verify the CLI you installed exposes agent commands:
 
   ```bash
-  rlp --version          # expects rlp >= 0.1.1
-  rlp agent --help       # should list scaffold/build
+  rlp --version          # expects rlp >= 0.1.2
+  rlp agent --help       # should list scaffold/build/list
   ```
 
   If `agent` is missing, reinstall from the latest `.deb`.

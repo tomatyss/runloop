@@ -34,6 +34,7 @@ priority = "optional"
 section = "utils"
 depends = "$auto, adduser, systemd (>= 255), ca-certificates"
 assets = [
+    ["target/release/runloopd", "usr/bin/", "755"],
     ["../../packaging/systemd/runloopd.service", "lib/systemd/system/runloopd.service", "644"],
     ["../../packaging/systemd/tmpfiles.d/runloop.conf", "usr/lib/tmpfiles.d/runloop.conf", "644"],
     ["../../packaging/systemd/config/config.yaml", "etc/runloop/config.yaml", "640"],

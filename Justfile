@@ -24,6 +24,7 @@ deb:
 	@cargo deb -p runloopd
 	@cargo deb -p rlp
 	@cargo deb -p agtop
+	@cargo deb -p runloop
 
 test:
 	@cargo test --workspace
