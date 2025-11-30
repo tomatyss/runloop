@@ -8,6 +8,14 @@ installed from the `.deb` packages (no source checkout required).
 - Rust toolchain installed via `rustup`.
 - WebAssembly target installed once: `rustup target add wasm32-wasip1`.
 - Runloop packages (`runloopd`, `rlp`, `agtop`) installed from the `.deb`.
+- Verify the CLI you installed exposes agent commands:
+
+  ```bash
+  rlp --version          # expects rlp >= 0.1.1
+  rlp agent --help       # should list scaffold/build
+  ```
+
+  If `agent` is missing, reinstall from the latest `.deb`.
 
 ## Steps
 

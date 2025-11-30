@@ -63,3 +63,44 @@ jobs:
           name: rust-checks-logs-${{ github.run_number }}
           path: artifacts/
           if-no-files-found: ignore
+
+  rlp-deb-smoke:
+    name: RLP .deb Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb --locked
+
+      - name: Build rlp .deb
+        run: cargo deb -p rlp --locked
+
+      - name: Locate package
+        id: deb
+        run: |
+          set -euo pipefail
+          DEB_PATH=$(ls crates/rlp/target/debian/rlp_*_amd64.deb | head -n 1)
+          echo "deb_path=$DEB_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Install package
+        run: sudo dpkg -i "${{ steps.deb.outputs.deb_path }}"
+
+      - name: Smoke test agent scaffold
+        run: |
+          set -euo pipefail
+          rlp --version
+          tmpdir=$(mktemp -d)
+          rlp agent scaffold ci-smoke \
+            --non-interactive \
+            --root "$tmpdir/agents" \
+            --crates-dir "$tmpdir/agents-wasm" \
+            --opening-path "$tmpdir/opening.yaml" \
+            --force
+          test -f "$tmpdir/agents/ci-smoke/manifest.toml"
