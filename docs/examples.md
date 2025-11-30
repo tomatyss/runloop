@@ -8,6 +8,9 @@ once their wasm bundles are built.
   → mailer (human confirm). This is the canonical smoke test.
 - `system_helper.yaml` — single-node helper that can invoke a host command and
   optionally call Gemini.
+- `tmux_layout.yaml` — apply tmux presets and optionally reload/apply a layout.
+- `system_tra.yaml` — raise tmux/shell history limits with a managed config
+  block.
 
 ## Running an example opening
 

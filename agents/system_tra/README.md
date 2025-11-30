@@ -1,5 +1,5 @@
 # system_tra agent
-Update system settings
+Raise tmux and shell history limits with a managed config block.
 
 Scaffolded by `rlp agent scaffold`. Build the wasm artifact with:
 
@@ -13,19 +13,42 @@ Or manually:
 cargo build --target wasm32-wasip1 --manifest-path /home/ivan/runloop/crates/agents-wasm/system_tra/Cargo.toml
 ```
 
-Model: `google:gemini-2.5-flash` (secret: <none>)
-FS caps: ~/.runloop/artifacts/system_tra
-Net caps: none
-KB read: false
-KB write: false
+Inputs (single JSON string in `with.input`):
+
+```json
+{
+  "tmux_conf": "~/.tmux.conf",
+  "history_limit": 50000,
+  "extra_tmux_lines": ["set -g mouse on"],
+  "bashrc": "~/.bashrc",
+  "hist_size": 50000,
+  "hist_file_size": 100000
+}
+```
+
+Outputs (stdout → `out` port):
+
+```json
+{
+  "tmux": { "path": "/home/user/.tmux.conf", "updated": true },
+  "history": { "path": "/home/user/.bashrc", "updated": true },
+  "history_limit": 50000,
+  "hist_size": 50000,
+  "hist_file_size": 100000,
+  "extra_tmux_lines": 1
+}
+```
+
+Capabilities:
+
+- fs: `~/.tmux.conf`, `~/.config/tmux`, `~/.bashrc`, `~/.runloop/artifacts/system_tra`
+- exec/model/net/kb: disabled
 
 Generated files:
 - `/home/ivan/runloop/agents/system_tra/manifest.toml`
 - `/home/ivan/runloop/agents/system_tra/policy.caps`
 - `/home/ivan/runloop/agents/system_tra/tools.json`
 - `/home/ivan/runloop/agents/system_tra/README.md`
-- `/home/ivan/runloop/crates/agents-wasm/system_tra` (wasm stub)
-- `<skipped>`
+- `/home/ivan/runloop/crates/agents-wasm/system_tra` (wasm implementation)
 
-Edit `/home/ivan/runloop/crates/agents-wasm/system_tra/src/main.rs` to implement your logic and
-re-run `rlp agent build system_tra` to refresh digests.
+Re-run `rlp agent build system_tra` after edits to refresh the wasm and digest.

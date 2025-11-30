@@ -1,9 +1,9 @@
 [capabilities]
-fs = ["~/.runloop/artifacts/system_tra"]
+fs = ["~/.tmux.conf", "~/.config/tmux", "~/.bashrc", "~/.runloop/artifacts/system_tra"]
 net = []
 time = false
 kb_read = false
 kb_write = false
 secrets = []
-model = true
+model = false
 exec = false

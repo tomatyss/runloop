@@ -285,3 +285,26 @@ fn run_tmux(command: &str) -> ExecOutcome {
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn escapes_shell_words() {
+        assert_eq!(sh_escape(""), "''");
+        assert_eq!(sh_escape("simple"), "'simple'");
+        assert_eq!(sh_escape("has space"), "'has space'");
+        assert_eq!(sh_escape("quote'apostrophe"), "'quote'\\''apostrophe'");
+    }
+
+    #[test]
+    fn upserts_block_idempotently() {
+        let base = "set -g base-index 1\n";
+        let block = render_block(Preset::Minimal, &[]);
+        let merged = upsert_block(base, &block);
+        assert!(merged.contains(MARKER_START));
+        let merged_again = upsert_block(&merged, &block);
+        assert_eq!(merged, merged_again);
+    }
+}

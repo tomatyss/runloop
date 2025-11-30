@@ -1,9 +1,14 @@
 version: 0
 name: system_tra
 goals:
-  - "run the system_tra agent"
+  - "raise tmux/shell history limits with system_tra"
 params:
-  prompt: "example input"
+  tmux_conf: "~/.tmux.conf"
+  bashrc: "~/.bashrc"
+  history_limit: 50000
+  hist_size: 50000
+  hist_file_size: 100000
+  extra_tmux_lines: []
 
 policy:
   budget_tokens: 4000
@@ -14,7 +19,15 @@ nodes:
   - id: system_tra_node
     use: agent:system_tra
     with:
-      input: "{{params.prompt}}"
+      input: |
+        {
+          "tmux_conf": "{{params.tmux_conf}}",
+          "history_limit": {{params.history_limit}},
+          "extra_tmux_lines": {{params.extra_tmux_lines}},
+          "bashrc": "{{params.bashrc}}",
+          "hist_size": {{params.hist_size}},
+          "hist_file_size": {{params.hist_file_size}}
+        }
     timeout_ms: 10000
 
 edges: []

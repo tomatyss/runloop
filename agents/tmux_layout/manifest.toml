@@ -3,7 +3,7 @@ name = "tmux_layout"
 version = "0.1.0"
 kind = "wasm32-wasip1"
 
-entry_wasm = { path = "bin/tmux_layout.wasm", blake3 = "bbbaa53ae448157cbf1b2fa668f00cb1fa93b037d8f8d1d788e4c271cc992455" }
+entry_wasm = { path = "bin/tmux_layout.wasm", blake3 = "6d1db1acb743f035e68573a0b127cfb1e6955a0a7fcc48ff858b456052211ddf" }
 
 [ports]
 in = ["intent.tmux_layout.apply.v1"]

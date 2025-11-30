@@ -85,16 +85,16 @@ possible; add other paths (e.g., `/home/ivan/.zshrc`) as needed.
 
 3) Implement the agent logic  
 
-Edit `crates/agents-wasm/system_tra/src/main.rs` to parse the `prompt` parameter
-from stdin and apply the requested change. Typical steps:
+The bundled implementation already:
 
-- Load the target file (e.g., `~/.tmux.conf`), patch or append settings such as
-  `set-option -g history-limit 50000`, then write it back.
-- If `exec` is enabled and tmux is running, optionally invoke
-  `tmux source-file ~/.tmux.conf` via `std::process::Command` so the change
-  takes effect immediately.
-- Emit a JSON result to stdout describing what changed (the stub shows the
-  expected shape).
+- Parses `with.input` as JSON.
+- Manages a tmux block bounded by `# >>> runloop:system_tra` / `# <<< …` and
+  sets `history-limit`.
+- Updates `HISTSIZE` / `HISTFILESIZE` in `~/.bashrc`.
+- Emits a JSON result with file paths and whether each file was updated.
+
+Tweak `crates/agents-wasm/system_tra/src/main.rs` if you want different defaults
+(e.g., disable shell history edits) and widen `policy.caps` only when needed.
 
 4) Build and run  
 
