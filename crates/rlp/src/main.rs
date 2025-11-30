@@ -1491,7 +1491,12 @@ mod tests {
         assert!(invoked_with_version_flag(["rlp", "--version"]));
         assert!(invoked_with_version_flag(["rlp", "-V"]));
         assert!(!invoked_with_version_flag(["rlp", "why"]));
-        assert!(!invoked_with_version_flag(["rlp", "route", "--", "--version"]));
+        assert!(!invoked_with_version_flag([
+            "rlp",
+            "route",
+            "--",
+            "--version"
+        ]));
     }
 
     fn event_with_payload(payload: JsonValue) -> EventRecord {
