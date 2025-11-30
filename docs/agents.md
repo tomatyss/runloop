@@ -33,7 +33,8 @@ rlp agent scaffold note_taker --opening
 rlp agent build note_taker
 
 # 4) Run the generated opening locally to verify the wiring
-rlp run examples/openings/note_taker.yaml --local --params '{"prompt":"draft a standup note"}'
+rlp run examples/openings/note_taker.yaml --local \
+  --params '{"prompt":"draft a standup note"}'
 ```
 
 - `--root` and `--crates-dir` override the default bundle/crate roots.
@@ -46,7 +47,7 @@ rlp run examples/openings/note_taker.yaml --local --params '{"prompt":"draft a s
 Example flow for an agent that improves your tmux setup or extends shell history
 by editing dotfiles and (optionally) running tmux to reload the config.
 
-1) Scaffold (interactive wizard)  
+1. Scaffold (interactive wizard)
 
 ```bash
 rlp agent scaffold system_tra --opening
@@ -59,11 +60,11 @@ KB disabled). This creates:
 - `crates/agents-wasm/system_tra/` crate with a stub `main.rs`
 - `examples/openings/system_tra.yaml` wired to the new agent
 
-2) Grant the right capabilities  
+1. Grant the right capabilities
 
 Edit `agents/system_tra/policy.caps` to allow the files you want to touch and,
-if needed, host command execution. Use absolute paths (replace `/home/ivan`
-with your home):
+if needed, host command execution. Use absolute paths (replace `/home/ivan` with
+your home):
 
 ```toml
 [capabilities]
@@ -83,7 +84,7 @@ kb_write = false
 Drop `exec = true` if the agent will only edit files. Keep `fs` as narrow as
 possible; add other paths (e.g., `/home/ivan/.zshrc`) as needed.
 
-3) Implement the agent logic  
+1. Implement the agent logic
 
 The bundled implementation already:
 
@@ -96,7 +97,7 @@ The bundled implementation already:
 Tweak `crates/agents-wasm/system_tra/src/main.rs` if you want different defaults
 (e.g., disable shell history edits) and widen `policy.caps` only when needed.
 
-4) Build and run  
+1. Build and run
 
 ```bash
 rlp agent build system_tra

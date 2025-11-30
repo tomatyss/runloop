@@ -64,14 +64,22 @@ Normative JSON Schemas for the initial event kinds live under
 
 <!-- markdownlint-enable MD013 -->
 
-[schema-contact]: https://github.com/tomatyss/runloop/blob/main/crates/kb/schemas/contact.upserted.schema.json
-[schema-artifact]: https://github.com/tomatyss/runloop/blob/main/crates/kb/schemas/artifact.created.schema.json
-[schema-email]: https://github.com/tomatyss/runloop/blob/main/crates/kb/schemas/email.sent.schema.json
-[schema-run-started]: https://github.com/tomatyss/runloop/blob/main/crates/kb/schemas/run.started.schema.json
-[schema-run-finished]: https://github.com/tomatyss/runloop/blob/main/crates/kb/schemas/run.finished.schema.json
-[schema-node]: https://github.com/tomatyss/runloop/blob/main/crates/kb/schemas/node.finished.schema.json
-[schema-trace]: https://github.com/tomatyss/runloop/blob/main/crates/kb/schemas/run.trace.schema.json
-[schema-cap-audit]: https://github.com/tomatyss/runloop/blob/main/crates/kb/schemas/cap.audit.schema.json
+[schema-contact]:
+  https://github.com/tomatyss/runloop/blob/main/crates/kb/schemas/contact.upserted.schema.json
+[schema-artifact]:
+  https://github.com/tomatyss/runloop/blob/main/crates/kb/schemas/artifact.created.schema.json
+[schema-email]:
+  https://github.com/tomatyss/runloop/blob/main/crates/kb/schemas/email.sent.schema.json
+[schema-run-started]:
+  https://github.com/tomatyss/runloop/blob/main/crates/kb/schemas/run.started.schema.json
+[schema-run-finished]:
+  https://github.com/tomatyss/runloop/blob/main/crates/kb/schemas/run.finished.schema.json
+[schema-node]:
+  https://github.com/tomatyss/runloop/blob/main/crates/kb/schemas/node.finished.schema.json
+[schema-trace]:
+  https://github.com/tomatyss/runloop/blob/main/crates/kb/schemas/run.trace.schema.json
+[schema-cap-audit]:
+  https://github.com/tomatyss/runloop/blob/main/crates/kb/schemas/cap.audit.schema.json
 
 Validators MUST embed these schemas and enforce them at `StateDelta` ingestion
 time. `$id` versions bump on breaking changes; implementations SHOULD accept the

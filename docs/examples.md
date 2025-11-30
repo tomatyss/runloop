@@ -1,14 +1,15 @@
 # Examples & Openings
 
 Sample openings live in `examples/openings/` and double as fixtures for the
-planner/executor. They run against the canonical agents stored in `agents/`
-once their wasm bundles are built.
+planner/executor. They run against the canonical agents stored in `agents/` once
+their wasm bundles are built.
 
-- `compose_email.yaml` — multi-agent crew: contacts → context → writer → critic
-  → mailer (human confirm). This is the canonical smoke test.
+- `compose_email.yaml` — multi-agent crew: contacts → context → writer →
+  critic → mailer (human confirm). This is the canonical smoke test.
 - `system_helper.yaml` — single-node helper that can invoke a host command and
   optionally call Gemini.
-- `tmux_layout.yaml` — apply tmux presets and optionally reload/apply a layout.
+- `tmux_layout.yaml` — apply tmux presets and optionally reload/apply a
+  layout.
 - `system_tra.yaml` — raise tmux/shell history limits with a managed config
   block.
 
@@ -16,10 +17,13 @@ once their wasm bundles are built.
 
 ```bash
 # ensure wasm bundles are present
-just build-agents-wasm    # or: cargo build --release --target wasm32-wasip1 --manifest-path crates/agents-wasm/Cargo.toml
+just build-agents-wasm
+# or: cargo build --release --target wasm32-wasip1 \
+#   --manifest-path crates/agents-wasm/Cargo.toml
 
 # run compose_email locally (no daemon)
-cargo run -p rlp -- run examples/openings/compose_email.yaml --local --params '{"recipient":"john"}'
+cargo run -p rlp -- run examples/openings/compose_email.yaml --local \
+  --params '{"recipient":"john"}'
 ```
 
 Monitor a run by piping the NDJSON stream into the TUI:
