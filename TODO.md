@@ -686,7 +686,7 @@ disable integration via a documented toggle.
 
 ### Q2. Bus Scalability
 
-- [ ] **Lock Granularity:** Replace `RwLock<HashMap<String, TopicState>>` in
+- [x] **Lock Granularity:** Replace `RwLock<HashMap<String, TopicState>>` in
       `crates/bus` with `DashMap<String, TopicState>` to reduce contention during
       high-frequency publish/subscribe operations.
 

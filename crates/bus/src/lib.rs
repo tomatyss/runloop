@@ -1,8 +1,8 @@
 use bytes::Bytes;
+use dashmap::DashMap;
 use futures_core::Stream;
 use lru::LruCache;
 use once_cell::sync::Lazy;
-use parking_lot::RwLock;
 use runloop_core::{
     Error as CoreError,
     content::{CT_ACTION_DECISION, CT_BUS_DROP_NOTICE},
@@ -352,7 +352,7 @@ impl SubscriptionGuard {
 
 #[derive(Clone)]
 struct Server {
-    topics: Arc<RwLock<HashMap<String, TopicState>>>,
+    topics: Arc<DashMap<String, TopicState>>,
     metrics: Arc<Metrics>,
     config: BusConfig,
     closed: Arc<AtomicBool>,
@@ -361,7 +361,7 @@ struct Server {
 impl Server {
     fn new() -> Self {
         Self {
-            topics: Arc::new(RwLock::new(HashMap::new())),
+            topics: Arc::new(DashMap::new()),
             metrics: Arc::new(Metrics::default()),
             config: BusConfig::default(),
             closed: Arc::new(AtomicBool::new(false)),
@@ -384,27 +384,23 @@ impl Server {
         if self.closed.swap(true, Ordering::SeqCst) {
             return false;
         }
-        let states = {
-            let mut topics = self.topics.write();
-            std::mem::take(&mut *topics)
-        };
-        drop(states);
+        self.topics.clear();
         true
     }
 
     fn snapshot_stats(&self) -> BusStats {
         let mut depth_max = 0usize;
         let mut capacity_max = 0usize;
-        {
-            let topics = self.topics.read();
-            for state in topics.values() {
-                for subscriber in &state.subscribers {
-                    let cap = subscriber.tx.max_capacity();
-                    let remaining = subscriber.tx.capacity();
-                    let backlog = cap.saturating_sub(remaining);
-                    depth_max = depth_max.max(backlog);
-                    capacity_max = capacity_max.max(cap);
-                }
+        // Iterate shard-by-shard (DashMap iter locks one shard at a time), keeping
+        // locks short to avoid blocking publishers/subscribers across the whole map.
+        for entry in self.topics.iter() {
+            let state = entry.value();
+            for subscriber in &state.subscribers {
+                let cap = subscriber.tx.max_capacity();
+                let remaining = subscriber.tx.capacity();
+                let backlog = cap.saturating_sub(remaining);
+                depth_max = depth_max.max(backlog);
+                capacity_max = capacity_max.max(cap);
             }
         }
         let mut stats = self.metrics.snapshot();
@@ -442,7 +438,7 @@ impl Server {
             return Err(BusError::MessageExpired);
         }
         self.metrics.inc_published();
-        let subs = { self.topics.read().get(topic).cloned() };
+        let subs = self.topics.get(topic).map(|entry| entry.value().clone());
         let mut pending_reservations: Vec<DedupeReservation> = Vec::new();
         let mut primary_error: Option<(FailureSeverity, BusError)> = None;
         if let Some(state) = subs {
@@ -571,14 +567,11 @@ impl Server {
             topic: topic.to_string(),
             subscriber_id: subscriber.id,
         };
-        {
-            let mut topics = self.topics.write();
-            topics
-                .entry(topic.to_string())
-                .or_default()
-                .subscribers
-                .push(subscriber);
-        }
+        self.topics
+            .entry(topic.to_string())
+            .or_default()
+            .subscribers
+            .push(subscriber);
         Ok(Subscription {
             rx,
             guard: Some(guard),
@@ -587,11 +580,15 @@ impl Server {
     }
 
     fn remove_subscriber(&self, topic: &str, subscriber_id: u64) {
-        let mut topics = self.topics.write();
-        if let Some(state) = topics.get_mut(topic) {
-            state.subscribers.retain(|sub| sub.id != subscriber_id);
-            if state.subscribers.is_empty() {
-                topics.remove(topic);
+        if let dashmap::mapref::entry::Entry::Occupied(mut entry) =
+            self.topics.entry(topic.to_string())
+        {
+            entry
+                .get_mut()
+                .subscribers
+                .retain(|sub| sub.id != subscriber_id);
+            if entry.get().subscribers.is_empty() {
+                entry.remove();
             }
         }
     }
@@ -638,7 +635,10 @@ impl Server {
                 return;
             }
         };
-        let subs = { self.topics.read().get(DROP_TOPIC).cloned() };
+        let subs = self
+            .topics
+            .get(DROP_TOPIC)
+            .map(|entry| entry.value().clone());
         if let Some(state) = subs {
             for subscriber in state.subscribers.iter() {
                 match self.push_message(subscriber, &drop_msg).await {
