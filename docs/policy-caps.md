@@ -59,6 +59,12 @@ capability family.
   empty list or `false` revokes the capability entirely.
 - Overrides cannot **grant** capabilities absent from base; attempting to do so
   logs a warning and the extra entries are ignored.
+- When the **effective** capabilities resolve to empty (no fs/net/time/kb/model/
+  secrets/exec grants), the runtime still launches the agent but records a
+  `cap.audit` entry with `cap="caps.empty"`, `op="_start"`, and
+  `reason="caps_empty"` so operators understand the agent will be inert until
+  policy is relaxed. Hostcalls will continue to be denied under
+  `audit_on_deny=true`.
 
 Example override (`~/.runloop/caps/overrides/writer.toml`):
 
@@ -83,3 +89,5 @@ kb_write = ["drafts"]   # restrict writes to the drafts domain
 - Wildcard hostnames with verification (`*.example.com`).
 - Rate limits (`model.tokens_per_minute`).
 - Capability templates shared across agents.
+- Optional hardening flag (`security.caps.fail_on_empty`) to fail-fast when
+  effective capabilities are empty instead of launching an inert agent.

@@ -463,7 +463,8 @@ freeze updates.
 
 - [x] Ensure **every** hostcall mapping checks caps (fs, net, time, kb, model,
       secrets, exec).
-- [ ] Deny by default; empty caps = inert agent.
+- [x] Deny by default; empty caps = inert agent (launch still permitted, emits
+      `caps.empty` audit on start; hostcalls remain denied).
 
 **DoD:** Static audit (grep/inspection) & tests verify enforcement paths.
 
@@ -685,7 +686,7 @@ disable integration via a documented toggle.
 
 ### Q2. Bus Scalability
 
-- [ ] **Lock Granularity:** Replace `RwLock<HashMap<String, TopicState>>` in
+- [x] **Lock Granularity:** Replace `RwLock<HashMap<String, TopicState>>` in
       `crates/bus` with `DashMap<String, TopicState>` to reduce contention during
       high-frequency publish/subscribe operations.
 
