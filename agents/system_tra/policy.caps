@@ -1,0 +1,9 @@
+[capabilities]
+fs = ["~/.runloop/artifacts/system_tra"]
+net = []
+time = false
+kb_read = false
+kb_write = false
+secrets = []
+model = true
+exec = false

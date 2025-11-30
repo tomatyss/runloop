@@ -1,0 +1,26 @@
+[agent]
+name = "system_tra"
+version = "0.1.0"
+kind = "wasm32-wasip1"
+
+entry_wasm = { path = "bin/system_tra.wasm", blake3 = "f5c8f90a9ec3e19c01143acc7249d9a66e243ea6b106f54d8a8d03edd3632211" }
+
+[ports]
+in = []
+out = ["out"]
+
+[caps]
+file = "policy.caps"
+
+[artifacts.tools]
+path = "tools.json"
+blake3 = "afe8c80ddd828a277fa440f6fc431158d0429d2300d322786613b962a831a3be"
+version = 1
+[schemas.with]
+type = "object"
+additionalProperties = false
+required = ["input"]
+
+[schemas.with.properties.input]
+type = "string"
+minLength = 1

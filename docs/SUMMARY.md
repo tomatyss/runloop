@@ -1,8 +1,12 @@
 # Summary
 
 - [Introduction](index.md)
+- [Project Overview](project-overview.md)
 - [Getting Started](getting-started.md)
 - [Architecture](architecture.md)
+- [Agents](agents.md)
+  - [Authoring on a Debian Install](authoring-on-deb.md)
+- [Examples](examples.md)
 
 - [Protocols](protocols.md)
   - [Message Protocol](message-protocol.md)

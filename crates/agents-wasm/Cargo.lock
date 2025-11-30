@@ -316,6 +316,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "runloop-agent-system_tra-wasm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "runloop-agent-tmux_layout-wasm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "runloop-agent-wasm-sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "runloop-agent-wasm-sdk"
 version = "0.1.0"
 dependencies = [
