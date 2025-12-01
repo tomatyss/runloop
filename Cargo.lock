@@ -3564,6 +3564,7 @@ dependencies = [
 name = "runloop-router"
 version = "0.1.0"
 dependencies = [
+ "hashbrown 0.16.1",
  "once_cell",
  "regex",
  "runloop-core",

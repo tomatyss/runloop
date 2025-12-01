@@ -1,10 +1,11 @@
 use crate::builtins;
+use crate::casefold::{CiBorrow, CiString, ascii_contains_nocase};
 use crate::env;
+use hashbrown::HashSet;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use runloop_core::config::RouterConfig;
 use serde::Serialize;
-use std::collections::HashSet;
 
 static SIMPLE_COMMAND: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^[A-Za-z0-9_\-./]+(?:\s+.+)?$").expect("simple command regex"));
@@ -54,8 +55,8 @@ impl Pattern {
         Self { raw: value, lower }
     }
 
-    fn matches(&self, prompt_lower: &str) -> bool {
-        !self.lower.is_empty() && prompt_lower.contains(&self.lower)
+    fn matches(&self, prompt: &str) -> bool {
+        !self.lower.is_empty() && ascii_contains_nocase(prompt, &self.lower)
     }
 }
 
@@ -64,7 +65,7 @@ pub struct Router {
     default_opening: String,
     allowlist: Vec<Pattern>,
     denylist: Vec<Pattern>,
-    known_commands: HashSet<String>,
+    known_commands: HashSet<CiString>,
 }
 
 impl Router {
@@ -78,13 +79,13 @@ impl Router {
     {
         let mut known_commands = HashSet::new();
         for cmd in builtins::baseline_commands() {
-            known_commands.insert(cmd.to_ascii_lowercase());
+            known_commands.insert(CiString::new(cmd));
         }
         for cmd in &config.known_commands {
-            known_commands.insert(cmd.to_ascii_lowercase());
+            known_commands.insert(CiString::new(cmd));
         }
         for cmd in extra_commands {
-            known_commands.insert(cmd.to_ascii_lowercase());
+            known_commands.insert(CiString::new(cmd));
         }
 
         Self {
@@ -98,9 +99,8 @@ impl Router {
 
     pub fn classify(&self, prompt: &str) -> Classification {
         let trimmed = prompt.trim();
-        let prompt_lower = trimmed.to_ascii_lowercase();
 
-        if let Some(pattern) = self.matches_pattern(&self.denylist, &prompt_lower) {
+        if let Some(pattern) = self.matches_pattern(&self.denylist, trimmed) {
             return Classification {
                 route: Route::Shell,
                 rule: "override:denylist".into(),
@@ -110,7 +110,7 @@ impl Router {
             };
         }
 
-        if let Some(pattern) = self.matches_pattern(&self.allowlist, &prompt_lower) {
+        if let Some(pattern) = self.matches_pattern(&self.allowlist, trimmed) {
             return Classification {
                 route: Route::Shell,
                 rule: "override:allowlist".into(),
@@ -162,27 +162,27 @@ impl Router {
             push_feature(&mut features, "pattern:simple_command");
         }
 
-        let tokens: Vec<String> = token_candidates(trimmed).collect();
         let mut has_known_command = false;
         let mut first_token_is_command = false;
 
-        for (idx, token) in tokens.iter().enumerate() {
+        for (idx, token) in token_candidates(trimmed).enumerate() {
             let is_path = token.starts_with("./")
                 || token.starts_with("../")
                 || (token.starts_with('/') && token.len() > 1);
-            let is_known = is_path || self.known_commands.contains(token);
+            let is_known = is_path || self.contains_command(token);
 
             if is_known {
                 has_known_command = true;
                 if idx == 0 {
                     first_token_is_command = true;
                 }
-                if !command_hits.contains(token) {
-                    command_hits.push(token.clone());
+                let lower_token = token.to_ascii_lowercase();
+                if !command_hits.contains(&lower_token) {
+                    command_hits.push(lower_token.clone());
                     let feature = if is_path {
-                        format!("path:{}", token)
+                        format!("path:{}", lower_token)
                     } else {
-                        format!("cmd:{}", token)
+                        format!("cmd:{}", lower_token)
                     };
                     push_feature(&mut features, feature);
                 }
@@ -231,14 +231,12 @@ impl Router {
         }
     }
 
-    fn matches_pattern<'a>(
-        &'a self,
-        patterns: &'a [Pattern],
-        prompt_lower: &str,
-    ) -> Option<&'a Pattern> {
-        patterns
-            .iter()
-            .find(|pattern| pattern.matches(prompt_lower))
+    fn matches_pattern<'a>(&'a self, patterns: &'a [Pattern], prompt: &str) -> Option<&'a Pattern> {
+        patterns.iter().find(|pattern| pattern.matches(prompt))
+    }
+
+    fn contains_command(&self, token: &str) -> bool {
+        self.known_commands.get(&CiBorrow(token)).is_some()
     }
 }
 
@@ -251,24 +249,87 @@ const POSIX_TOKENS: [(&str, &str); 6] = [
     (";", "token:;"),
 ];
 
-fn token_candidates(prompt: &str) -> impl Iterator<Item = String> + '_ {
-    prompt
-        .split(|c: char| c.is_whitespace() || "|&;<>".contains(c))
-        .filter_map(normalize_token)
+fn token_candidates(prompt: &str) -> TokenIter<'_> {
+    TokenIter { s: prompt, pos: 0 }
 }
 
-fn normalize_token(raw: &str) -> Option<String> {
-    let trimmed = raw.trim_matches(|c: char| {
-        matches!(
-            c,
-            '\'' | '"' | '`' | '(' | ')' | '{' | '}' | '[' | ']' | ',' | ':'
-        )
-    });
-    if trimmed.is_empty() {
-        return None;
+struct TokenIter<'a> {
+    s: &'a str,
+    pos: usize,
+}
+
+impl<'a> Iterator for TokenIter<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let len = self.s.len();
+        loop {
+            // Skip delimiters (whitespace or POSIX operators).
+            while self.pos < len {
+                let ch = self.s[self.pos..].chars().next().unwrap();
+                if ch.is_whitespace() || matches!(ch, '|' | '&' | ';' | '<' | '>') {
+                    self.pos += ch.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            if self.pos >= len {
+                return None;
+            }
+            let start = self.pos;
+            let mut end = len;
+            for (offset, ch) in self.s[self.pos..].char_indices() {
+                if ch.is_whitespace() || matches!(ch, '|' | '&' | ';' | '<' | '>') {
+                    end = self.pos + offset;
+                    self.pos = end + ch.len_utf8();
+                    break;
+                }
+            }
+            if self.pos == start {
+                // Delimiter not found; consume rest.
+                self.pos = len;
+            } else if end == len {
+                self.pos = len;
+            }
+            let slice = &self.s[start..end];
+            if let Some(token) = trim_token(slice) {
+                return Some(token);
+            }
+            // Empty after trimming; continue scanning in the loop.
+        }
     }
-    let token = trimmed.to_ascii_lowercase();
-    if token.is_empty() { None } else { Some(token) }
+}
+
+fn trim_token(token: &str) -> Option<&str> {
+    let mut start = 0;
+    let mut end = token.len();
+    while start < end {
+        let ch = token[start..].chars().next().unwrap();
+        if matches!(
+            ch,
+            '\'' | '"' | '`' | '(' | ')' | '{' | '}' | '[' | ']' | ',' | ':'
+        ) {
+            start += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    while end > start {
+        let ch = token[..end].chars().rev().next().unwrap();
+        if matches!(
+            ch,
+            '\'' | '"' | '`' | '(' | ')' | '{' | '}' | '[' | ']' | ',' | ':'
+        ) {
+            end -= ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if start >= end {
+        None
+    } else {
+        Some(&token[start..end])
+    }
 }
 
 fn push_feature(features: &mut Vec<String>, feature: impl Into<String>) {
@@ -355,5 +416,43 @@ mod tests {
                 .iter()
                 .any(|feature| feature.starts_with("path:"))
         );
+    }
+
+    #[test]
+    fn commands_are_matched_case_insensitively() {
+        let router = router_with(|_| {});
+        let classification = router.classify("LS -la");
+        assert_eq!(classification.route, Route::Shell);
+        assert_eq!(classification.rule, "simple_command+known_command");
+        assert!(
+            classification
+                .features
+                .iter()
+                .any(|feature| feature == "cmd:ls")
+        );
+    }
+
+    #[test]
+    fn quotes_are_trimmed_from_tokens() {
+        let router = router_with(|_| {});
+        let classification = router.classify("\"ls\" -la");
+        assert_eq!(classification.route, Route::Agent);
+        assert_eq!(classification.rule, "fallback:opening");
+    }
+
+    #[test]
+    fn natural_language_with_mid_command_stays_agent() {
+        let router = router_with(|_| {});
+        let classification = router.classify("please run ls after this");
+        assert_eq!(classification.route, Route::Agent);
+        assert_eq!(classification.rule, "fallback:opening");
+    }
+
+    #[test]
+    fn separator_tokens_are_skipped_and_trailing_command_detected() {
+        let router = router_with(|_| {});
+        let classification = router.classify("run : ls");
+        assert_eq!(classification.route, Route::Agent);
+        assert_eq!(classification.rule, "fallback:opening");
     }
 }
