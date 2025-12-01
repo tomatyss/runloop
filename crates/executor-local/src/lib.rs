@@ -190,8 +190,54 @@ impl LocalExecutor {
             "writer" => self.exec_writer(reference, &request).await,
             "critic" => self.exec_critic(reference, &request).await,
             "mailer" => self.exec_mailer(reference, &request).await,
+            "system_tra" => self.exec_system_tra(reference, &request).await,
             other => Err(RunnerError::Executor(format!("unknown agent '{other}'"))),
         }
+    }
+
+    async fn exec_system_tra(
+        &self,
+        reference: &AgentRef,
+        request: &NodeExecutionRequest<'_>,
+    ) -> Result<NodeExecution, RunnerError> {
+        let input_value = request
+            .node
+            .with
+            .get("input")
+            .ok_or_else(|| RunnerError::Executor("system_tra requires an 'input'".into()))?;
+
+        let input_arg = stringify_input(input_value)
+            .map_err(|err| RunnerError::Executor(format!("invalid input for system_tra: {err}")))?;
+
+        if let Some(bundle) = self.wasm_bundle(reference) {
+            let args = vec![
+                reference_spec(reference),
+                "--input".into(),
+                input_arg.clone(),
+            ];
+            match self
+                .invoke_agent::<JsonValue>(
+                    reference,
+                    &bundle,
+                    &request.node.id,
+                    args,
+                    None,
+                    self.agent_timeout(request),
+                )
+                .await
+            {
+                Ok(output) => {
+                    let mut outputs = NodeOutputs::default();
+                    outputs.push("out", output);
+                    return Ok(NodeExecution::Completed(outputs));
+                }
+                Err(err) => return Err(err),
+            };
+        }
+
+        Err(RunnerError::Executor(
+            "system_tra missing wasm entry".into(),
+        ))
     }
 
     fn node_param<T: DeserializeOwned>(
@@ -893,6 +939,13 @@ fn map_agent_error(err: AgentError) -> RunnerError {
     RunnerError::Executor(err.to_string())
 }
 
+fn stringify_input(value: &JsonValue) -> Result<String, serde_json::Error> {
+    match value {
+        JsonValue::String(text) => Ok(text.clone()),
+        other => serde_json::to_string(other),
+    }
+}
+
 struct PreApprovedConfirmation {
     decision: ActionDecision,
 }
@@ -980,5 +1033,30 @@ impl From<&DraftArtifact> for MinimalDraft {
         Self {
             body_md: draft.body_md.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn stringify_input_keeps_string() {
+        let input = JsonValue::String("plain".into());
+        let result = stringify_input(&input).unwrap();
+        assert_eq!(result, "plain");
+    }
+
+    #[test]
+    fn stringify_input_serializes_object() {
+        let input = json!({
+            "tmux_conf": "~/.tmux.conf",
+            "history_limit": 42,
+            "extra_tmux_lines": ["set -g mouse on"]
+        });
+        let result = stringify_input(&input).unwrap();
+        let reparsed: JsonValue = serde_json::from_str(&result).unwrap();
+        assert_eq!(reparsed, input);
     }
 }

@@ -126,6 +126,13 @@ artifacts:
 
 - **Templating:** only `{{params.*}}` substitution; no loops/expressions in
   templates. Use simple edge predicates for control.
+  - Agents that expect JSON configs (e.g., `system_tra`) should take a
+    structured object in `with`, letting the executor serialize it to JSON.
+    Avoid embedding multiple `{{…}}` tokens inside a single string; those are
+    rejected by the parser.
+  - If you keep a raw string, it must be exactly one `{{params.*}}` token or a
+    plain string with no braces; mixed content like `"foo {{params.bar}}"` fails
+    validation.
 
 ### 4.2 Equivalent “text sugar” (non‑normative)
 

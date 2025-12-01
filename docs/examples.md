@@ -4,12 +4,11 @@ Sample openings live in `examples/openings/` and double as fixtures for the
 planner/executor. They run against the canonical agents stored in `agents/` once
 their wasm bundles are built.
 
-- `compose_email.yaml` — multi-agent crew: contacts → context → writer →
-  critic → mailer (human confirm). This is the canonical smoke test.
+- `compose_email.yaml` — multi-agent crew: contacts → context → writer → critic
+  → mailer (human confirm). This is the canonical smoke test.
 - `system_helper.yaml` — single-node helper that can invoke a host command and
   optionally call Gemini.
-- `tmux_layout.yaml` — apply tmux presets and optionally reload/apply a
-  layout.
+- `tmux_layout.yaml` — apply tmux presets and optionally reload/apply a layout.
 - `system_tra.yaml` — raise tmux/shell history limits with a managed config
   block.
 

@@ -250,7 +250,7 @@ pub fn parse_opening_str(source: &str) -> Result<Opening, Error> {
             let map = value
                 .as_mapping()
                 .ok_or_else(|| Error::validation("params must be a mapping", loc))?;
-            yaml_map_to_json_map(map, loc, true)?
+            yaml_map_to_json_map(map, loc)?
         }
         None => JsonMap::new(),
     };
@@ -384,7 +384,7 @@ fn parse_nodes(
                 let mapping = v
                     .as_mapping()
                     .ok_or_else(|| Error::validation("node.with must be a mapping", with_loc))?;
-                yaml_map_to_json_map(mapping, with_loc, false)
+                yaml_map_to_json_map(mapping, with_loc)
             })
             .transpose()?
             .unwrap_or_default();
@@ -1057,7 +1057,6 @@ fn expect_u64_value(value: &Value) -> Option<u64> {
 fn yaml_map_to_json_map(
     map: &Mapping,
     loc: SourceLocation,
-    params_map: bool,
 ) -> Result<JsonMap<String, JsonValue>, Error> {
     let mut json_map = JsonMap::new();
     for (key, value) in map {
@@ -1070,17 +1069,9 @@ fn yaml_map_to_json_map(
                 loc,
             )
         })?;
-        if params_map
-            && !matches!(
-                json_value,
-                JsonValue::String(_) | JsonValue::Number(_) | JsonValue::Bool(_)
-            )
-        {
-            return Err(Error::validation(
-                format!("params.{key_str} must be a scalar (string, number, or boolean)"),
-                loc,
-            ));
-        }
+        // params_map previously restricted values to scalars because templating only
+        // supported scalar substitution. Now that we allow full-value replacement,
+        // we accept any JSON type here and rely on downstream schema/agent validation.
         json_map.insert(key_str.to_string(), json_value);
     }
     Ok(json_map)
@@ -1101,7 +1092,7 @@ fn apply_param_templates(
                             loc,
                         )
                     })?;
-                    ensure_scalar_param(param, param_name, loc)?;
+                    validate_no_templates(param, loc)?;
                     *value = param.clone();
                 } else if text.contains("{{") || text.contains("}}") {
                     return Err(Error::validation(
@@ -1140,7 +1131,7 @@ fn apply_templates_array(
                                 loc,
                             )
                         })?;
-                        ensure_scalar_param(param, param_name, loc)?;
+                        validate_no_templates(param, loc)?;
                         *element = param.clone();
                     } else if text.contains("{{") || text.contains("}}") {
                         return Err(Error::validation(
@@ -1158,22 +1149,6 @@ fn apply_templates_array(
     Ok(())
 }
 
-fn ensure_scalar_param(
-    value: &JsonValue,
-    param_name: &str,
-    loc: SourceLocation,
-) -> Result<(), Error> {
-    match value {
-        JsonValue::String(_) | JsonValue::Number(_) | JsonValue::Bool(_) => Ok(()),
-        _ => Err(Error::validation(
-            format!(
-                "template '{{{{params.{param_name}}}}}' supports only string, number, or boolean values"
-            ),
-            loc,
-        )),
-    }
-}
-
 fn extract_template(value: &str) -> Option<&str> {
     let rest = value
         .strip_prefix("{{")
@@ -1188,6 +1163,31 @@ fn extract_template(value: &str) -> Option<&str> {
     } else {
         None
     }
+}
+
+fn validate_no_templates(value: &JsonValue, loc: SourceLocation) -> Result<(), Error> {
+    match value {
+        JsonValue::String(text) => {
+            if text.contains("{{") || text.contains("}}") {
+                return Err(Error::validation(
+                    format!("embedded template syntax not allowed in parameter value '{text}'"),
+                    loc,
+                ));
+            }
+        }
+        JsonValue::Array(arr) => {
+            for item in arr {
+                validate_no_templates(item, loc)?;
+            }
+        }
+        JsonValue::Object(map) => {
+            for value in map.values() {
+                validate_no_templates(value, loc)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn split_once<'a>(haystack: &'a str, needle: &str) -> Option<(&'a str, &'a str)> {
@@ -1254,4 +1254,96 @@ fn index_to_location(source: &str, index: usize) -> SourceLocation {
         }
     }
     SourceLocation::new(line, column)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn applies_array_param_when_template_is_entire_value() {
+        let mut payload = JsonMap::new();
+        payload.insert(
+            "extra_lines".into(),
+            JsonValue::String("{{params.extra_lines}}".into()),
+        );
+
+        let mut params = JsonMap::new();
+        params.insert(
+            "extra_lines".into(),
+            json!(["set -g mouse on", "setw -g mode-keys vi"]),
+        );
+
+        apply_param_templates(&mut payload, &params, SourceLocation::new(1, 1))
+            .expect("should substitute array param");
+
+        assert_eq!(
+            payload.get("extra_lines"),
+            Some(&json!(["set -g mouse on", "setw -g mode-keys vi"]))
+        );
+    }
+
+    #[test]
+    fn applies_object_param_inside_array_element() {
+        let mut payload = JsonMap::new();
+        payload.insert(
+            "items".into(),
+            JsonValue::Array(vec![JsonValue::String("{{params.obj}}".into())]),
+        );
+
+        let mut params = JsonMap::new();
+        params.insert("obj".into(), json!({"key": "value"}));
+
+        apply_param_templates(&mut payload, &params, SourceLocation::new(1, 1))
+            .expect("should substitute object param inside array");
+
+        let items = payload
+            .get("items")
+            .and_then(|v| v.as_array())
+            .expect("items array");
+        assert_eq!(items.get(0), Some(&json!({"key": "value"})));
+    }
+
+    #[test]
+    fn rejects_inline_template_with_non_scalar_param() {
+        let mut payload = JsonMap::new();
+        payload.insert(
+            "line".into(),
+            JsonValue::String("prefix {{params.extra_lines}}".into()),
+        );
+
+        let mut params = JsonMap::new();
+        params.insert("extra_lines".into(), json!(["foo"]));
+
+        let err = apply_param_templates(&mut payload, &params, SourceLocation::new(3, 5))
+            .expect_err("inline template should be rejected");
+
+        assert!(matches!(err, Error::Validation { .. }));
+    }
+
+    #[test]
+    fn allows_templates_inside_object_values() {
+        let mut payload = JsonMap::new();
+        payload.insert(
+            "input".into(),
+            json!({
+                "history_limit": "{{params.limit}}",
+                "tmux_conf": "~/.tmux.conf"
+            }),
+        );
+
+        let mut params = JsonMap::new();
+        params.insert("limit".into(), json!(1234));
+
+        apply_param_templates(&mut payload, &params, SourceLocation::new(1, 1))
+            .expect("object template should be substituted");
+
+        let input = payload
+            .get("input")
+            .and_then(|v| v.as_object())
+            .expect("input object");
+        assert_eq!(input.get("history_limit"), Some(&json!(1234)));
+        assert_eq!(input.get("tmux_conf"), Some(&json!("~/.tmux.conf")));
+    }
 }

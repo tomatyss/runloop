@@ -23,7 +23,7 @@ use wasmtime::{Engine, Linker, Store};
 use wasmtime_wasi::cli::{IsTerminal, StdoutStream};
 use wasmtime_wasi::p1;
 use wasmtime_wasi::p2::pipe::MemoryInputPipe;
-use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
+use wasmtime_wasi::{DirPerms, FilePerms, I32Exit, WasiCtxBuilder};
 
 use crate::audit::AuditSink;
 use crate::caps::Caps;
@@ -596,6 +596,10 @@ impl Runtime {
                     if let Ok(start) = instance.get_typed_func::<(), ()>(&mut store, "_start")
                         && let Err(err) = start.call(&mut store, ())
                     {
+                        if err.downcast_ref::<I32Exit>().is_some_and(|e| e.0 == 0) {
+                            let _ = startup_tx.send(StartupSignal::Ready);
+                            return Ok(());
+                        }
                         if let Some(msg) = capability_denied_message(&err)
                             .filter(|_| !host_state_for_thread.consume_denial_flag())
                         {
@@ -945,6 +949,9 @@ impl AsyncWrite for RingAsyncWrite {
 }
 
 fn map_wasmtime_error(err: WasmtimeError, wasm_path: &Path) -> Error {
+    if let Some(exit) = err.downcast_ref::<I32Exit>() {
+        return Error::spawn_failed(wasm_path.to_path_buf(), format!("exit({exit:?})"));
+    }
     if let Some(msg) = capability_denied_message(&err) {
         return Error::CapDenied(CapDeniedInfo::new(
             "runtime",

@@ -1903,6 +1903,7 @@ mod tests {
     };
     use serde_json::json;
     use std::collections::HashMap;
+    use std::net::TcpListener;
     use std::sync::Arc;
 
     struct TestSecrets;
@@ -2029,6 +2030,10 @@ mod tests {
 
     static HTTPMOCK_GUARD: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
 
+    fn net_available() -> bool {
+        TcpListener::bind("127.0.0.1:0").is_ok()
+    }
+
     fn httpmock_lock() -> std::sync::MutexGuard<'static, ()> {
         HTTPMOCK_GUARD
             .get_or_init(|| std::sync::Mutex::new(()))
@@ -2038,6 +2043,9 @@ mod tests {
 
     #[tokio::test]
     async fn gemini_provider_maps_requests_and_responses() {
+        if !net_available() {
+            return;
+        }
         let _guard = httpmock_lock();
         let server = MockServer::start();
         let mock = server
@@ -2120,6 +2128,9 @@ mod tests {
 
     #[tokio::test]
     async fn gemini_provider_surfaces_safety_blocks() {
+        if !net_available() {
+            return;
+        }
         let _guard = httpmock_lock();
         let server = MockServer::start();
         let mock = server
@@ -2183,6 +2194,9 @@ mod tests {
 
     #[tokio::test]
     async fn openai_chat_provider_maps_requests_and_responses() {
+        if !net_available() {
+            return;
+        }
         let _guard = httpmock_lock();
         let server = MockServer::start();
         let mock = server.mock(|when, then| {
@@ -2244,6 +2258,9 @@ mod tests {
 
     #[tokio::test]
     async fn anthropic_provider_maps_requests_and_responses() {
+        if !net_available() {
+            return;
+        }
         let _guard = httpmock_lock();
         let server = MockServer::start();
         let mock = server
@@ -2306,6 +2323,9 @@ mod tests {
 
     #[tokio::test]
     async fn ollama_provider_maps_requests_and_responses() {
+        if !net_available() {
+            return;
+        }
         let _guard = httpmock_lock();
         let server = MockServer::start();
         let mock = server
@@ -2347,6 +2367,9 @@ mod tests {
 
     #[tokio::test]
     async fn ollama_provider_forwards_system_prompt() {
+        if !net_available() {
+            return;
+        }
         let _guard = httpmock_lock();
         let server = MockServer::start();
         let mock = server
@@ -2414,6 +2437,9 @@ mod tests {
 
     #[tokio::test]
     async fn broker_routes_requests_to_gemini_provider() {
+        if !net_available() {
+            return;
+        }
         let server = MockServer::start();
         let mock = server
             .mock_async(|when, then| {

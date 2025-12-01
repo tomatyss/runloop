@@ -13,18 +13,24 @@ Or manually:
 cargo build --target wasm32-wasip1 --manifest-path /home/ivan/runloop/crates/agents-wasm/system_tra/Cargo.toml
 ```
 
-Inputs (single JSON string in `with.input`):
+Inputs (recommended: YAML object under `with.input`, serialized automatically):
 
-```json
-{
-  "tmux_conf": "~/.tmux.conf",
-  "history_limit": 50000,
-  "extra_tmux_lines": ["set -g mouse on"],
-  "bashrc": "~/.bashrc",
-  "hist_size": 50000,
-  "hist_file_size": 100000
-}
+```yaml
+with:
+  input:
+    tmux_conf: "~/.tmux.conf"
+    history_limit: 50000
+    extra_tmux_lines:
+      - "set -g mouse on"
+    bashrc: "~/.bashrc"
+    hist_size: 50000
+    hist_file_size: 100000
 ```
+
+Legacy: a raw JSON string in `with.input` is still accepted for compatibility.
+Note: templated values (`{{params.*}}`) are only allowed when the entire string
+is a single template token; embed templates by using the structured object
+form above.
 
 Outputs (stdout → `out` port):
 

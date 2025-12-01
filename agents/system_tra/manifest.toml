@@ -21,6 +21,18 @@ type = "object"
 additionalProperties = false
 required = ["input"]
 
-[schemas.with.properties.input]
+[[schemas.with.properties.input.anyOf]]
 type = "string"
 minLength = 1
+
+[[schemas.with.properties.input.anyOf]]
+type = "object"
+additionalProperties = false
+
+[schemas.with.properties.input.anyOf.properties]
+tmux_conf = { type = "string" }
+history_limit = { type = "integer", minimum = 0 }
+extra_tmux_lines = { type = "array", items = { type = "string" } }
+bashrc = { type = "string" }
+hist_size = { type = "integer", minimum = 0 }
+hist_file_size = { type = "integer", minimum = 0 }

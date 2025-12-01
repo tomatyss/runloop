@@ -111,10 +111,12 @@ impl AgentRegistry {
         let wasm_entry = doc
             .entry_wasm
             .as_ref()
+            .or(doc.agent.entry_wasm.as_ref())
             .map(|entry| AgentBinary::from_entry(&manifest_dir, entry));
         let native_entry = doc
             .entry_native
             .as_ref()
+            .or(doc.agent.entry_native.as_ref())
             .map(|entry| AgentBinary::from_entry(&manifest_dir, entry));
         let policy_path = doc.caps.as_ref().map(|caps| manifest_dir.join(&caps.file));
         let tools = doc
@@ -271,6 +273,7 @@ fn build_described(
         name,
         version,
         variant: agent_variant,
+        ..
     } = agent_section;
     if name != reference.name {
         return Err(AgentRegistryError::Mismatch {
@@ -401,6 +404,10 @@ struct AgentSection {
     version: String,
     #[serde(default)]
     variant: Option<String>,
+    #[serde(default)]
+    entry_native: Option<EntrySpec>,
+    #[serde(default)]
+    entry_wasm: Option<EntrySpec>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]

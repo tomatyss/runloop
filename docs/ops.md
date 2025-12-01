@@ -246,10 +246,9 @@ trait VectorStore {
 
 Runloop enforces signatures on agent bundles before install/launch.
 
-> **Status:** `rlp agent install|remove` and `rlp trust update` are landing
-> with the upcoming packaging milestone; until then, edit trust policy files
-> manually per the steps below. `rlp agent list` is available to show discovered
-> bundles.
+> **Status:** `rlp agent install|remove` and `rlp trust update` are landing with
+> the upcoming packaging milestone; until then, edit trust policy files manually
+> per the steps below. `rlp agent list` is available to show discovered bundles.
 
 - **Algorithm:** Ed25519 detached signature over `manifest.toml` (canonicalized)
   and referenced files.
