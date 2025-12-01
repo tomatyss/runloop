@@ -47,7 +47,7 @@ procfs = ["dep:procfs"]
 no-procfs = []
 
 [target.'cfg(target_os = "linux")'.dependencies]
-procfs = { version = "0.16", optional = true }
+procfs = { version = "0.18", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.8", default-features = false }
