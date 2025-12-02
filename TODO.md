@@ -719,6 +719,67 @@ disable integration via a documented toggle.
 
 ---
 
+## Epic R — Agent discovery parity (local + packaged)
+
+### R1. Unified agent/opening registry
+
+- [ ] Pull agent/opening discovery into a shared registry module used by both
+      `executor-local` and `runloopd`, honoring the same config (`agents.search_dirs`,
+      `agents.cache_dir`, `openings.search_dirs`) with sensible defaults for
+      user mode (`$HOME/.runloop/agents`, repo `./agents`) and packaged/system
+      mode (`/var/lib/runloop/agents`).
+- [ ] Keep demo bundles as a fallback only when no configured dirs exist; emit a
+      clear INFO banner describing how to add custom bundles instead of silently
+      ignoring user agents.
+- [ ] Allow `rlp --agents-dir`/`--openings-dir` overrides that feed the registry
+      in both local and daemon modes; reflect resolved search paths in
+      `rlp config path --all`.
+
+### R2. Executor parity (local vs daemon)
+
+- [ ] Remove the demo-only guard from the local executor path so `rlp --local`
+      uses the unified registry and surfaces a structured error when a manifest
+      or wasm is missing.
+- [ ] Ensure daemon execution reads the same registry and validates read
+      permissions for each bundle; add a warning when the daemon user cannot
+      read a configured search dir.
+- [ ] Wire openings lookup through the same registry to keep local/daemon runs
+      in sync when users scaffold openings alongside agents.
+
+### R3. Packaging and tooling
+
+- [ ] Keep `rlp agent scaffold/build` in the `.deb` and ensure it writes into a
+      search dir the executors already honor (system: `/var/lib/runloop/agents`
+      or a user-configured override; user mode: `~/.runloop/agents`).
+- [ ] Add a small helper (`rlp agent list`) that enumerates discovered bundles
+      with their source dir and digest status so users can verify visibility.
+- [ ] Update postinst or first-run guidance to create the default search dirs
+      with correct ownership/permissions for the `runloop` user/group.
+
+### R4. Tests and acceptance
+
+- [ ] Integration test: scaffold a temp agent/opening, build it, run it via
+      `rlp --local` and via a spawned daemon using the same config; assert the
+      registry finds the bundle and the opening executes.
+- [ ] Regression test: when no user agents exist, `rlp agent list` shows the
+      demo bundles and logs guidance on adding custom agents.
+
+### R5. Docs
+
+- [ ] Refresh `docs/authoring-on-deb.md` and `README.md` to remove the
+      “demo-only” caveat, document search-dir defaults, and show how to override
+      them in both modes.
+- [ ] Add a troubleshooting snippet for permission issues (daemon user cannot
+      read `$HOME/.runloop/agents`, stale digests, missing wasm).
+
+**DoD:** On a clean install (no source tree), `rlp agent scaffold note_taker` →
+`rlp agent build note_taker` → `rlp run ~/.runloop/examples/openings/note_taker.yaml --local`
+works; the same opening runs through the daemon after pointing `runtime.socket_path`
+to the user socket. When no user agents exist, the demo set is used with an
+INFO banner explaining how to add custom bundles.
+
+---
+
 ## MVP Acceptance (end‑to‑end manual test)
 
 1. **Start daemon & monitor**
