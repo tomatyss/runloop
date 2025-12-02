@@ -86,7 +86,15 @@ jobs:
         id: deb
         run: |
           set -euo pipefail
-          DEB_PATH=$(ls crates/rlp/target/debian/rlp_*_amd64.deb | head -n 1)
+          ARCH=$(dpkg --print-architecture)
+          DEB_PATH=$(find target/debian -maxdepth 1 -name "rlp_*_${ARCH}.deb" -print -quit)
+
+          if [ -z "$DEB_PATH" ]; then
+            echo "No rlp .deb found under target/debian for architecture $ARCH" >&2
+            ls -l target/debian || true
+            exit 1
+          fi
+
           echo "deb_path=$DEB_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Install package
