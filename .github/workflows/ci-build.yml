@@ -105,10 +105,10 @@ jobs:
           set -euo pipefail
           rlp --version
           tmpdir=$(mktemp -d)
-          rlp agent scaffold ci-smoke \
+          rlp agent scaffold ci_smoke \
             --non-interactive \
             --root "$tmpdir/agents" \
             --crates-dir "$tmpdir/agents-wasm" \
             --opening-path "$tmpdir/opening.yaml" \
             --force
-          test -f "$tmpdir/agents/ci-smoke/manifest.toml"
+          test -f "$tmpdir/agents/ci_smoke/manifest.toml"
