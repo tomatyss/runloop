@@ -694,7 +694,8 @@ disable integration via a documented toggle.
 
 - [ ] **Zero-allocation Classification:** Refactor `token_candidates` and
       matching logic in `crates/router` to operate on `&str` slices and use
-      case-insensitive comparisons without allocating intermediate `String`s.
+      case-insensitive comparisons without allocating intermediate `String`s
+      (hot path now slice-based; feature strings still allocate).
 
 ### Q4. Build & CI Maintenance
 
