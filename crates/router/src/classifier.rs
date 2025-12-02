@@ -315,7 +315,7 @@ fn trim_token(token: &str) -> Option<&str> {
         }
     }
     while end > start {
-        let ch = token[..end].chars().rev().next().unwrap();
+        let ch = token[..end].chars().next_back().unwrap();
         if matches!(
             ch,
             '\'' | '"' | '`' | '(' | ')' | '{' | '}' | '[' | ']' | ',' | ':'

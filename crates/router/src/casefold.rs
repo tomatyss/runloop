@@ -60,10 +60,7 @@ impl Equivalent<CiString> for CiBorrow<'_> {
 
 /// Case-insensitive ASCII comparison.
 pub fn ascii_eq_nocase(a: &[u8], b: &[u8]) -> bool {
-    a.len() == b.len()
-        && a.iter()
-            .zip(b.iter())
-            .all(|(lhs, rhs)| lhs.to_ascii_lowercase() == rhs.to_ascii_lowercase())
+    a.eq_ignore_ascii_case(b)
 }
 
 /// Case-insensitive ASCII substring check without allocating `prompt_lower`.

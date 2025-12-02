@@ -82,17 +82,20 @@ fn read_process_stats_procfs(ticks_per_second: u64, page_size: u64) -> Result<Ag
 
 #[cfg(not(all(target_os = "linux", feature = "procfs", not(feature = "no-procfs"))))]
 fn read_stats_portable() -> Result<AgentStats, Error> {
-    use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 
     let pid = Pid::from_u32(std::process::id());
     let mut system = System::new_with_specifics(
-        RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
+        RefreshKind::nothing().with_processes(ProcessRefreshKind::everything()),
     );
-    if !system.refresh_process(pid) {
-        return Err(Error::StatsUnavailable);
-    }
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::everything(),
+    );
     let process = system.process(pid).ok_or(Error::StatsUnavailable)?;
     Ok(AgentStats {
+        // `memory` returns KiB on supported platforms.
         rss_bytes: Some(process.memory() * 1024),
         cpu_total_ms: None,
     })
