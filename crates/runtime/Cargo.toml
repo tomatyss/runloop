@@ -32,9 +32,9 @@ wasmtime = { version = "38.0.4", features = ["cache", "cranelift"] }
 wasmtime-wasi = "39.0.1"
 libc = "0.2"
 rustix = { version = "1.1", default-features = false, features = ["thread"] }
+sysinfo = { version = "0.37", default-features = false, features = ["system"] }
 futures-util = "0.3"
 url = "2.5"
-sysinfo = { version = "0.37", default-features = false }
 anyhow = "1.0"
 blake3 = "1.5"
 uuid = { version = "1.8", features = ["v4"] }

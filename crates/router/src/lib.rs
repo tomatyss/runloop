@@ -1,4 +1,5 @@
 mod builtins;
+mod casefold;
 mod classifier;
 mod env;
 
