@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::env;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 
 use camino::Utf8PathBuf;
@@ -436,8 +437,22 @@ fn parse_fs_entry(value: &Value, write: bool) -> Result<FsCapability, Error> {
     if raw.trim().is_empty() {
         return Err(Error::InvalidFsEntry(raw.to_string()));
     }
-    let path = Utf8PathBuf::from(raw);
+    let expanded = expand_tilde(raw, env::var("HOME").ok().as_deref());
+    let path = Utf8PathBuf::from(expanded);
     Ok(FsCapability::new(path, write))
+}
+
+fn expand_tilde(raw: &str, home: Option<&str>) -> String {
+    if raw == "~" {
+        home.map(str::to_owned).unwrap_or_else(|| raw.to_string())
+    } else if let Some(rest) = raw.strip_prefix("~/") {
+        match home {
+            Some(home) => format!("{home}/{rest}"),
+            None => raw.to_string(),
+        }
+    } else {
+        raw.to_string()
+    }
 }
 
 fn dedupe_fs(entries: &mut Vec<FsCapability>) {
@@ -527,6 +542,22 @@ mod tests {
     fn parse_caps(toml_src: &str) -> CapsParse {
         let value: Value = toml::from_str(toml_src).unwrap();
         Caps::from_policy(&value).unwrap()
+    }
+
+    #[test]
+    fn expands_tilde_in_fs_caps() {
+        let home = tempfile::tempdir().unwrap();
+        let home_str = home.path().to_string_lossy();
+        let expanded_home = expand_tilde("~", Some(&home_str));
+        assert_eq!(expanded_home, home_str);
+        let expanded_child = expand_tilde("~/.config/tmux", Some(&home_str));
+        assert_eq!(expanded_child, format!("{home_str}/.config/tmux"));
+    }
+
+    #[test]
+    fn tilde_without_home_falls_back_to_literal() {
+        let expanded = expand_tilde("~/.tmux.conf", None);
+        assert_eq!(expanded, "~/.tmux.conf");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 [package]
 name = "runloop"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2024"
 homepage = "https://github.com/runloop/runloop"
 license.workspace = true
@@ -17,6 +17,7 @@ section = "utils"
 priority = "optional"
 depends = "runloopd, rlp, agtop"
 assets = [
+    ["target/release/runloop", "usr/bin/", "755"],
     ["../../README.md", "usr/share/doc/runloop/README.md", "644"],
 ]
 extended-description = """

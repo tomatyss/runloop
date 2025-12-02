@@ -1,0 +1,9 @@
+[capabilities]
+fs = ["~/.tmux.conf", "~/.config/tmux", "~/.runloop/artifacts/tmux_layout"]
+net = []
+time = false
+kb_read = false
+kb_write = false
+secrets = []
+model = false
+exec = true

@@ -6,9 +6,11 @@ most relevant guides and specs from this workspace.
 
 ## Start Here
 
-- [Project overview](../README.md)
+- [Project overview](project-overview.md)
 - [Getting started guide](getting-started.md)
 - [Architecture overview](architecture.md)
+- [Agent bundles & scaffolding](agents.md)
+- [Example openings](examples.md)
 
 ## Key Specifications
 
@@ -25,8 +27,7 @@ most relevant guides and specs from this workspace.
 
 ## More Resources
 
-- [Agent bundles overview](../AGENTS.md)
-- [Examples and scenarios](../examples/)
+- [Contributor guide](contributor-guide.md)
 - [Roadmap](roadmap.md)
 
 Check back after each release—updates to this directory automatically publish to

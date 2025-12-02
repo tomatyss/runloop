@@ -1,6 +1,6 @@
 [package]
 name = "rlp"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2024"
 homepage = "https://github.com/runloop/runloop"
 
@@ -47,6 +47,7 @@ priority = "optional"
 section = "utils"
 depends = "$auto, ca-certificates"
 assets = [
+    ["target/release/rlp", "usr/bin/", "755"],
     ["../../README.md", "usr/share/doc/rlp/README.md", "644"],
     ["../../docs/router-shell.md", "usr/share/doc/rlp/router-shell.md", "644"],
     ["../../docs/ops.md", "usr/share/doc/rlp/ops.md", "644"],

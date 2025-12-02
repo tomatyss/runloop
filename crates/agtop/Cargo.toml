@@ -26,6 +26,7 @@ priority = "optional"
 section = "utils"
 depends = "$auto, ca-certificates"
 assets = [
+    ["target/release/agtop", "usr/bin/", "755"],
     ["../../README.md", "usr/share/doc/agtop/README.md", "644"],
     ["../../docs/tui.md", "usr/share/doc/agtop/tui.md", "644"],
 ]

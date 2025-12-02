@@ -1,0 +1,32 @@
+version: 0
+name: tmux_layout
+goals:
+  - "apply a tmux layout preset, update ~/.tmux.conf, and reload tmux"
+params:
+  preset: "sensible"
+  tmux_conf: "~/.tmux.conf"
+  reload: true
+  apply_layout: "tiled"
+  extra_lines: []
+
+policy:
+  budget_tokens: 4000
+  timeout_ms: 15000
+  confirm_external: true
+
+nodes:
+  - id: tmux_layout_node
+    use: agent:tmux_layout
+    with:
+      preset: "{{params.preset}}"
+      tmux_conf: "{{params.tmux_conf}}"
+      reload: "{{params.reload}}"
+      apply_layout: "{{params.apply_layout}}"
+      extra_lines: "{{params.extra_lines}}"
+    timeout_ms: 10000
+
+edges: []
+
+success:
+  any_of:
+    - exists(tmux_layout_node.out)

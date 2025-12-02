@@ -21,7 +21,7 @@ pub use runner::{
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use serde_json::Value as JsonValue;
+    use serde_json::{Value as JsonValue, json};
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -173,6 +173,67 @@ edges: []
             }
             other => panic!("expected agent node, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn opening_params_allow_non_scalar_values() {
+        let yaml = r#"
+version: 0
+name: structured_params
+goals: []
+params:
+  extra_lines: ["set -g mouse on", "setw -g mode-keys vi"]
+  metadata:
+    enabled: true
+nodes:
+  - id: demo
+    use: agent:demo
+    with:
+      extra_lines: "{{params.extra_lines}}"
+      metadata: "{{params.metadata}}"
+edges: []
+"#;
+
+        let opening = parse_opening_str(yaml).expect("parse opening with structured params");
+
+        assert_eq!(
+            opening.params.get("extra_lines"),
+            Some(&json!(["set -g mouse on", "setw -g mode-keys vi"]))
+        );
+        assert_eq!(
+            opening.params.get("metadata"),
+            Some(&json!({ "enabled": true }))
+        );
+
+        let node = opening.nodes.iter().find(|n| n.id == "demo").unwrap();
+        assert_eq!(
+            node.with.get("extra_lines"),
+            Some(&json!(["set -g mouse on", "setw -g mode-keys vi"]))
+        );
+        assert_eq!(node.with.get("metadata"), Some(&json!({ "enabled": true })));
+    }
+
+    #[test]
+    fn opening_params_reject_nested_templates_after_substitution() {
+        let yaml = r#"
+version: 0
+name: bad_nested_template
+params:
+  meta:
+    note: "{{params.foo}}"
+nodes:
+  - id: demo
+    use: agent:demo
+    with:
+      meta: "{{params.meta}}"
+edges: []
+"#;
+
+        let err = parse_opening_str(yaml).expect_err("nested template should be rejected");
+        let Error::Validation { message, .. } = err else {
+            panic!("expected validation error");
+        };
+        assert!(message.contains("embedded template syntax"));
     }
 
     #[test]

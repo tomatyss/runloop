@@ -28,7 +28,7 @@ or depends on. Paths refer to workspace members declared in `Cargo.toml`.
   prepares `ControlRequest::RunSubmit` frames for the daemon.
 - Reads configuration from `~/.runloop/config.yaml`/`/etc/runloop/config.yaml`
   via `crates/core` and obeys `router.fastpath_*` policies described in
-  [README.md](../README.md).
+  [router-shell.md](router-shell.md).
 - Talks to `runloopd` over the Unix socket using
   [`CT_CTRL_REQ/RESP`](message-protocol.md#9-control-plane-mvp) and subscribes
   to `rlp/runs/<trace_id>/events` for streaming output.

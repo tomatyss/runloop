@@ -1,8 +1,10 @@
+use crate::output::{Cell, OutputArgs, OutputMode, Table, print_json, print_table};
 use clap::{Args, Subcommand};
 use dirs::home_dir;
 use is_terminal::IsTerminal;
 use runloop_agent_registry::{
-    Budget, Observability, ToolEntry, ToolsDoc, Transport, digest_file_hex, load_tools,
+    AgentRegistry, AgentRegistryError, Budget, Observability, ToolEntry, ToolsDoc, Transport,
+    digest_file_hex, load_tools,
 };
 use runloop_core::Config;
 use serde_json::json;
@@ -19,6 +21,7 @@ const ZERO_DIGEST: &str = "00000000000000000000000000000000000000000000000000000
 
 #[derive(Subcommand, Debug)]
 pub enum AgentCommands {
+    List(ListArgs),
     Scaffold(ScaffoldArgs),
     Build(BuildArgs),
 }
@@ -77,6 +80,15 @@ pub struct BuildArgs {
     pub crates_dir: Option<PathBuf>,
 }
 
+#[derive(Args, Debug)]
+pub struct ListArgs {
+    /// Root directory for agent bundles (overrides configured search dirs).
+    #[arg(long = "root", value_name = "PATH")]
+    pub root_dir: Option<PathBuf>,
+    #[command(flatten)]
+    pub output: OutputArgs,
+}
+
 #[derive(Debug)]
 pub struct ScaffoldResult {
     pub agent_dir: PathBuf,
@@ -118,6 +130,8 @@ pub enum AgentError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Registry(#[from] AgentRegistryError),
     #[error("digest error: {0}")]
     Digest(String),
     #[error("invalid tools.json: {0}")]
@@ -126,6 +140,7 @@ pub enum AgentError {
 
 pub fn handle_agent(cmd: AgentCommands, config: &Config) -> Result<(), AgentError> {
     match cmd {
+        AgentCommands::List(args) => list_agents(args, config)?,
         AgentCommands::Scaffold(args) => {
             let result = scaffold(args, config)?;
             println!("created agent bundle at {}", result.agent_dir.display());
@@ -144,6 +159,68 @@ pub fn handle_agent(cmd: AgentCommands, config: &Config) -> Result<(), AgentErro
             println!("wasm crate at {}", result.crate_dir.display());
         }
     }
+    Ok(())
+}
+
+fn list_agents(args: ListArgs, config: &Config) -> Result<(), AgentError> {
+    let search_dirs = agent_search_dirs(args.root_dir.as_ref(), config);
+    let registry = AgentRegistry::new(search_dirs.clone());
+    let listed = registry.list()?;
+    let settings = args.output.resolve();
+
+    match settings.mode {
+        OutputMode::Json => {
+            let payload = json!({
+                "agents": listed.iter().map(|entry| {
+                    json!({
+                        "name": entry.described.reference.name,
+                        "variant": entry.described.reference.variant,
+                        "version": entry.described.version,
+                        "digest": entry.described.digest,
+                        "manifest": entry.manifest_path,
+                    })
+                }).collect::<Vec<_>>(),
+                "search_dirs": search_dirs,
+            });
+            print_json(&payload)?;
+        }
+        OutputMode::Table => {
+            let mut table = Table::new(vec![
+                "agent".into(),
+                "variant".into(),
+                "version".into(),
+                "digest".into(),
+                "manifest".into(),
+            ]);
+            for entry in &listed {
+                table.add_row(vec![
+                    Cell::text(&entry.described.reference.name),
+                    Cell::text(
+                        entry
+                            .described
+                            .reference
+                            .variant
+                            .clone()
+                            .unwrap_or_default(),
+                    ),
+                    Cell::text(&entry.described.version),
+                    Cell::text(short_digest(&entry.described.digest)),
+                    Cell::text(entry.manifest_path.display().to_string()),
+                ]);
+            }
+            if listed.is_empty() {
+                table.add_note(format!(
+                    "no agent manifests found (searched: {})",
+                    format_search_dirs(&search_dirs)
+                ));
+            } else {
+                table.add_note(format!("searched: {}", format_search_dirs(&search_dirs)));
+                table.add_note("digest = blake3(manifest.toml)");
+            }
+            print_table(&table, &settings)?;
+        }
+    }
+
     Ok(())
 }
 
@@ -320,6 +397,36 @@ fn resolve_crate_root_with_cwd(root: &Option<PathBuf>, cwd: Option<&Path>) -> Pa
         return workspace.join("crates/agents-wasm");
     }
     default_user_agents_wasm_dir()
+}
+
+fn agent_search_dirs(root: Option<&PathBuf>, config: &Config) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(root) = root {
+        push_unique_dir(&mut dirs, expand_tilde(root.clone()));
+    } else {
+        push_unique_dir(&mut dirs, resolve_agent_root(&None, config));
+        for entry in &config.agents.search_dirs {
+            push_unique_dir(&mut dirs, expand_tilde(PathBuf::from(entry)));
+        }
+    }
+    dirs
+}
+
+fn push_unique_dir(dirs: &mut Vec<PathBuf>, candidate: PathBuf) {
+    if !dirs.iter().any(|existing| existing == &candidate) {
+        dirs.push(candidate);
+    }
+}
+
+fn format_search_dirs(dirs: &[PathBuf]) -> String {
+    dirs.iter()
+        .map(|dir| dir.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn short_digest(digest: &str) -> String {
+    digest.chars().take(12).collect()
 }
 
 fn preferred_config_agent_dir(config: &Config) -> Option<PathBuf> {
@@ -1397,6 +1504,28 @@ exit 0
         assert_eq!(agent_root, agents_root);
         let crate_root = resolve_crate_root_with_cwd(&None, Some(temp.path()));
         assert_eq!(crate_root, default_user_agents_wasm_dir());
+    }
+
+    #[test]
+    fn list_respects_root_override() {
+        let temp = tempdir().expect("temp");
+        let override_root = temp.path().join("agents");
+        let config = Config::default();
+        let dirs = agent_search_dirs(Some(&override_root), &config);
+        assert_eq!(dirs, vec![override_root]);
+    }
+
+    #[test]
+    fn list_appends_config_dirs_after_primary() {
+        let temp = tempdir().expect("temp");
+        let mut config = Config::default();
+        config.agents.search_dirs = vec![temp.path().to_string_lossy().into_owned()];
+
+        let dirs = agent_search_dirs(None, &config);
+        assert!(
+            dirs.last().is_some_and(|dir| dir == temp.path()),
+            "expected config dir to appear in search list"
+        );
     }
 
     #[test]

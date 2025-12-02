@@ -50,7 +50,7 @@ Requirements: Rust (edition 2024), `cargo`, and a recent WASI runtime (e.g.,
 Wasmtime).
 
 ```bash
-git clone https://example.com/runloop.git
+git clone https://github.com/tomatyss/runloop.git
 cd runloop
 cargo build --workspace
 ```
@@ -94,6 +94,15 @@ opening. Use `just test-agents-wasm` to rebuild the bundles (if needed) and run
 `compose_email` end-to-end via `rlp --local` as a smoke test. When new bundles
 are produced, commit the `.wasm` artifacts plus their updated BLAKE3 digests so
 the manifests continue to verify.
+
+Scaffold your own agent and run the starter opening:
+
+```bash
+rlp agent scaffold note_taker --opening
+rlp agent build note_taker
+cargo run -p rlp -- run examples/openings/note_taker.yaml --local \
+  --params '{"prompt":"draft a standup note"}'
+```
 
 ### Packages & images (daemon / system mode)
 

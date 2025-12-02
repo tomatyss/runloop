@@ -6,7 +6,7 @@ mod shell;
 use agent::{AgentCommands, handle_agent};
 use async_trait::async_trait;
 use bytes::Bytes;
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use dirs::home_dir;
 use futures_util::StreamExt;
 use output::{
@@ -45,6 +45,7 @@ use shell::{
     disable as disable_shell, enable as enable_shell,
 };
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::ffi::OsStr;
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -64,7 +65,12 @@ const ROUTE_EXIT_CODE_TIMEOUT: i32 = 12;
 const ROUTE_DEFAULT_TIMEOUT_MS: u64 = 200;
 
 #[derive(Parser, Debug)]
-#[command(name = "rlp", about = "Runloop CLI (work in progress)")]
+#[command(
+    name = "rlp",
+    about = "Runloop CLI (work in progress)",
+    version,
+    long_about = None
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -85,6 +91,8 @@ enum Commands {
     Shell(ShellCommands),
     #[command(subcommand)]
     Agent(AgentCommands),
+    /// Print version info and available agent commands.
+    Version,
 }
 
 #[derive(Args, Debug)]
@@ -418,6 +426,10 @@ async fn main() {
 }
 
 async fn run() -> Result<i32, CliError> {
+    if invoked_with_version_flag(env::args_os()) {
+        print_version();
+        return Ok(0);
+    }
     let cli = Cli::parse();
     match cli.command {
         Commands::Route(args) => handle_route(args).await,
@@ -454,7 +466,62 @@ async fn run() -> Result<i32, CliError> {
             handle_agent(cmd, &config)?;
             Ok(0)
         }
+        Commands::Version => {
+            print_version();
+            Ok(0)
+        }
     }
+}
+
+fn print_version() {
+    if let Err(err) = write_version(&mut io::stdout()) {
+        eprintln!("failed to write version info: {err}");
+    }
+}
+
+fn write_version(writer: &mut impl Write) -> io::Result<()> {
+    writeln!(writer, "rlp {}", env!("CARGO_PKG_VERSION"))?;
+    let agent_subs = agent_subcommand_names();
+    if !agent_subs.is_empty() {
+        writeln!(writer, "agent subcommands: {}", agent_subs.join(", "))?;
+    }
+    if let Ok(path) = env::current_exe() {
+        writeln!(writer, "binary: {}", path.display())?;
+    }
+    Ok(())
+}
+
+fn agent_subcommand_names() -> Vec<String> {
+    let mut names: Vec<String> = Cli::command()
+        .get_subcommands()
+        .find(|cmd| cmd.get_name() == "agent")
+        .map(|agent_cmd| {
+            agent_cmd
+                .get_subcommands()
+                .map(|cmd| cmd.get_name().to_string())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn invoked_with_version_flag<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    for arg in args.into_iter().skip(1) {
+        let arg = arg.as_ref();
+        if arg == OsStr::new("--") {
+            break;
+        }
+        if arg == "--version" || arg == "-V" {
+            return true;
+        }
+    }
+    false
 }
 
 async fn handle_route(args: RouteArgs) -> Result<i32, CliError> {
@@ -1400,6 +1467,37 @@ mod tests {
     use runloop_router::{Classification as RouterClassification, Route as RouterRoute};
     use serde_json::json;
     use tempfile::{NamedTempFile, tempdir};
+
+    #[test]
+    fn version_output_includes_agent_commands() {
+        let mut buffer = Vec::new();
+        write_version(&mut buffer).expect("write version output");
+        let output = String::from_utf8(buffer).expect("utf8 output");
+
+        assert!(
+            output.contains(env!("CARGO_PKG_VERSION")),
+            "version string missing package version"
+        );
+        for name in agent_subcommand_names() {
+            assert!(
+                output.contains(&name),
+                "version output missing agent subcommand {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn detects_version_flags() {
+        assert!(invoked_with_version_flag(["rlp", "--version"]));
+        assert!(invoked_with_version_flag(["rlp", "-V"]));
+        assert!(!invoked_with_version_flag(["rlp", "why"]));
+        assert!(!invoked_with_version_flag([
+            "rlp",
+            "route",
+            "--",
+            "--version"
+        ]));
+    }
 
     fn event_with_payload(payload: JsonValue) -> EventRecord {
         EventRecord {

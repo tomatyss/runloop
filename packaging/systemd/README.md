@@ -39,10 +39,19 @@ staging area or `dpkg -i` directly.
 ## Installing
 
 ```bash
-sudo apt install crates/runloopd/target/debian/runloopd_0.1.0_amd64.deb
+sudo apt install crates/runloopd/target/debian/runloopd_<version>_amd64.deb
 sudo systemctl status runloopd
 ```
 
 The daemon runs in the background, persists data under `/var/lib/runloop`, and
 listens on `/run/runloop/rmp.sock`. Update `/etc/runloop/config.yaml` and
 restart the service when changing models, capabilities, or socket locations.
+
+## Release checklist
+
+- Bump the `crates/rlp` version when the CLI surface changes (e.g., new agent
+  subcommands) so `.deb` upgrades pick up the new binary.
+- After `cargo deb -p rlp`, install the package and confirm `rlp --version` and
+  `rlp agent --help` show the agent commands before publishing artifacts.
+- Confirm `/usr/bin/rlp` is owned by the `rlp` package (not the `runloop`
+  meta-package) to avoid shipping stale binaries.

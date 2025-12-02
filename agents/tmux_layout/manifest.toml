@@ -1,0 +1,42 @@
+[agent]
+name = "tmux_layout"
+version = "0.1.0"
+kind = "wasm32-wasip1"
+
+entry_wasm = { path = "bin/tmux_layout.wasm", blake3 = "6d1db1acb743f035e68573a0b127cfb1e6955a0a7fcc48ff858b456052211ddf" }
+
+[ports]
+in = ["intent.tmux_layout.apply.v1"]
+out = ["artifact.tmux_layout.result.v1"]
+
+[caps]
+file = "policy.caps"
+
+[artifacts.tools]
+path = "tools.json"
+blake3 = "afe8c80ddd828a277fa440f6fc431158d0429d2300d322786613b962a831a3be"
+version = 1
+[schemas.with]
+type = "object"
+additionalProperties = false
+required = ["preset"]
+
+[schemas.with.properties.preset]
+type = "string"
+enum = ["sensible", "minimal", "stacked"]
+
+[schemas.with.properties.tmux_conf]
+type = "string"
+minLength = 1
+
+[schemas.with.properties.reload]
+type = "boolean"
+
+[schemas.with.properties.apply_layout]
+type = "string"
+minLength = 1
+
+[schemas.with.properties.extra_lines]
+type = "array"
+items = { type = "string", minLength = 1 }
+maxItems = 32

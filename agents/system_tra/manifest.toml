@@ -1,0 +1,38 @@
+[agent]
+name = "system_tra"
+version = "0.1.0"
+kind = "wasm32-wasip1"
+
+entry_wasm = { path = "bin/system_tra.wasm", blake3 = "7c35f0d057ebc67c22b1a1eb902c8986ada8828d1cc5dd0e27c950f42c027737" }
+
+[ports]
+in = []
+out = ["out"]
+
+[caps]
+file = "policy.caps"
+
+[artifacts.tools]
+path = "tools.json"
+blake3 = "afe8c80ddd828a277fa440f6fc431158d0429d2300d322786613b962a831a3be"
+version = 1
+[schemas.with]
+type = "object"
+additionalProperties = false
+required = ["input"]
+
+[[schemas.with.properties.input.anyOf]]
+type = "string"
+minLength = 1
+
+[[schemas.with.properties.input.anyOf]]
+type = "object"
+additionalProperties = false
+
+[schemas.with.properties.input.anyOf.properties]
+tmux_conf = { type = "string" }
+history_limit = { type = "integer", minimum = 0 }
+extra_tmux_lines = { type = "array", items = { type = "string" } }
+bashrc = { type = "string" }
+hist_size = { type = "integer", minimum = 0 }
+hist_file_size = { type = "integer", minimum = 0 }

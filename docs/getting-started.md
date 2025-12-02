@@ -61,8 +61,9 @@ See the tree in `README.md` for directories. Key docs:
 - `rlp kb migrate|verify|backup|vacuum`
 
 > Secrets/trust/agent CLIs are still planned: `rlp secrets put|get|list|delete`,
-> `rlp trust update`, and `rlp agent install|list|remove` remain interface
-> contracts until their implementations land with the packaging milestone.
+> `rlp trust update`, and `rlp agent install|remove` remain interface contracts
+> until their implementations land with the packaging milestone. Use
+> `rlp agent list` to inspect bundles already present in your search dirs.
 
 Finer details appear in `docs/ops.md`. As implementation lands, these commands
 gain real outputs; until then they serve as interface contracts.
