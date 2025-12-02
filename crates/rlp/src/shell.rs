@@ -494,7 +494,7 @@ fn parse_block_paths(block: &str) -> Option<(Option<PathBuf>, PathBuf)> {
     for line in block.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("export RUNLOOP_ROUTER_OPENING_PATH=") {
-            let val = trimmed.splitn(2, '=').nth(1)?;
+            let val = trimmed.split_once('=')?.1;
             let unquoted = unquote_single(val.trim());
             let expanded = expand_path(Path::new(&unquoted)).ok()?;
             let normalized = normalize_path(&expanded);
