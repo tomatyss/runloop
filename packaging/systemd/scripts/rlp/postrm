@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove|purge)
+        echo "runloop: shell rc files are unchanged; run 'rlp shell disable --shell zsh' (or bash) to remove the integration." || true
+        ;;
+esac
+
+exit 0

@@ -1,0 +1,92 @@
+#!/bin/sh
+set -e
+
+CI_ENVS="CI GITHUB_ACTIONS BUILDKITE TEAMCITY_VERSION JENKINS_URL GITLAB_CI CIRCLECI"
+
+should_skip_prompt() {
+    [ "${DEBIAN_FRONTEND:-}" = "noninteractive" ] && return 0
+    [ "${TERM:-}" = "dumb" ] && return 0
+    for name in $CI_ENVS SSH_CONNECTION SSH_TTY; do
+        eval "val=\${$name:-}" || true
+        [ -n "$val" ] && return 0
+    done
+    return 1
+}
+
+resolve_home() {
+    user="$1"
+    home=""
+    entry=$(getent passwd "$user" 2>/dev/null || true)
+    if [ -n "$entry" ]; then
+        home=$(printf '%s' "$entry" | cut -d: -f6)
+    fi
+    if [ -z "$home" ]; then
+        home=$(eval echo "~$user")
+    fi
+    printf '%s' "$home"
+}
+
+resolve_shell_flavor() {
+    shell_path="$1"
+    case "$shell_path" in
+        *bash*) echo "bash" ;;
+        *) echo "zsh" ;;
+    esac
+}
+
+prompt_enable() {
+    target_user="$1"
+    shell_path="$2"
+    flavor=$(resolve_shell_flavor "$shell_path")
+    printf "Enable Runloop shell routing for %s (%s)? [y/N] " "$target_user" "$flavor"
+    read ans || ans=""
+    case "$ans" in
+        y|Y|yes|YES)
+            run_as_user "$target_user" "$target_home" "$shell_path" "$flavor"
+            ;;
+        *)
+            echo "runloop: shell integration skipped; run 'rlp shell enable --shell $flavor' later." ;;
+    esac
+}
+
+run_as_user() {
+    user="$1"
+    home="$2"
+    shell="$3"
+    flavor="$4"
+
+    if command -v sudo >/dev/null 2>&1; then
+        HOME="$home" SHELL="$shell" sudo -u "$user" --preserve-env=HOME,SHELL /usr/bin/rlp shell enable --shell "$flavor" && return 0
+    fi
+    if command -v runuser >/dev/null 2>&1; then
+        runuser -u "$user" -- env HOME="$home" SHELL="$shell" /usr/bin/rlp shell enable --shell "$flavor" && return 0
+    fi
+    if command -v su >/dev/null 2>&1; then
+        su - "$user" -c "HOME=$home SHELL=$shell /usr/bin/rlp shell enable --shell $flavor" && return 0
+    fi
+    echo "runloop: could not enable shell integration — missing sudo/runuser/su" >&2
+    return 1
+}
+
+case "$1" in
+    configure)
+        target_user=${SUDO_USER:-$(id -un)}
+        target_home=$(resolve_home "$target_user")
+        shell_path=${SHELL:-$(getent passwd "$target_user" 2>/dev/null | cut -d: -f7)}
+        [ -z "$shell_path" ] && shell_path="/bin/zsh"
+
+        if should_skip_prompt; then
+            echo "runloop: skipping shell integration prompt (noninteractive/CI/SSH/TERM=dumb)."
+            exit 0
+        fi
+
+        if [ -z "$target_home" ] || [ ! -d "$target_home" ] || [ ! -w "$target_home" ]; then
+            echo "runloop: cannot modify shell rc for $target_user (home missing or not writable); skipped."
+            exit 0
+        fi
+
+        prompt_enable "$target_user" "$shell_path"
+        ;;
+esac
+
+exit 0

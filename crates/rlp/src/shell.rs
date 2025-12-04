@@ -18,9 +18,26 @@ const MARK_BASH_END: &str = "# <<< runloop shell (bash) <<<";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "lowercase")]
+pub enum ShellCliFlavor {
+    Zsh,
+    Bash,
+    Auto,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShellFlavor {
     Zsh,
     Bash,
+}
+
+impl ShellCliFlavor {
+    pub fn resolve(self) -> ShellFlavor {
+        match self {
+            ShellCliFlavor::Zsh => ShellFlavor::Zsh,
+            ShellCliFlavor::Bash => ShellFlavor::Bash,
+            ShellCliFlavor::Auto => detect_shell_from_env(),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -38,6 +55,7 @@ pub enum ShellError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShellAction {
     Added,
+    Updated,
     Removed,
     AlreadyPresent,
     NotFound,
@@ -47,6 +65,8 @@ pub enum ShellAction {
 pub struct ShellEditResult {
     pub rc_path: PathBuf,
     pub snippet_path: Option<PathBuf>,
+    pub opening_path: Option<PathBuf>,
+    pub block_preview: Option<String>,
     pub action: ShellAction,
     pub dry_run: bool,
     pub notes: Vec<String>,
@@ -73,19 +93,6 @@ pub fn enable(request: EnableRequest) -> Result<ShellEditResult, ShellError> {
     let (start_marker, end_marker) = markers(request.flavor);
     let contents = fs::read_to_string(&rc_path).unwrap_or_default();
     let mut notes = Vec::new();
-    if contents.contains(start_marker) && contents.contains(end_marker) {
-        notes.push(format!(
-            "runloop shell block already present in {}",
-            rc_path.display()
-        ));
-        return Ok(ShellEditResult {
-            rc_path,
-            snippet_path: Some(snippet_path),
-            action: ShellAction::AlreadyPresent,
-            dry_run: request.dry_run,
-            notes,
-        });
-    }
 
     let opening_path = resolve_opening_path(
         request.opening_path.as_deref(),
@@ -94,11 +101,75 @@ pub fn enable(request: EnableRequest) -> Result<ShellEditResult, ShellError> {
     )?;
     let block = build_block(request.flavor, &snippet_path, opening_path.as_deref());
 
+    if let Some((start_idx, end_idx)) = locate_block(&contents, start_marker, end_marker) {
+        let existing_block = contents.get(start_idx..end_idx).unwrap_or_default();
+        if blocks_semantically_equivalent(existing_block, &snippet_path, opening_path.as_deref())
+            || blocks_equivalent(existing_block, &block)
+        {
+            notes.push(format!(
+                "runloop shell block already present in {}",
+                rc_path.display()
+            ));
+            return Ok(ShellEditResult {
+                rc_path,
+                snippet_path: Some(snippet_path),
+                opening_path,
+                block_preview: Some(block),
+                action: ShellAction::AlreadyPresent,
+                dry_run: request.dry_run,
+                notes,
+            });
+        }
+
+        if request.dry_run {
+            notes.push("dry-run: existing block would be replaced".into());
+            return Ok(ShellEditResult {
+                rc_path,
+                snippet_path: Some(snippet_path),
+                opening_path,
+                block_preview: Some(block),
+                action: ShellAction::Updated,
+                dry_run: true,
+                notes,
+            });
+        }
+
+        ensure_parent_dir(&rc_path)?;
+        backup_file(&rc_path)?;
+        let mut new_contents = String::with_capacity(contents.len() + block.len() + 2);
+        new_contents.push_str(&contents[..start_idx]);
+        if !new_contents.ends_with(['\n', '\r']) && !new_contents.is_empty() {
+            new_contents.push('\n');
+        }
+        new_contents.push_str(&block);
+        if !new_contents.ends_with('\n') {
+            new_contents.push('\n');
+        }
+        let tail = &contents[end_idx..];
+        if !tail.is_empty() && !new_contents.ends_with('\n') {
+            new_contents.push('\n');
+        }
+        new_contents.push_str(tail);
+        fs::write(&rc_path, new_contents)?;
+        notes.push("replaced existing runloop shell block".into());
+        return Ok(ShellEditResult {
+            rc_path,
+            snippet_path: Some(snippet_path),
+            opening_path,
+            block_preview: Some(block),
+            action: ShellAction::Updated,
+            dry_run: false,
+            notes,
+        });
+    }
+
     if request.dry_run {
         notes.push("dry-run: no changes applied".into());
         return Ok(ShellEditResult {
             rc_path,
             snippet_path: Some(snippet_path),
+            opening_path,
+            block_preview: Some(block),
             action: ShellAction::Added,
             dry_run: true,
             notes,
@@ -126,6 +197,8 @@ pub fn enable(request: EnableRequest) -> Result<ShellEditResult, ShellError> {
     Ok(ShellEditResult {
         rc_path,
         snippet_path: Some(snippet_path),
+        opening_path,
+        block_preview: Some(block),
         action: ShellAction::Added,
         dry_run: false,
         notes,
@@ -142,6 +215,8 @@ pub fn disable(request: DisableRequest) -> Result<ShellEditResult, ShellError> {
         return Ok(ShellEditResult {
             rc_path,
             snippet_path: None,
+            opening_path: None,
+            block_preview: None,
             action: ShellAction::NotFound,
             dry_run: request.dry_run,
             notes,
@@ -154,6 +229,8 @@ pub fn disable(request: DisableRequest) -> Result<ShellEditResult, ShellError> {
             return Ok(ShellEditResult {
                 rc_path,
                 snippet_path: None,
+                opening_path: None,
+                block_preview: None,
                 action: ShellAction::Removed,
                 dry_run: true,
                 notes,
@@ -173,6 +250,8 @@ pub fn disable(request: DisableRequest) -> Result<ShellEditResult, ShellError> {
         return Ok(ShellEditResult {
             rc_path,
             snippet_path: None,
+            opening_path: None,
+            block_preview: None,
             action: ShellAction::Removed,
             dry_run: false,
             notes,
@@ -183,6 +262,8 @@ pub fn disable(request: DisableRequest) -> Result<ShellEditResult, ShellError> {
     Ok(ShellEditResult {
         rc_path,
         snippet_path: None,
+        opening_path: None,
+        block_preview: None,
         action: ShellAction::NotFound,
         dry_run: request.dry_run,
         notes,
@@ -304,9 +385,23 @@ fn resolve_opening_path(
 
     if let Some(source) = default_opening_source()? {
         if allow_create {
-            ensure_parent_dir(&user_default)?;
-            fs::copy(&source, &user_default)
-                .map_err(|_| ShellError::MissingOpening(source.clone()))?;
+            if let Err(err) = ensure_parent_dir(&user_default) {
+                notes.push(format!(
+                    "failed to create {}: {}; RUNLOOP_ROUTER_OPENING_PATH not set",
+                    user_default.display(),
+                    err
+                ));
+                return Ok(None);
+            }
+            if let Err(err) = fs::copy(&source, &user_default) {
+                notes.push(format!(
+                    "failed to copy {} to {}: {}; RUNLOOP_ROUTER_OPENING_PATH not set",
+                    source.display(),
+                    user_default.display(),
+                    err
+                ));
+                return Ok(None);
+            }
             let canonical = fs::canonicalize(&user_default)
                 .map_err(|_| ShellError::MissingOpening(user_default.clone()))?;
             notes.push(format!(
@@ -342,11 +437,6 @@ fn default_opening_source() -> Result<Option<PathBuf>, ShellError> {
                 .join("openings")
                 .join("router-default.yaml"),
         );
-        candidates.push(
-            cwd.join("examples")
-                .join("openings")
-                .join("compose_email.yaml"),
-        );
     }
     for candidate in candidates {
         if let Ok(canonical) = fs::canonicalize(&candidate) {
@@ -376,10 +466,67 @@ fn build_block(flavor: ShellFlavor, snippet_path: &Path, opening: Option<&Path>)
     block
 }
 
+fn blocks_equivalent(existing: &str, desired: &str) -> bool {
+    existing.trim_end_matches(['\n', ' ']) == desired.trim_end_matches(['\n', ' '])
+}
+
+fn blocks_semantically_equivalent(
+    existing: &str,
+    desired_snippet: &Path,
+    desired_opening: Option<&Path>,
+) -> bool {
+    if let Some((existing_opening, existing_snippet)) = parse_block_paths(existing) {
+        if normalize_path(&existing_snippet) != normalize_path(desired_snippet) {
+            return false;
+        }
+        match (existing_opening, desired_opening) {
+            (None, None) => return true,
+            (Some(e), Some(d)) => return normalize_path(&e) == normalize_path(d),
+            _ => return false,
+        }
+    }
+    false
+}
+
+fn parse_block_paths(block: &str) -> Option<(Option<PathBuf>, PathBuf)> {
+    let mut opening: Option<PathBuf> = None;
+    let mut snippet: Option<PathBuf> = None;
+    for line in block.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("export RUNLOOP_ROUTER_OPENING_PATH=") {
+            let val = trimmed.split_once('=')?.1;
+            let unquoted = unquote_single(val.trim());
+            let expanded = expand_path(Path::new(&unquoted)).ok()?;
+            let normalized = normalize_path(&expanded);
+            opening = Some(normalized);
+        } else if trimmed.starts_with("source ") {
+            let val = trimmed.trim_start_matches("source ").trim();
+            let unquoted = unquote_single(val);
+            let expanded = expand_path(Path::new(&unquoted)).ok()?;
+            let normalized = normalize_path(&expanded);
+            snippet = Some(normalized);
+        }
+    }
+    snippet.map(|s| (opening, s))
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
 fn markers(flavor: ShellFlavor) -> (&'static str, &'static str) {
     match flavor {
         ShellFlavor::Zsh => (MARK_ZSH_START, MARK_ZSH_END),
         ShellFlavor::Bash => (MARK_BASH_START, MARK_BASH_END),
+    }
+}
+
+fn detect_shell_from_env() -> ShellFlavor {
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    if shell.contains("bash") {
+        ShellFlavor::Bash
+    } else {
+        ShellFlavor::Zsh
     }
 }
 
@@ -427,6 +574,12 @@ fn single_quote(value: &str) -> String {
     }
     quoted.push('\'');
     quoted
+}
+
+fn unquote_single(value: &str) -> String {
+    let mut s = value.trim_matches('\'').to_string();
+    s = s.replace("'\\''", "'");
+    s
 }
 
 #[cfg(test)]
@@ -665,6 +818,161 @@ mod tests {
     }
 
     #[test]
+    fn enable_replaces_existing_block_when_paths_change() {
+        let dir = tempdir().unwrap();
+        let rc_path = dir.path().join(".testrc");
+
+        let old_snippet = dir.path().join("old/runloop.zsh");
+        fs::create_dir_all(old_snippet.parent().unwrap()).unwrap();
+        fs::write(&old_snippet, "echo old").unwrap();
+
+        let new_snippet = dir.path().join("new/runloop.zsh");
+        fs::create_dir_all(new_snippet.parent().unwrap()).unwrap();
+        fs::write(&new_snippet, "echo new").unwrap();
+
+        let opening = dir.path().join("router.yaml");
+        fs::write(&opening, "id: router").unwrap();
+
+        let old_block = format!(
+            "{}\nsource '{}'\n{}\n",
+            MARK_ZSH_START,
+            old_snippet.display(),
+            MARK_ZSH_END
+        );
+        fs::write(&rc_path, old_block).unwrap();
+
+        let result = enable(EnableRequest {
+            flavor: ShellFlavor::Zsh,
+            rc_path: Some(rc_path.clone()),
+            snippet_override: Some(new_snippet.clone()),
+            opening_path: Some(opening),
+            dry_run: false,
+        })
+        .unwrap();
+
+        assert_eq!(result.action, ShellAction::Updated);
+        let contents = fs::read_to_string(rc_path).unwrap();
+        let new_path = fs::canonicalize(&new_snippet).unwrap();
+        assert!(contents.contains(&new_path.display().to_string()));
+        assert_eq!(contents.match_indices(MARK_ZSH_START).count(), 1);
+        assert!(!contents.contains(&old_snippet.display().to_string()));
+    }
+
+    #[test]
+    fn enable_dry_run_includes_block_preview() {
+        let dir = tempdir().unwrap();
+        let rc_path = dir.path().join(".testrc");
+        let snippet = dir.path().join("runloop.zsh");
+        fs::write(&snippet, "echo snippet").unwrap();
+        let opening = dir.path().join("router.yaml");
+        fs::write(&opening, "id: router").unwrap();
+
+        let result = enable(EnableRequest {
+            flavor: ShellFlavor::Zsh,
+            rc_path: Some(rc_path),
+            snippet_override: Some(snippet.clone()),
+            opening_path: Some(opening.clone()),
+            dry_run: true,
+        })
+        .unwrap();
+
+        let preview = result.block_preview.as_ref().expect("preview missing");
+        let canonical_snippet = fs::canonicalize(&snippet).unwrap();
+        assert!(preview.contains(MARK_ZSH_START));
+        assert!(preview.contains(&canonical_snippet.display().to_string()));
+        let canonical_opening = fs::canonicalize(&opening).unwrap();
+        assert!(preview.contains(&canonical_opening.display().to_string()));
+        assert!(result.dry_run);
+    }
+
+    #[test]
+    fn enable_preserves_block_when_paths_equivalent() {
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        let _home = EnvGuard::new("HOME", &home);
+
+        let rc_path = home.join(".zshrc");
+        let shell_dir = home.join(".runloop/shell");
+        fs::create_dir_all(&shell_dir).unwrap();
+        let snippet = shell_dir.join("runloop.zsh");
+        fs::write(&snippet, "echo snippet").unwrap();
+
+        let openings_dir = home.join(".runloop/openings");
+        fs::create_dir_all(&openings_dir).unwrap();
+        let opening = openings_dir.join("router.yaml");
+        fs::write(&opening, "id: router").unwrap();
+
+        let block = format!(
+            "{}\nexport RUNLOOP_ROUTER_OPENING_PATH='~/.runloop/openings/router.yaml'\nsource '~/.runloop/shell/runloop.zsh'\n{}\n",
+            MARK_ZSH_START, MARK_ZSH_END
+        );
+        fs::write(&rc_path, block).unwrap();
+
+        let result = enable(EnableRequest {
+            flavor: ShellFlavor::Zsh,
+            rc_path: Some(rc_path.clone()),
+            snippet_override: Some(snippet.clone()),
+            opening_path: Some(opening.clone()),
+            dry_run: false,
+        })
+        .unwrap();
+
+        assert_eq!(result.action, ShellAction::AlreadyPresent);
+        let contents = fs::read_to_string(rc_path).unwrap();
+        // Ensure we didn't duplicate blocks
+        assert_eq!(contents.match_indices(MARK_ZSH_START).count(), 1);
+    }
+
+    #[test]
+    fn shell_auto_resolves_from_env() {
+        {
+            let _shell = EnvGuard::new("SHELL", Path::new("/bin/bash"));
+            assert_eq!(ShellCliFlavor::Auto.resolve(), ShellFlavor::Bash);
+        }
+        {
+            let _shell = EnvGuard::new("SHELL", Path::new("/bin/zsh"));
+            assert_eq!(ShellCliFlavor::Auto.resolve(), ShellFlavor::Zsh);
+        }
+    }
+
+    #[test]
+    fn enable_warns_when_opening_copy_dir_missing() {
+        let dir = tempdir().unwrap();
+        let _cwd = DirGuard::new(dir.path());
+        let _home = EnvGuard::new("HOME", dir.path());
+
+        // make ~/.runloop a file to block directory creation
+        let obstruct = dir.path().join(".runloop");
+        fs::write(&obstruct, "no dir").unwrap();
+
+        let packaging = dir.path().join("packaging/openings");
+        fs::create_dir_all(&packaging).unwrap();
+        let packaged_opening = packaging.join("router-default.yaml");
+        fs::write(&packaged_opening, "id: router").unwrap();
+
+        let snippet = dir.path().join("runloop.zsh");
+        fs::write(&snippet, "echo snippet").unwrap();
+
+        let result = enable(EnableRequest {
+            flavor: ShellFlavor::Zsh,
+            rc_path: None,
+            snippet_override: Some(snippet.clone()),
+            opening_path: None,
+            dry_run: false,
+        })
+        .unwrap();
+
+        assert_eq!(result.action, ShellAction::Added);
+        assert!(result.opening_path.is_none());
+        assert!(result.notes.iter().any(|n| n.contains("failed to create")));
+        let contents = fs::read_to_string(dir.path().join(".zshrc")).unwrap();
+        assert!(!contents.contains("RUNLOOP_ROUTER_OPENING_PATH"));
+        let canonical_snippet = fs::canonicalize(&snippet).unwrap();
+        assert!(contents.contains(&canonical_snippet.display().to_string()));
+    }
+
+    #[test]
     fn default_snippet_candidates_include_homebrew_prefix() {
         let paths = default_snippet_candidates(ShellFlavor::Bash);
         let expected = PathBuf::from("/opt/homebrew/share/runloop/shell")
@@ -673,5 +981,13 @@ mod tests {
             paths.contains(&expected),
             "expected Homebrew share path to be included"
         );
+    }
+
+    #[test]
+    fn default_snippet_candidates_include_usr_share() {
+        let paths = default_snippet_candidates(ShellFlavor::Zsh);
+        let expected =
+            PathBuf::from("/usr/share/runloop/shell").join(snippet_name(ShellFlavor::Zsh));
+        assert!(paths.contains(&expected));
     }
 }

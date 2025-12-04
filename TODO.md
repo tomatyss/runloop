@@ -602,14 +602,14 @@ cleanly.
 
 **O4. Packaging & opt‑in flow**
 
-- [ ] Install shell snippets into a well‑known location (e.g.
+- [x] Install shell snippets into a well‑known location (e.g.
       `/usr/share/runloop/shell/`) and expose a helper
       (`rlp shell enable|disable`) that appends/removes `source` lines from user
       rc files (`~/.zshrc`, `~/.bashrc`) in a reversible way.
-- [ ] Debian `postinst` prompts the current user to opt into shell integration
+- [x] Debian `postinst` prompts the current user to opt into shell integration
       (default = “no” for dev package); if accepted, call `rlp shell enable` for
       their account.
-- [ ] Document a safe rollback path and ensure integration does not run when
+- [x] Document a safe rollback path and ensure integration does not run when
       `$TERM=dumb` or inside restricted shells.
 
 **O5. Acceptance & regression**

@@ -72,6 +72,16 @@ Key behaviors:
   # <<< runloop shell (zsh) <<<
   ```
 
+- Default rc targets: zsh → `~/.zshrc`, bash → `~/.bashrc`. Use `--rc-path` to
+  override; `--shell auto` resolves from `$SHELL`.
+- Dry-run prints the resolved rc path, snippet/opening paths, and the exact
+  block without writing files.
+- If the block already exists but points to a different snippet/opening,
+  `enable` replaces it in-place (with a timestamped backup).
+- If `~/.runloop/openings/` is missing, `enable` creates it (0755) and copies
+  the packaged `router-default.yaml` unless creation fails, in which case it
+  warns and continues without setting the env.
+
 - `rlp shell disable` removes the block (idempotent) and keeps timestamped
   backups (`.zshrc.runloop.bak.<epoch>`).
 
@@ -190,6 +200,9 @@ Common issues:
 - `docs/architecture.md` replaces the “forthcoming router section” with a link
   here.
 - `docs/SUMMARY.md` lists it under “Tools” for mdBook navigation.
+- Debian postinst (rlp package) prompts the invoking user once to enable the
+  login shell; it skips CI/SSH/noninteractive/TERM=dumb and never edits rc files
+  on uninstall (use `rlp shell disable` to remove the block).
 
 With the helper and snippets in place, interactive prompts in supported shells
 are classified before execution, shell-routed commands behave normally, and

@@ -42,7 +42,7 @@ use serde::Serialize;
 use serde_json::{Value as JsonValue, json, to_string_pretty, to_value, to_writer_pretty};
 use serde_yaml::{self, Mapping as YamlMapping, Value as YamlValue};
 use shell::{
-    DisableRequest, EnableRequest, ShellAction, ShellEditResult, ShellFlavor,
+    DisableRequest, EnableRequest, ShellAction, ShellCliFlavor, ShellEditResult,
     disable as disable_shell, enable as enable_shell,
 };
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -293,8 +293,8 @@ enum ShellCommands {
 #[derive(Args, Debug)]
 struct ShellEnableArgs {
     /// Shell flavor to configure.
-    #[arg(long = "shell", value_enum, default_value_t = ShellFlavor::Zsh)]
-    flavor: ShellFlavor,
+    #[arg(long = "shell", value_enum, default_value_t = ShellCliFlavor::Zsh)]
+    flavor: ShellCliFlavor,
     /// Override rc file path (defaults to ~/.zshrc or ~/.bashrc).
     #[arg(long = "rc-path", value_name = "PATH")]
     rc_path: Option<PathBuf>,
@@ -312,8 +312,8 @@ struct ShellEnableArgs {
 #[derive(Args, Debug)]
 struct ShellDisableArgs {
     /// Shell flavor to remove integration from.
-    #[arg(long = "shell", value_enum, default_value_t = ShellFlavor::Zsh)]
-    flavor: ShellFlavor,
+    #[arg(long = "shell", value_enum, default_value_t = ShellCliFlavor::Zsh)]
+    flavor: ShellCliFlavor,
     /// Override rc file path (defaults to ~/.zshrc or ~/.bashrc).
     #[arg(long = "rc-path", value_name = "PATH")]
     rc_path: Option<PathBuf>,
@@ -1155,8 +1155,9 @@ fn handle_config_path(args: ConfigPathArgs) -> Result<(), CliError> {
 async fn handle_shell(cmd: ShellCommands) -> Result<(), CliError> {
     match cmd {
         ShellCommands::Enable(args) => {
+            let flavor = args.flavor.resolve();
             let request = EnableRequest {
-                flavor: args.flavor,
+                flavor,
                 rc_path: args.rc_path,
                 snippet_override: args.snippet_path,
                 opening_path: args.opening_path,
@@ -1166,8 +1167,9 @@ async fn handle_shell(cmd: ShellCommands) -> Result<(), CliError> {
             render_shell_result(&result);
         }
         ShellCommands::Disable(args) => {
+            let flavor = args.flavor.resolve();
             let request = DisableRequest {
-                flavor: args.flavor,
+                flavor,
                 rc_path: args.rc_path,
                 dry_run: args.dry_run,
             };
@@ -1181,6 +1183,7 @@ async fn handle_shell(cmd: ShellCommands) -> Result<(), CliError> {
 fn render_shell_result(result: &ShellEditResult) {
     let status = match result.action {
         ShellAction::Added => "installed runloop shell integration",
+        ShellAction::Updated => "updated runloop shell integration",
         ShellAction::Removed => "removed runloop shell integration",
         ShellAction::AlreadyPresent => "shell integration already present",
         ShellAction::NotFound => "shell integration block not found",
@@ -1189,8 +1192,14 @@ fn render_shell_result(result: &ShellEditResult) {
     if let Some(snippet) = &result.snippet_path {
         println!("snippet: {}", snippet.display());
     }
+    if let Some(opening) = &result.opening_path {
+        println!("opening: {}", opening.display());
+    }
     if result.dry_run {
         println!("dry-run: no files modified");
+    }
+    if let Some(block) = &result.block_preview {
+        println!("block preview:\n{block}");
     }
     for note in &result.notes {
         println!("- {note}");
