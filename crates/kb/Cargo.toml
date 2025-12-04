@@ -19,3 +19,8 @@ json-canon = "0.1"
 hex = "0.4"
 runloop-openings = { path = "../openings" }
 tracing = "0.1"
+data-encoding = "2.5"
+
+[dev-dependencies]
+serde_json = "1.0"
+tempfile = "3.13"

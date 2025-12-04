@@ -486,7 +486,7 @@ ids.
 
 ### K3. Redaction
 
-- [ ] KB returns redacted views for agents without `kb_read.contacts_raw`
+- [x] KB returns redacted views for agents without `kb_read.contacts_raw`
       (example: embeddings or masked emails); for MVP, you can implement a
       simple mask `j***@acme.com`.
 
