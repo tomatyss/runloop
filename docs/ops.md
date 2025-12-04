@@ -150,6 +150,11 @@ Supporting commands:
 - `rlp kb vacuum` — optional compaction (requires exclusive lock)
 - `rlp kb why <entity>` — print ordered source events for a materialized entity
   key.
+- Redaction: by default, emails are masked at read time for all interfaces (CLI,
+  hostcalls, backups). Operators can set
+  `kb.redaction.allow_unredacted_admin=true` to allow privileged reads and
+  should set a deployment-specific `kb.redaction.salt`. Agents must declare
+  `kb_read.contacts_raw` to bypass masking; such reads should be audited.
 
 ### 2.2 Metadata tables
 

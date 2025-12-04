@@ -33,16 +33,16 @@ Supported keys:
 
 <!-- markdownlint-disable MD013 -->
 
-| Key        | Type                    | Default | Notes                                                                                   |
-| ---------- | ----------------------- | ------- | --------------------------------------------------------------------------------------- |
-| `fs`       | array of absolute paths | `[]`    | Paths are normalized; globs not allowed in v0.1.                                        |
-| `net`      | array of hostnames      | `[]`    | Hostnames may include port (`example.com:443`). Wildcards arrive in v0.2.               |
-| `time`     | bool                    | `false` | Grants access to monotonic/UTC clocks.                                                  |
-| `kb_read`  | bool or array           | `false` | `true` grants read-only access to all domains; array limits to subset (`["contacts"]`). |
-| `kb_write` | bool or array           | `false` | Same semantics as `kb_read`; `true` is discouraged outside trusted agents.              |
-| `secrets`  | array of secret IDs     | `[]`    | IDs follow `runloop/<scope>/<name>`.                                                    |
-| `model`    | bool                    | `false` | Allows requests to model broker.                                                        |
-| `exec`     | bool                    | `false` | Command execution on host; off by default and should be granted sparingly.              |
+| Key        | Type                    | Default | Notes                                                                                                                                                         |
+| ---------- | ----------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fs`       | array of absolute paths | `[]`    | Paths are normalized; globs not allowed in v0.1.                                                                                                              |
+| `net`      | array of hostnames      | `[]`    | Hostnames may include port (`example.com:443`). Wildcards arrive in v0.2.                                                                                     |
+| `time`     | bool                    | `false` | Grants access to monotonic/UTC clocks.                                                                                                                        |
+| `kb_read`  | bool or array           | `false` | `true` grants read-only access to all domains; array limits to subset (`["contacts"]`). The `kb_read.contacts_raw` grant lifts KB redaction for PII (emails). |
+| `kb_write` | bool or array           | `false` | Same semantics as `kb_read`; `true` is discouraged outside trusted agents.                                                                                    |
+| `secrets`  | array of secret IDs     | `[]`    | IDs follow `runloop/<scope>/<name>`.                                                                                                                          |
+| `model`    | bool                    | `false` | Allows requests to model broker.                                                                                                                              |
+| `exec`     | bool                    | `false` | Command execution on host; off by default and should be granted sparingly.                                                                                    |
 
 <!-- markdownlint-enable MD013 -->
 
