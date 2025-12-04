@@ -26,7 +26,7 @@ pub async fn draft(ctx: &AgentContext, req: DraftRequest) -> AgentResult<DraftAr
     let model_request = ModelRequest {
         trace_id: ctx.trace_id(),
         model: req.model.clone().unwrap_or_else(|| "null:compose".into()),
-        prompt,
+        prompt: prompt.clone(),
         role_system: None,
         params: None,
         budget_tokens: Some(4_000),
@@ -38,7 +38,14 @@ pub async fn draft(ctx: &AgentContext, req: DraftRequest) -> AgentResult<DraftAr
     };
 
     let completion = match ctx.complete_model(model_request).await {
-        Ok(output) => output,
+        Ok(output) => {
+            if output.text.trim() == prompt.trim() {
+                warn!("model completion echoed prompt; falling back to heuristic template");
+                fallback_output(&req)
+            } else {
+                output
+            }
+        }
         Err(err) => {
             warn!("model completion failed: {err}; falling back to heuristic template");
             fallback_output(&req)
@@ -133,6 +140,7 @@ fn fallback_output(req: &DraftRequest) -> ModelOutput {
     if let Some(snippet) = req.context.snippets.first() {
         body.push_str(&format!("Recently, {}. ", snippet.excerpt));
     }
+    body.push_str("This is a quick follow up to keep us aligned on next steps and timelines. ");
     body.push_str(
         "Let me know if you have any questions or if you'd like to chat more.\n\nBest,\nRunloop\n",
     );

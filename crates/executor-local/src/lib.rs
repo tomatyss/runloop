@@ -892,9 +892,7 @@ impl LocalExecutor {
         let payload = json!({
             "to": mail.recipients,
             "subject": topic,
-            "artifact_id": draft.artifact_id.0,
-            "message_id": mail.message_id,
-            "delivered_at_ms": mail.delivered_at_ms,
+            "artifact_id": draft.artifact_id.0
         });
         let provenance = Provenance {
             trace_id: request.trace_id.to_string(),
@@ -1019,8 +1017,6 @@ struct WriterAgentOutput {
 struct MailerAgentOutput {
     status: String,
     recipients: Vec<String>,
-    message_id: String,
-    delivered_at_ms: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
