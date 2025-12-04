@@ -3318,6 +3318,7 @@ dependencies = [
  "runloop-kb",
  "runloop-model-broker",
  "runloop-openings",
+ "runloop-registry",
  "runloop-rmp",
  "runloop-router",
  "serde",
@@ -3518,6 +3519,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.17",
  "tokio",
+ "tracing",
  "uuid",
 ]
 
@@ -3571,6 +3573,18 @@ dependencies = [
  "serde_yaml",
  "thiserror 2.0.17",
  "tokio",
+]
+
+[[package]]
+name = "runloop-registry"
+version = "0.1.0"
+dependencies = [
+ "dirs 5.0.1",
+ "runloop-core",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.17",
+ "toml",
 ]
 
 [[package]]
@@ -3674,6 +3688,7 @@ dependencies = [
  "runloop-kb",
  "runloop-model-broker",
  "runloop-openings",
+ "runloop-registry",
  "runloop-rmp",
  "runloop-runtime",
  "serde",

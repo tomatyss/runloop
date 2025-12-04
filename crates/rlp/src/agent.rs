@@ -7,6 +7,7 @@ use runloop_agent_registry::{
     digest_file_hex, load_tools,
 };
 use runloop_core::Config;
+use runloop_registry::{PathOverrides, RegistryPaths, resolve_paths};
 use serde_json::json;
 use std::env;
 use std::fs::{self, File};
@@ -138,11 +139,16 @@ pub enum AgentError {
     Tools(String),
 }
 
-pub fn handle_agent(cmd: AgentCommands, config: &Config) -> Result<(), AgentError> {
+pub fn handle_agent(
+    cmd: AgentCommands,
+    config: &Config,
+    overrides: &PathOverrides,
+) -> Result<(), AgentError> {
+    let registry_paths = resolve_paths(config, overrides);
     match cmd {
-        AgentCommands::List(args) => list_agents(args, config)?,
+        AgentCommands::List(args) => list_agents(args, config, overrides)?,
         AgentCommands::Scaffold(args) => {
-            let result = scaffold(args, config)?;
+            let result = scaffold(args, config, overrides, &registry_paths)?;
             println!("created agent bundle at {}", result.agent_dir.display());
             println!("created wasm crate at {}", result.crate_dir.display());
             println!("manifest: {}", result.manifest_path.display());
@@ -152,7 +158,7 @@ pub fn handle_agent(cmd: AgentCommands, config: &Config) -> Result<(), AgentErro
             }
         }
         AgentCommands::Build(args) => {
-            let result = build(args, config)?;
+            let result = build(args, config, overrides)?;
             println!("built wasm to {}", result.wasm_path.display());
             println!("updated manifest: {}", result.manifest_path.display());
             println!("agent bundle at {}", result.agent_dir.display());
@@ -162,11 +168,31 @@ pub fn handle_agent(cmd: AgentCommands, config: &Config) -> Result<(), AgentErro
     Ok(())
 }
 
-fn list_agents(args: ListArgs, config: &Config) -> Result<(), AgentError> {
-    let search_dirs = agent_search_dirs(args.root_dir.as_ref(), config);
+fn list_agents(
+    args: ListArgs,
+    config: &Config,
+    overrides: &PathOverrides,
+) -> Result<(), AgentError> {
+    let local_overrides = PathOverrides {
+        agents_dir: args
+            .root_dir
+            .clone()
+            .or_else(|| overrides.agents_dir.clone()),
+        openings_dir: overrides.openings_dir.clone(),
+        cwd: overrides.cwd.clone(),
+        workspace_root: overrides.workspace_root.clone(),
+    };
+    let registry_paths = resolve_paths(config, &local_overrides);
+    let search_dirs = registry_paths.agents.clone();
     let registry = AgentRegistry::new(search_dirs.clone());
     let listed = registry.list()?;
     let settings = args.output.resolve();
+    for info in &registry_paths.info {
+        eprintln!("info: {info}");
+    }
+    for warning in &registry_paths.warnings {
+        eprintln!("warning: {warning}");
+    }
 
     match settings.mode {
         OutputMode::Json => {
@@ -208,11 +234,17 @@ fn list_agents(args: ListArgs, config: &Config) -> Result<(), AgentError> {
                     Cell::text(entry.manifest_path.display().to_string()),
                 ]);
             }
+            let missing_all = search_dirs.iter().all(|dir| !dir.exists());
             if listed.is_empty() {
                 table.add_note(format!(
                     "no agent manifests found (searched: {})",
                     format_search_dirs(&search_dirs)
                 ));
+                if missing_all {
+                    table.add_note(
+                        "no search dirs exist; using demo bundles if packaged (set --agents-dir to add yours)",
+                    );
+                }
             } else {
                 table.add_note(format!("searched: {}", format_search_dirs(&search_dirs)));
                 table.add_note("digest = blake3(manifest.toml)");
@@ -224,20 +256,27 @@ fn list_agents(args: ListArgs, config: &Config) -> Result<(), AgentError> {
     Ok(())
 }
 
-fn scaffold(args: ScaffoldArgs, config: &Config) -> Result<ScaffoldResult, AgentError> {
+fn scaffold(
+    args: ScaffoldArgs,
+    config: &Config,
+    overrides: &PathOverrides,
+    registry_paths: &RegistryPaths,
+) -> Result<ScaffoldResult, AgentError> {
     validate_name(&args.name)?;
     let interactive = !args.non_interactive && io::stdin().is_terminal();
     let answers = gather_answers(&args, config, interactive)?;
-    let agent_root = resolve_agent_root(&args.root_dir, config);
+    let agent_root = resolve_agent_root(&args.root_dir, overrides.agents_dir.as_ref(), config);
     let crate_root = resolve_crate_root(&args.crates_dir);
     let agent_dir = agent_root.join(&args.name);
     let crate_dir = crate_root.join(&args.name);
+    let default_opening_dir = default_opening_dir(registry_paths);
     let opening_path = if answers.generate_opening {
         Some(
             answers
                 .opening_path
                 .clone()
                 .or_else(|| args.opening_path.clone())
+                .or_else(|| default_opening_dir.map(|dir| dir.join(format!("{}.yaml", args.name))))
                 .unwrap_or_else(|| PathBuf::from(format!("examples/openings/{}.yaml", args.name))),
         )
     } else {
@@ -279,18 +318,23 @@ fn scaffold(args: ScaffoldArgs, config: &Config) -> Result<ScaffoldResult, Agent
     })
 }
 
-fn build(args: BuildArgs, config: &Config) -> Result<BuildResult, AgentError> {
-    build_with_toolchain(args, config, "rustc", "cargo")
+fn build(
+    args: BuildArgs,
+    config: &Config,
+    overrides: &PathOverrides,
+) -> Result<BuildResult, AgentError> {
+    build_with_toolchain(args, config, overrides, "rustc", "cargo")
 }
 
 fn build_with_toolchain(
     args: BuildArgs,
     config: &Config,
+    overrides: &PathOverrides,
     rustc_cmd: &str,
     cargo_cmd: &str,
 ) -> Result<BuildResult, AgentError> {
     validate_name(&args.name)?;
-    let agent_root = resolve_agent_root(&args.root_dir, config);
+    let agent_root = resolve_agent_root(&args.root_dir, overrides.agents_dir.as_ref(), config);
     let crate_root = resolve_crate_root(&args.crates_dir);
     let agent_dir = agent_root.join(&args.name);
     let crate_dir = crate_root.join(&args.name);
@@ -367,16 +411,24 @@ fn validate_name(name: &str) -> Result<(), AgentError> {
     Ok(())
 }
 
-fn resolve_agent_root(root: &Option<PathBuf>, config: &Config) -> PathBuf {
-    resolve_agent_root_with_cwd(root, config, None)
+fn resolve_agent_root(
+    root: &Option<PathBuf>,
+    agents_override: Option<&PathBuf>,
+    config: &Config,
+) -> PathBuf {
+    resolve_agent_root_with_cwd(root, agents_override, config, None)
 }
 
 fn resolve_agent_root_with_cwd(
     root: &Option<PathBuf>,
+    agents_override: Option<&PathBuf>,
     config: &Config,
     cwd: Option<&Path>,
 ) -> PathBuf {
     if let Some(dir) = root {
+        return expand_tilde(dir.clone());
+    }
+    if let Some(dir) = agents_override {
         return expand_tilde(dir.clone());
     }
     if let Some(workspace) = workspace_root(cwd) {
@@ -399,17 +451,24 @@ fn resolve_crate_root_with_cwd(root: &Option<PathBuf>, cwd: Option<&Path>) -> Pa
     default_user_agents_wasm_dir()
 }
 
-fn agent_search_dirs(root: Option<&PathBuf>, config: &Config) -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
+fn default_opening_dir(paths: &RegistryPaths) -> Option<PathBuf> {
+    paths
+        .openings
+        .iter()
+        .find(|p| p.to_string_lossy().contains("examples"))
+        .cloned()
+        .or_else(|| paths.openings.first().cloned())
+}
+
+fn agent_search_dirs(
+    root: Option<&PathBuf>,
+    overrides: &PathOverrides,
+    config: &Config,
+) -> Vec<PathBuf> {
     if let Some(root) = root {
-        push_unique_dir(&mut dirs, expand_tilde(root.clone()));
-    } else {
-        push_unique_dir(&mut dirs, resolve_agent_root(&None, config));
-        for entry in &config.agents.search_dirs {
-            push_unique_dir(&mut dirs, expand_tilde(PathBuf::from(entry)));
-        }
+        return vec![expand_tilde(root.clone())];
     }
-    dirs
+    resolve_paths(config, overrides).agents
 }
 
 fn push_unique_dir(dirs: &mut Vec<PathBuf>, candidate: PathBuf) {
@@ -759,8 +818,8 @@ mod host {
 #[command(about = "Runloop {name} agent (wasm32-wasip1)")]
 struct Cli {
     /// Placeholder payload input (customize for your agent).
-    #[arg(long)]
-    payload: Option<String>,
+    #[arg(long = "input", alias = "payload")]
+    input: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -769,10 +828,12 @@ struct StubOutput {
 }
 
 fn main() -> Result<()> {
-    let _cli = Cli::parse();
+    let cli = Cli::parse();
     host::signal_ready();
     let output = StubOutput {
-        message: "replace with real agent logic".into(),
+        message: cli
+            .input
+            .unwrap_or_else(|| "replace with real agent logic".into()),
     };
     println!("{}", serde_json::to_string_pretty(&output)?);
     Ok(())
@@ -1471,7 +1532,7 @@ exit 0
         fs::create_dir_all(temp.path().join("crates/agents-wasm")).expect("crate dir");
 
         let config = Config::default();
-        let agent_root = resolve_agent_root_with_cwd(&None, &config, Some(temp.path()));
+        let agent_root = resolve_agent_root_with_cwd(&None, None, &config, Some(temp.path()));
         let crate_root = resolve_crate_root_with_cwd(&None, Some(temp.path()));
         assert_eq!(agent_root, temp.path().join("agents"));
         assert_eq!(crate_root, temp.path().join("crates/agents-wasm"));
@@ -1486,7 +1547,7 @@ exit 0
         let mut config = Config::default();
         config.agents.search_dirs = vec![agents_root.to_string_lossy().into_owned()];
 
-        let agent_root = resolve_agent_root_with_cwd(&None, &config, Some(temp.path()));
+        let agent_root = resolve_agent_root_with_cwd(&None, None, &config, Some(temp.path()));
         let crate_root = resolve_crate_root_with_cwd(&None, Some(temp.path()));
         assert_eq!(agent_root, agents_root);
         assert_eq!(crate_root, default_user_agents_wasm_dir());
@@ -1500,7 +1561,7 @@ exit 0
         let mut config = Config::default();
         config.agents.search_dirs = vec![agents_root.to_string_lossy().into_owned()];
 
-        let agent_root = resolve_agent_root_with_cwd(&None, &config, Some(temp.path()));
+        let agent_root = resolve_agent_root_with_cwd(&None, None, &config, Some(temp.path()));
         assert_eq!(agent_root, agents_root);
         let crate_root = resolve_crate_root_with_cwd(&None, Some(temp.path()));
         assert_eq!(crate_root, default_user_agents_wasm_dir());
@@ -1511,21 +1572,26 @@ exit 0
         let temp = tempdir().expect("temp");
         let override_root = temp.path().join("agents");
         let config = Config::default();
-        let dirs = agent_search_dirs(Some(&override_root), &config);
+        let dirs = agent_search_dirs(Some(&override_root), &PathOverrides::default(), &config);
         assert_eq!(dirs, vec![override_root]);
     }
 
     #[test]
     fn list_appends_config_dirs_after_primary() {
         let temp = tempdir().expect("temp");
+        fs::create_dir_all(&temp).expect("create search dir");
         let mut config = Config::default();
         config.agents.search_dirs = vec![temp.path().to_string_lossy().into_owned()];
 
-        let dirs = agent_search_dirs(None, &config);
-        assert!(
-            dirs.last().is_some_and(|dir| dir == temp.path()),
-            "expected config dir to appear in search list"
+        let dirs = agent_search_dirs(
+            None,
+            &PathOverrides {
+                cwd: Some(temp.path().to_path_buf()),
+                ..Default::default()
+            },
+            &config,
         );
+        assert!(dirs.contains(&temp.path().to_path_buf()));
     }
 
     #[test]
@@ -1613,6 +1679,11 @@ exit 0
             .join("openings")
             .join("demo_agent.yaml");
         let config = Config::default();
+        let overrides = PathOverrides {
+            cwd: Some(temp.path().to_path_buf()),
+            ..Default::default()
+        };
+        let registry_paths = resolve_paths(&config, &overrides);
         let args = ScaffoldArgs {
             name: "demo_agent".into(),
             non_interactive: true,
@@ -1628,7 +1699,7 @@ exit 0
             opening_path: Some(opening.clone()),
             force: false,
         };
-        let result = scaffold(args, &config).expect("scaffold");
+        let result = scaffold(args, &config, &overrides, &registry_paths).expect("scaffold");
         assert!(result.manifest_path.is_file());
         assert!(result.tools_path.is_file());
         assert!(result.crate_dir.join("Cargo.toml").is_file());
@@ -1679,6 +1750,7 @@ exit 0
         let (rustc_path, cargo_path) = install_fake_toolchain(&toolchain_bin);
 
         let config = Config::default();
+        let overrides = PathOverrides::default();
         let args = BuildArgs {
             name: "demo".into(),
             root_dir: Some(agents_root.clone()),
@@ -1687,6 +1759,7 @@ exit 0
         let result = build_with_toolchain(
             args,
             &config,
+            &overrides,
             rustc_path.to_str().unwrap(),
             cargo_path.to_str().unwrap(),
         )
@@ -1746,6 +1819,7 @@ exit 0
             install_fake_toolchain_with_target_root(&toolchain_bin, &workspace_root.join("target"));
 
         let config = Config::default();
+        let overrides = PathOverrides::default();
         let args = BuildArgs {
             name: "demo".into(),
             root_dir: Some(agents_root.clone()),
@@ -1754,6 +1828,7 @@ exit 0
         let result = build_with_toolchain(
             args,
             &config,
+            &overrides,
             rustc_path.to_str().unwrap(),
             cargo_path.to_str().unwrap(),
         )
@@ -1787,6 +1862,7 @@ exit 0
         let (rustc_path, cargo_path) = install_fake_toolchain(&toolchain_bin);
 
         let config = Config::default();
+        let overrides = PathOverrides::default();
         let args = BuildArgs {
             name: "demo".into(),
             root_dir: Some(agents_root.clone()),
@@ -1795,6 +1871,7 @@ exit 0
         let result = build_with_toolchain(
             args,
             &config,
+            &overrides,
             rustc_path.to_str().unwrap(),
             cargo_path.to_str().unwrap(),
         );

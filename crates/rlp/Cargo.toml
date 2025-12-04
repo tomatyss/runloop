@@ -11,6 +11,7 @@ runloop-kb = { path = "../kb" }
 runloop-openings = { path = "../openings" }
 runloop-model-broker = { path = "../model-broker" }
 runloop-agent-registry = { path = "../agent-registry" }
+runloop-registry = { path = "../registry" }
 runloop-executor-local = { path = "../executor-local" }
 runloop-agents-common = { path = "../agents/common" }
 runloop-bus = { path = "../bus" }

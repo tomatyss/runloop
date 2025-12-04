@@ -84,7 +84,9 @@ impl Default for Config {
             openings: SearchDirsConfig {
                 search_dirs: vec![
                     "~/.runloop/openings".into(),
+                    "~/.runloop/examples/openings".into(),
                     "./examples/openings".into(),
+                    "/var/lib/runloop/openings".into(),
                     "/etc/runloop/openings".into(),
                 ],
             },
@@ -92,6 +94,7 @@ impl Default for Config {
                 search_dirs: vec![
                     "~/.runloop/agents".into(),
                     "./agents".into(),
+                    "/var/lib/runloop/agents".into(),
                     "/usr/lib/runloop/agents".into(),
                 ],
             },

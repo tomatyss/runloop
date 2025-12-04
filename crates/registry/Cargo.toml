@@ -1,0 +1,17 @@
+[package]
+name = "runloop-registry"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "runloop_registry"
+
+[dependencies]
+dirs = "5.0"
+runloop-core = { path = "../core" }
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2.0"
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3.10"

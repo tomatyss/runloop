@@ -48,10 +48,14 @@ pub async fn send(ctx: &AgentContext, req: MailRequest) -> AgentResult<MailResul
     println!("{}", req.draft.body_preview);
     println!("-----------------------------");
 
+    let message_id = format!("dryrun-{}", req.draft.artifact_id.0);
+    let delivered_at_ms = 0u64;
     let payload = json!({
         "to": [req.contact.email],
         "subject": req.topic,
         "artifact_id": req.draft.artifact_id.0,
+        "message_id": message_id,
+        "delivered_at_ms": delivered_at_ms,
     });
     ctx.propose_event(
         "email.sent",
@@ -62,5 +66,7 @@ pub async fn send(ctx: &AgentContext, req: MailRequest) -> AgentResult<MailResul
         status: "dry-run".into(),
         recipients: vec![req.contact.email],
         artifact_id: req.draft.artifact_id,
+        message_id,
+        delivered_at_ms,
     })
 }

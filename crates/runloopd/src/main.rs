@@ -12,6 +12,8 @@ use runloop_bus::{Bus, BusServerHandle, PublisherKind};
 use runloop_core::{Config, Error};
 use runloop_executor_local::{ExecutorInitError, build_executor};
 use runloop_kb::{KnowledgeBase, Materializer, TraceStore};
+use runloop_registry::{PathOverrides, resolve_paths};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::signal;
@@ -29,7 +31,22 @@ async fn main() -> Result<(), Error> {
     let config = Config::load()?;
     // config.validate() is called inside Config::load()
 
-    let registry = Arc::new(AgentRegistry::new(config.agents.search_dirs.clone()));
+    let registry_paths = resolve_paths(&config, &PathOverrides::default());
+    for warning in &registry_paths.warnings {
+        if warning.contains("opening search dirs") {
+            continue;
+        }
+        tracing::warn!("{warning}");
+    }
+    if let Some(demo_dir) = &registry_paths.demo_agents {
+        tracing::info!(
+            "no agent search dirs found; falling back to demo bundles under {}",
+            demo_dir.display()
+        );
+    }
+    tracing::info!("agent search dirs: {}", format_dirs(&registry_paths.agents));
+    warn_unreadable_dirs(&registry_paths.agents);
+    let registry = Arc::new(AgentRegistry::new(registry_paths.agents.clone()));
     let bus_path = bus_socket_path(&config)?;
     let mut bus_server = start_bus(bus_path.as_path(), &config).await?;
 
@@ -232,6 +249,24 @@ fn log_action_decision_acl(path: &Path, allowed: &[PublisherKind]) {
     }
     let labels: Vec<&'static str> = allowed.iter().map(publisher_kind_label).collect();
     tracing::info!(path = %path.display(), allowed = %labels.join(","), "bus listening");
+}
+
+fn format_dirs(dirs: &[PathBuf]) -> String {
+    dirs.iter()
+        .map(|dir| dir.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn warn_unreadable_dirs(dirs: &[PathBuf]) {
+    for dir in dirs {
+        if dir.exists() && fs::read_dir(dir).is_err() {
+            tracing::warn!(
+                path = %dir.display(),
+                "agent search dir exists but is not readable by the daemon user"
+            );
+        }
+    }
 }
 
 fn publisher_kind_label(kind: &PublisherKind) -> &'static str {

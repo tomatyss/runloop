@@ -12,7 +12,7 @@ use runloop_agent_critic as critic_agent;
 use runloop_agent_critic::ReviewRequest;
 use runloop_agent_mailer as mailer_agent;
 use runloop_agent_mailer::{DraftData as MailerDraftData, MailRequest};
-use runloop_agent_registry::{AgentBundle, AgentRegistry};
+use runloop_agent_registry::{AgentBundle, AgentRegistry, digest_file_hex};
 use runloop_agent_writer as writer_agent;
 use runloop_agent_writer::DraftRequest;
 use runloop_agents_common::{
@@ -191,7 +191,7 @@ impl LocalExecutor {
             "critic" => self.exec_critic(reference, &request).await,
             "mailer" => self.exec_mailer(reference, &request).await,
             "system_tra" => self.exec_system_tra(reference, &request).await,
-            other => Err(RunnerError::Executor(format!("unknown agent '{other}'"))),
+            _ => self.exec_generic(reference, &request).await,
         }
     }
 
@@ -238,6 +238,57 @@ impl LocalExecutor {
         Err(RunnerError::Executor(
             "system_tra missing wasm entry".into(),
         ))
+    }
+
+    async fn exec_generic(
+        &self,
+        reference: &AgentRef,
+        request: &NodeExecutionRequest<'_>,
+    ) -> Result<NodeExecution, RunnerError> {
+        let bundle = self.require_wasm_bundle(reference)?;
+        let mut args = vec![reference_spec(reference)];
+        for (key, value) in &request.node.with {
+            let rendered = stringify_input(value).map_err(|err| {
+                RunnerError::Executor(format!(
+                    "invalid parameter '{key}' for node {}: {err}",
+                    request.node.id
+                ))
+            })?;
+            args.push(format!("--{key}"));
+            args.push(rendered);
+        }
+        let mut env = Vec::new();
+        let with_json = serde_json::to_string(&request.node.with).map_err(|err| {
+            RunnerError::Executor(format!(
+                "failed to encode params for node {}: {err}",
+                request.node.id
+            ))
+        })?;
+        env.push(("RUNLOOP_NODE_INPUT".into(), with_json));
+
+        let output: JsonValue = self
+            .invoke_agent(
+                reference,
+                &bundle,
+                &request.node.id,
+                args,
+                Some(env),
+                self.agent_timeout(request),
+            )
+            .await?;
+
+        let mut ports = NodeOutputs::default();
+        if let Some(map) = output.as_object() {
+            for port in &bundle.described.ports.outputs {
+                if let Some(value) = map.get(port) {
+                    ports.push(port, value.clone());
+                }
+            }
+        }
+        if ports.ports.is_empty() {
+            ports.push("out", output);
+        }
+        Ok(NodeExecution::Completed(ports))
     }
 
     fn node_param<T: DeserializeOwned>(
@@ -916,18 +967,77 @@ impl LocalExecutor {
             status: mail.status.clone(),
             recipients: mail.recipients.clone(),
             artifact_id: draft.artifact_id,
+            message_id: mail.message_id.clone(),
+            delivered_at_ms: mail.delivered_at_ms,
         })
     }
 
     fn wasm_bundle(&self, reference: &AgentRef) -> Option<AgentBundle> {
         self.registry.bundle(reference).ok().and_then(|bundle| {
-            let has_wasm = bundle
-                .wasm_entry
-                .as_ref()
-                .map(|entry| entry.path.is_file())
-                .unwrap_or(false);
-            if has_wasm { Some(bundle) } else { None }
+            let entry = bundle.wasm_entry.as_ref()?;
+            if !entry.path.is_file() {
+                return None;
+            }
+            match digest_file_hex(&entry.path) {
+                Ok(digest) => {
+                    if digest != entry.blake3 {
+                        tracing::warn!(
+                            agent = %reference_spec(reference),
+                            path = %entry.path.display(),
+                            expected = %entry.blake3,
+                            actual = %digest,
+                            "wasm digest mismatch; falling back to native implementation"
+                        );
+                        return None;
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        agent = %reference_spec(reference),
+                        path = %entry.path.display(),
+                        %err,
+                        "failed to verify wasm digest; falling back to native implementation"
+                    );
+                    return None;
+                }
+            }
+            Some(bundle)
         })
+    }
+
+    fn require_wasm_bundle(&self, reference: &AgentRef) -> Result<AgentBundle, RunnerError> {
+        let bundle = self
+            .registry
+            .bundle(reference)
+            .map_err(|err| RunnerError::Executor(err.to_string()))?;
+        let Some(entry) = bundle.wasm_entry.as_ref() else {
+            return Err(RunnerError::Executor(format!(
+                "agent '{}' is missing entry_wasm",
+                reference_spec(reference)
+            )));
+        };
+        if !entry.path.is_file() {
+            return Err(RunnerError::Executor(format!(
+                "agent '{}' missing wasm binary at {}",
+                reference_spec(reference),
+                entry.path.display()
+            )));
+        }
+        let digest = digest_file_hex(&entry.path).map_err(|err| {
+            RunnerError::Executor(format!(
+                "{} digest check failed: {err}",
+                entry.path.display()
+            ))
+        })?;
+        if digest != entry.blake3 {
+            return Err(RunnerError::Executor(format!(
+                "agent '{}' wasm digest mismatch (expected {}, got {})",
+                reference_spec(reference),
+                entry.blake3,
+                digest
+            )));
+        }
+        Ok(bundle)
     }
 
     fn should_fallback(&self, err: &RunnerError) -> bool {
@@ -1019,19 +1129,25 @@ struct WriterAgentOutput {
 struct MailerAgentOutput {
     status: String,
     recipients: Vec<String>,
+    #[serde(default)]
     message_id: String,
+    #[serde(default)]
     delivered_at_ms: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct MinimalDraft {
     body_md: String,
+    word_count: usize,
+    artifact_id: i64,
 }
 
 impl From<&DraftArtifact> for MinimalDraft {
     fn from(draft: &DraftArtifact) -> Self {
         Self {
             body_md: draft.body_md.clone(),
+            word_count: draft.word_count,
+            artifact_id: draft.artifact_id.0,
         }
     }
 }

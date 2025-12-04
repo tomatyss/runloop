@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -22,24 +23,62 @@ impl ConfirmationProvider for TestConfirmation {
 }
 
 #[tokio::test]
-async fn compose_email_opening_runs_end_to_end() {
+async fn generic_agent_runs_via_registry() {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..");
-    let agents_dir = repo_root.join("agents");
-    let opening_yaml =
-        std::fs::read_to_string(repo_root.join("examples/openings/compose_email.yaml"))
-            .expect("opening fixture");
+    let source_wasm = repo_root.join("agents/contact_resolver/bin/contact_resolver.wasm");
+    let source_policy = repo_root.join("agents/contact_resolver/policy.caps");
 
-    let tmp = tempdir().expect("temp");
+    let tmp = tempdir().expect("temp dir");
+    let agent_root = tmp.path().join("agents");
+    let bundle_dir = agent_root.join("demo_contact");
+    let bin_dir = bundle_dir.join("bin");
+    fs::create_dir_all(&bin_dir).expect("bin dir");
+    let wasm_path = bin_dir.join("contact_resolver.wasm");
+    fs::copy(&source_wasm, &wasm_path).expect("copy wasm");
+    fs::copy(&source_policy, bundle_dir.join("policy.caps")).expect("copy caps");
+    let wasm_digest = runloop_agent_registry::digest_file_hex(&wasm_path).expect("wasm digest");
+
+    let manifest = format!(
+        r#"[agent]
+name = "demo_contact"
+version = "0.1.0"
+kind = "wasm32-wasip1"
+
+entry_wasm = {{ path = "bin/contact_resolver.wasm", blake3 = "{wasm_digest}" }}
+
+[ports]
+in = ["contact.query.v1"]
+out = ["out"]
+
+[caps]
+file = "policy.caps"
+"#
+    );
+    fs::write(bundle_dir.join("manifest.toml"), manifest).expect("write manifest");
+
+    let opening_yaml = r#"version: 0
+name: generic_contact
+nodes:
+  - id: resolver
+    use: agent:demo_contact
+    with:
+      query: "John"
+edges: []
+success:
+  any_of:
+    - exists(resolver.out)
+"#;
+
     let workdir = tmp.path().join("workdir");
     let sockets_dir = tmp.path().join("sock");
     let kb_root = tmp.path().join("kb");
     let secrets_dir = tmp.path().join("secrets");
-    std::fs::create_dir_all(&workdir).unwrap();
-    std::fs::create_dir_all(&sockets_dir).unwrap();
-    std::fs::create_dir_all(&kb_root).unwrap();
-    std::fs::create_dir_all(&secrets_dir).unwrap();
+    fs::create_dir_all(&workdir).unwrap();
+    fs::create_dir_all(&sockets_dir).unwrap();
+    fs::create_dir_all(&kb_root).unwrap();
+    fs::create_dir_all(&secrets_dir).unwrap();
 
     let mut config = Config::default();
     config.runtime.workdir = workdir.to_string_lossy().into_owned();
@@ -58,8 +97,8 @@ async fn compose_email_opening_runs_end_to_end() {
         allow_missing_secrets: true,
         expose_raw_secrets: true,
     });
-    config.agents.search_dirs = vec![agents_dir.to_string_lossy().into_owned()];
-    config.models.default = "null:compose".into();
+    config.agents.search_dirs = vec![agent_root.to_string_lossy().into_owned()];
+    config.models.default = "null:generic".into();
     config.models.broker.providers = vec![ModelProvider {
         id: "local".into(),
         kind: ProviderKind::Local,
@@ -79,40 +118,31 @@ async fn compose_email_opening_runs_end_to_end() {
     let registry = Arc::new(AgentRegistry::new(config.agents.search_dirs.clone()));
     let executor = build_executor(config.clone(), confirmation, registry).expect("build executor");
 
-    let opening = parse_opening_str(&opening_yaml).expect("parse opening");
+    let opening = parse_opening_str(opening_yaml).expect("parse opening");
     let runner = Runner::new(opening, executor);
     let report = runner.run().await.expect("run opening");
     if !report.trace.success {
-        eprintln!("compose_email trace failed: {:#?}", report.trace);
+        eprintln!("generic agent trace failed: {:#?}", report.trace);
     }
-    assert!(report.trace.success, "compose_email trace should succeed");
-
-    let send_record = report
+    assert!(report.trace.success, "generic agent should succeed");
+    let resolver_record = report
         .node_records
         .iter()
-        .find(|rec| rec.node_id == "send")
-        .expect("send node present");
-    let send_output = send_record
+        .find(|rec| rec.node_id == "resolver")
+        .expect("resolver record");
+    let output = resolver_record
         .attempts
         .last()
         .and_then(|attempt| attempt.output.as_ref())
-        .expect("send output present");
-    let mail_json = send_output
-        .ports
-        .get("out")
+        .and_then(|out| out.ports.get("out"))
         .and_then(|values| values.first())
         .cloned()
-        .expect("mailer output available");
-    let mail: Value = mail_json;
-    assert_eq!(mail.get("status").and_then(Value::as_str), Some("dry-run"));
-    assert!(
-        mail.get("message_id").is_some(),
-        "expected message_id in mail result"
-    );
-    assert!(
-        mail.get("delivered_at_ms")
-            .and_then(Value::as_u64)
-            .is_some(),
-        "expected delivered_at_ms in mail result"
-    );
+        .expect("resolver output");
+    let json: Value = output;
+    let email = json
+        .get("email")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    assert!(email.contains("acme.com"), "expected email in output");
 }
