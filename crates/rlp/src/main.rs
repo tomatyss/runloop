@@ -1517,6 +1517,7 @@ mod tests {
             scope: "user".into(),
             payload,
             provenance: json!({}),
+            masked: false,
         }
     }
 
