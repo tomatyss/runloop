@@ -17,7 +17,7 @@ use runloop_core::config::{KbConfig, KbRedactionConfig};
 use runloop_core::ids::{AgentId, EventId, TraceId};
 use rusqlite::backup::Backup;
 use rusqlite::types::ValueRef;
-use rusqlite::{Connection, OpenFlags, Row, Statement, Transaction, params};
+use rusqlite::{Connection, OpenFlags, Statement, Transaction, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use thiserror::Error;
@@ -218,6 +218,43 @@ impl Redactor {
             }
         }
         masked
+    }
+
+    fn mask_payload_generic(
+        &self,
+        payload: &mut serde_json::Value,
+        ctx: &RedactionContext,
+    ) -> bool {
+        self.mask_value_emails_deep(payload, ctx)
+    }
+
+    fn mask_value_emails_deep(
+        &self,
+        value: &mut serde_json::Value,
+        ctx: &RedactionContext,
+    ) -> bool {
+        match value {
+            serde_json::Value::String(s) => {
+                let (masked, did_mask) = self.mask_email_string(s, ctx);
+                *s = masked;
+                did_mask
+            }
+            serde_json::Value::Array(values) => {
+                let mut masked_any = false;
+                for item in values {
+                    masked_any |= self.mask_value_emails_deep(item, ctx);
+                }
+                masked_any
+            }
+            serde_json::Value::Object(map) => {
+                let mut masked_any = false;
+                for (_k, v) in map.iter_mut() {
+                    masked_any |= self.mask_value_emails_deep(v, ctx);
+                }
+                masked_any
+            }
+            _ => false,
+        }
     }
 
     fn mask_value_for_kind(
@@ -658,7 +695,8 @@ impl KnowledgeBase {
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<_>>();
-        let (rows, masked_rows) = collect_rows(&mut stmt, &column_names, &self.redactor, ctx)?;
+        let (rows, masked_rows) =
+            collect_event_rows(&mut stmt, &column_names, &self.redactor, ctx)?;
         Ok(QueryResult {
             columns: column_names,
             rows,
@@ -1478,49 +1516,6 @@ fn load_event(stmt: &mut Statement<'_>, id: i64) -> Result<Option<EventRecord>, 
     }
 }
 
-fn collect_rows(
-    stmt: &mut Statement<'_>,
-    column_names: &[String],
-    redactor: &Redactor,
-    ctx: &RedactionContext,
-) -> Result<(Vec<Value>, Vec<bool>), Error> {
-    let mut rows = Vec::new();
-    let mut masked_rows = Vec::new();
-    let mut query = stmt.query([])?;
-    while let Some(row) = query.next()? {
-        let (value, masked) = row_to_object(row, column_names, redactor, ctx)?;
-        if masked && ctx.drop_masked_rows {
-            continue;
-        }
-        rows.push(value);
-        masked_rows.push(masked);
-    }
-    Ok((rows, masked_rows))
-}
-
-fn row_to_object(
-    row: &Row<'_>,
-    column_names: &[String],
-    redactor: &Redactor,
-    ctx: &RedactionContext,
-) -> Result<(Value, bool), Error> {
-    let mut map = Map::new();
-    let mut masked_row = false;
-    for (idx, name) in column_names.iter().enumerate() {
-        let value = match row.get_ref(idx)? {
-            ValueRef::Null => Value::Null,
-            ValueRef::Integer(i) => Value::from(i),
-            ValueRef::Real(r) => Value::from(r),
-            ValueRef::Text(text) => Value::String(String::from_utf8_lossy(text).into_owned()),
-            ValueRef::Blob(blob) => Value::String(hex::encode(blob)),
-        };
-        let (value, masked) = redactor.mask_column_value(name, value, ctx);
-        masked_row |= masked;
-        map.insert(name.clone(), value);
-    }
-    Ok((Value::Object(map), masked_row))
-}
-
 fn collect_event_rows(
     stmt: &mut Statement<'_>,
     column_names: &[String],
@@ -1578,9 +1573,11 @@ fn collect_event_rows(
         if let Some(idx) = payload_idx {
             let mut payload = payload_value.unwrap_or(Value::Null);
             if let Some(kind) = kind_value.as_deref() {
-                let masked = redactor.mask_payload_for_kind(kind, &mut payload, ctx);
-                masked_row |= masked;
+                masked_row |= redactor.mask_payload_for_kind(kind, &mut payload, ctx);
             }
+            // Also apply generic masking so payloads are protected even when kind is absent
+            // or schemas do not enumerate every email-bearing field.
+            masked_row |= redactor.mask_payload_generic(&mut payload, ctx);
             let payload_string =
                 serde_json::to_string(&payload).unwrap_or_else(|_| payload.to_string());
             map.insert(column_names[idx].clone(), Value::String(payload_string));
@@ -2023,6 +2020,60 @@ mod tests {
         assert!(
             !result.rows.is_empty(),
             "expected at least one row from events query"
+        );
+    }
+
+    #[test]
+    fn query_events_masks_payload_json() {
+        let kb = KnowledgeBase::new();
+        let delta = contact_delta("Mask Me", "maskme@example.com", 0.8);
+        kb.propose(delta).expect("insert contact event");
+
+        let result = kb
+            .query_events("SELECT id, kind, payload_json FROM events ORDER BY id DESC LIMIT 1")
+            .expect("query events succeeds");
+
+        let row = result.rows.first().expect("one row returned");
+        let payload_raw = row
+            .as_object()
+            .and_then(|obj| obj.get("payload_json"))
+            .and_then(Value::as_str)
+            .expect("payload_json as string");
+
+        assert!(
+            !payload_raw.contains("maskme@example.com"),
+            "payload should be redacted"
+        );
+        assert!(
+            result.masked_rows.first().copied().unwrap_or(false),
+            "masked_rows should mark masking"
+        );
+    }
+
+    #[test]
+    fn query_events_masks_payload_without_kind_column() {
+        let kb = KnowledgeBase::new();
+        let delta = contact_delta("No Kind", "nokind@example.com", 0.5);
+        kb.propose(delta).expect("insert contact event");
+
+        let result = kb
+            .query_events("SELECT payload_json FROM events ORDER BY id DESC LIMIT 1")
+            .expect("query events succeeds");
+
+        let row = result.rows.first().expect("one row returned");
+        let payload_raw = row
+            .as_object()
+            .and_then(|obj| obj.get("payload_json"))
+            .and_then(Value::as_str)
+            .expect("payload_json as string");
+
+        assert!(
+            !payload_raw.contains("nokind@example.com"),
+            "payload should be redacted even without kind column"
+        );
+        assert!(
+            result.masked_rows.first().copied().unwrap_or(false),
+            "masked_rows should mark masking"
         );
     }
 
