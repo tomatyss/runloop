@@ -460,23 +460,6 @@ fn default_opening_dir(paths: &RegistryPaths) -> Option<PathBuf> {
         .or_else(|| paths.openings.first().cloned())
 }
 
-fn agent_search_dirs(
-    root: Option<&PathBuf>,
-    overrides: &PathOverrides,
-    config: &Config,
-) -> Vec<PathBuf> {
-    if let Some(root) = root {
-        return vec![expand_tilde(root.clone())];
-    }
-    resolve_paths(config, overrides).agents
-}
-
-fn push_unique_dir(dirs: &mut Vec<PathBuf>, candidate: PathBuf) {
-    if !dirs.iter().any(|existing| existing == &candidate) {
-        dirs.push(candidate);
-    }
-}
-
 fn format_search_dirs(dirs: &[PathBuf]) -> String {
     dirs.iter()
         .map(|dir| dir.display().to_string())
@@ -1572,26 +1555,38 @@ exit 0
         let temp = tempdir().expect("temp");
         let override_root = temp.path().join("agents");
         let config = Config::default();
-        let dirs = agent_search_dirs(Some(&override_root), &PathOverrides::default(), &config);
-        assert_eq!(dirs, vec![override_root]);
+        fs::create_dir_all(&override_root).expect("override root");
+        let overrides = PathOverrides {
+            agents_dir: Some(override_root.clone()),
+            ..Default::default()
+        };
+        let dirs = resolve_paths(&config, &overrides).agents;
+        assert_eq!(dirs.first(), Some(&override_root));
     }
 
     #[test]
     fn list_appends_config_dirs_after_primary() {
         let temp = tempdir().expect("temp");
-        fs::create_dir_all(&temp).expect("create search dir");
-        let mut config = Config::default();
-        config.agents.search_dirs = vec![temp.path().to_string_lossy().into_owned()];
+        let workspace_root = temp.path().join("workspace");
+        fs::create_dir_all(&workspace_root).expect("workspace dir");
+        fs::write(workspace_root.join("Cargo.toml"), "[workspace]\nmembers=[]")
+            .expect("workspace manifest");
 
-        let dirs = agent_search_dirs(
-            None,
+        let config_dir = temp.path().join("custom-agents");
+        fs::create_dir_all(&config_dir).expect("create search dir");
+        let mut config = Config::default();
+        config.agents.search_dirs = vec![config_dir.to_string_lossy().into_owned()];
+
+        let dirs = resolve_paths(
+            &config,
             &PathOverrides {
-                cwd: Some(temp.path().to_path_buf()),
+                cwd: Some(workspace_root.clone()),
                 ..Default::default()
             },
-            &config,
-        );
-        assert!(dirs.contains(&temp.path().to_path_buf()));
+        )
+        .agents;
+        assert_eq!(dirs.first(), Some(&workspace_root.join("agents")));
+        assert!(dirs.contains(&config_dir));
     }
 
     #[test]
