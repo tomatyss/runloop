@@ -304,10 +304,15 @@ fn mask_email_option(
 impl KnowledgeBase {
     /// Construct an in-memory knowledge base (primarily for tests).
     pub fn new() -> Self {
-        Self::new_in_memory().expect("in-memory knowledge base")
+        Self::new_with_redaction(KbRedactionConfig::default())
     }
 
-    fn new_in_memory() -> Result<Self, Error> {
+    /// Construct an in-memory knowledge base with a custom redaction policy.
+    pub fn new_with_redaction(config: KbRedactionConfig) -> Self {
+        Self::new_in_memory(config).expect("in-memory knowledge base")
+    }
+
+    fn new_in_memory(config: KbRedactionConfig) -> Result<Self, Error> {
         let events = Connection::open_in_memory()?;
         configure_events(&events)?;
         apply_events_migrations(&events)?;
@@ -316,7 +321,7 @@ impl KnowledgeBase {
         configure_views(&views)?;
         apply_views_migrations(&views)?;
 
-        let redactor = Arc::new(Redactor::new(KbRedactionConfig::default()));
+        let redactor = Arc::new(Redactor::new(config));
 
         Ok(Self {
             events: Arc::new(Mutex::new(events)),

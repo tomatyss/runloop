@@ -40,7 +40,8 @@ fn lookup_contact(ctx: &AgentContext, query: &str) -> AgentResult<Option<Resolve
          ORDER BY trust DESC, source_event DESC \
          LIMIT 5"
     );
-    let rows = ctx.kb().query(&sql)?.rows;
+    let redaction = ctx.kb().redaction_context_privileged(true);
+    let rows = ctx.kb().query_with_ctx(&sql, &redaction)?.rows;
     let mut best: Option<ResolvedContact> = None;
     let mut best_score = 0.0f32;
 
@@ -163,12 +164,19 @@ fn capitalize_words(input: &str) -> String {
 mod tests {
     use super::*;
     use runloop_agents_common::AgentContext;
-    use runloop_core::ids::{AgentId, OpeningId, TraceId};
+    use runloop_core::{
+        config::KbRedactionConfig,
+        ids::{AgentId, OpeningId, TraceId},
+    };
     use runloop_kb::{KnowledgeBase, Materializer, Provenance, StateDelta};
     use serde_json::json;
 
     fn ctx() -> AgentContext {
-        let kb = KnowledgeBase::new();
+        let redaction = KbRedactionConfig {
+            allow_unredacted_admin: true,
+            ..KbRedactionConfig::default()
+        };
+        let kb = KnowledgeBase::new_with_redaction(redaction);
         let ctx = AgentContext::new(
             kb.clone(),
             None,
