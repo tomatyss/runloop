@@ -266,7 +266,9 @@ impl<'a> Iterator for TokenIter<'a> {
         loop {
             // Skip delimiters (whitespace or POSIX operators).
             while self.pos < len {
-                let ch = self.s[self.pos..].chars().next().unwrap();
+                let Some(ch) = self.s[self.pos..].chars().next() else {
+                    break;
+                };
                 if ch.is_whitespace() || matches!(ch, '|' | '&' | ';' | '<' | '>') {
                     self.pos += ch.len_utf8();
                 } else {
@@ -304,7 +306,9 @@ fn trim_token(token: &str) -> Option<&str> {
     let mut start = 0;
     let mut end = token.len();
     while start < end {
-        let ch = token[start..].chars().next().unwrap();
+        let Some(ch) = token[start..].chars().next() else {
+            break;
+        };
         if matches!(
             ch,
             '\'' | '"' | '`' | '(' | ')' | '{' | '}' | '[' | ']' | ',' | ':'
@@ -315,7 +319,9 @@ fn trim_token(token: &str) -> Option<&str> {
         }
     }
     while end > start {
-        let ch = token[..end].chars().next_back().unwrap();
+        let Some(ch) = token[..end].chars().next_back() else {
+            break;
+        };
         if matches!(
             ch,
             '\'' | '"' | '`' | '(' | ')' | '{' | '}' | '[' | ']' | ',' | ':'
