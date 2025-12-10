@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use runloop_agent_registry::AgentRegistry;
 use runloop_agents_common::{ActionDecision, ActionProposal, AgentResult, ConfirmationProvider};
 use runloop_core::Config;
-use runloop_core::config::{ModelProvider, ModelRoute, ProviderKind};
+use runloop_core::config::{ModelProvider, ModelRoute, ProviderKind, TestingConfig};
 use runloop_executor_local::build_executor;
 use runloop_openings::Runner;
 use serde::Deserialize;
@@ -75,6 +75,10 @@ async fn golden_compose_email() {
         );
         config.kb.root_dir = kb_root.to_string_lossy().into_owned();
         config.security.secrets.root = Some(secrets_dir.to_string_lossy().into_owned());
+        config.security.testing = Some(TestingConfig {
+            allow_missing_secrets: true,
+            ..Default::default()
+        });
         config.agents.search_dirs = vec![agents_dir.to_string_lossy().into_owned()];
         // Use local (null) provider
         config.models.default = "null:compose".into();

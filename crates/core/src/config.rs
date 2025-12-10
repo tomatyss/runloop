@@ -588,6 +588,12 @@ pub struct KbRedactionConfig {
     pub materialize_masked_columns: bool,
     #[serde(default = "default_url_param_denylist")]
     pub url_param_denylist: Vec<String>,
+    #[serde(default = "default_redaction_salt")]
+    pub salt: String,
+    #[serde(default)]
+    pub allow_unredacted_admin: bool,
+    #[serde(default)]
+    pub drop_masked_rows: bool,
 }
 
 impl Default for KbRedactionConfig {
@@ -598,6 +604,9 @@ impl Default for KbRedactionConfig {
             at_query_time: true,
             materialize_masked_columns: true,
             url_param_denylist: default_url_param_denylist(),
+            salt: default_redaction_salt(),
+            allow_unredacted_admin: false,
+            drop_masked_rows: false,
         }
     }
 }
@@ -922,6 +931,9 @@ fn default_url_param_denylist() -> Vec<String> {
         "signature".into(),
         "auth".into(),
     ]
+}
+fn default_redaction_salt() -> String {
+    "runloop-dev-salt".into()
 }
 fn default_secrets_provider() -> String {
     "stub".into()
@@ -1333,6 +1345,9 @@ fn known_keys_for_path(path: &Path) -> BTreeSet<&'static str> {
             "at_query_time",
             "materialize_masked_columns",
             "url_param_denylist",
+            "salt",
+            "allow_unredacted_admin",
+            "drop_masked_rows",
         ]),
         "security" => BTreeSet::from([
             "confirm_external_actions",

@@ -4,6 +4,7 @@ use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use bytes::Bytes;
 use futures_util::StreamExt;
@@ -15,6 +16,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
+use tokio::time::timeout;
 use tracing::{error, warn};
 
 use crate::{BusError, Message, PublisherKind, Server};
@@ -163,7 +165,13 @@ impl IpcClient {
             self.inner.pending.lock().remove(&id);
             return Err(err);
         }
-        rx.await.unwrap_or(Err(BusError::Closed))
+        match timeout(Duration::from_secs(1), rx).await {
+            Ok(result) => result.unwrap_or(Err(BusError::Closed)),
+            Err(_) => {
+                self.inner.pending.lock().remove(&id);
+                Err(BusError::Closed)
+            }
+        }
     }
 
     pub async fn subscribe(
@@ -191,13 +199,22 @@ impl IpcClient {
             self.inner.subscriptions.lock().remove(&sub_id);
             return Err(err);
         }
-        match ack_rx.await.unwrap_or(Err(BusError::Closed)) {
-            Ok(()) => {}
-            Err(err) => {
+        match timeout(Duration::from_secs(1), ack_rx).await {
+            Ok(ack) => match ack.unwrap_or(Err(BusError::Closed)) {
+                Ok(()) => {}
+                Err(err) => {
+                    self.inner.remove_subscription(sub_id);
+                    self.inner.pending.lock().remove(&id);
+                    return Err(err);
+                }
+            },
+            Err(_) => {
+                // Timed out waiting for ack; assume server is gone.
                 self.inner.remove_subscription(sub_id);
-                return Err(err);
+                self.inner.pending.lock().remove(&id);
+                return Err(BusError::Closed);
             }
-        }
+        };
         let inner = self.inner.clone();
         let dropper = Box::new(move || {
             inner.cleanup_subscription(sub_id);

@@ -53,10 +53,9 @@ async fn compose_email_opening_runs_end_to_end() {
     config.kb.root_dir = kb_root.to_string_lossy().into_owned();
     config.security.secrets.root = Some(secrets_dir.to_string_lossy().into_owned());
     config.security.testing = Some(TestingConfig {
-        broker_mode: None,
-        broker_seed: None,
         allow_missing_secrets: true,
         expose_raw_secrets: true,
+        ..Default::default()
     });
     config.agents.search_dirs = vec![agents_dir.to_string_lossy().into_owned()];
     config.models.default = "null:compose".into();

@@ -79,6 +79,10 @@ correctly.
   and source identifiers.
 - Structured JSON logs include `trace_id`, `opening_id`, `agent_id`; redaction
   filters scrub secrets or PII patterns before sink.
+- Knowledge Base redacts PII (emails) at read time unless the caller holds
+  `kb_read.contacts_raw`. Masking uses a salted deterministic token so joins
+  still work; privileged unmasking is audited and gated by config
+  (`kb.redaction.allow_unredacted_admin`).
 - Optional Ed25519 signatures protect message integrity when crossing trust
   boundaries or when `security.require_signed_messages = true`.
 

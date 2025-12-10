@@ -486,7 +486,7 @@ ids.
 
 ### K3. Redaction
 
-- [ ] KB returns redacted views for agents without `kb_read.contacts_raw`
+- [x] KB returns redacted views for agents without `kb_read.contacts_raw`
       (example: embeddings or masked emails); for MVP, you can implement a
       simple mask `j***@acme.com`.
 
@@ -788,6 +788,136 @@ INFO banner explaining how to add custom bundles.
 
 ---
 
+## Epic S — Code Quality & Technical Debt Remediation
+
+> Identified via comprehensive codebase review. Issues prioritized by severity
+> and impact on system stability.
+
+### S1. Critical: Panic-prone code paths (P0)
+
+- [ ] **Router classifier bounds checking** (`crates/router/src/classifier.rs:269,307,318`):
+      Replace unsafe `.unwrap()` on `chars().next()` with proper bounds checking
+      or `ok_or()` pattern. Current code will panic on empty/invalid UTF-8 input.
+- [ ] **KB query result handling** (`crates/kb/src/lib.rs:1972`): Replace chained
+      `.unwrap()` calls (`rows.first().unwrap().as_object().unwrap()`) with proper
+      error propagation.
+- [ ] **Route timeout handling** (`crates/rlp/src/main.rs:624,632,640`): Replace
+      `resolve_route_timeout().unwrap()` with graceful error handling in critical
+      path.
+
+**DoD:** `cargo clippy` passes without `unwrap_used` warnings in these files;
+fuzz tests added for classifier edge cases.
+
+### S2. Critical: Test coverage for foundational crates (P0)
+
+- [ ] **Bus crate tests** (`crates/bus/src/lib.rs`, 44KB): Add unit and integration
+      tests for IPC layer. Currently 0% coverage on foundational infrastructure.
+- [ ] **Model broker tests** (`crates/model-broker/src/lib.rs`, 79KB): Add tests
+      for request handling, caching, budgeting. Currently 0% coverage.
+- [ ] **Opening parser tests** (`crates/openings/src/parser.rs`, 42KB): Add parsing
+      tests for DSL. Complex logic currently untested.
+
+**DoD:** Each crate has ≥80% line coverage; CI enforces coverage thresholds.
+
+### S3. Critical: Security - Secrets handling (P0)
+
+- [ ] **Fix plaintext secrets storage** (`crates/runtime/src/secrets.rs:638`):
+      Implement actual encryption for age provider (currently stores plaintext
+      with TODO comment).
+- [ ] **Implement shared redactor**: Create redactor module used by broker, KB,
+      and log sinks to prevent secret leakage.
+- [ ] **Audit KB events for secrets**: Ensure `secret_id` indirection is enforced;
+      no raw secrets in `payload_json`.
+
+**DoD:** Grep for known secret patterns in KB returns zero matches; encryption
+tests verify age backend.
+
+### S4. High: Agent test coverage (P1)
+
+- [ ] **contact_resolver tests** (`crates/agents/contact_resolver/`): Add unit
+      tests for contact resolution logic.
+- [ ] **mailer tests** (`crates/agents/mailer/`): Add tests for email composition
+      and dry-run flow.
+- [ ] **critic tests** (`crates/agents/critic/`): Add tests for review logic and
+      tone checking.
+
+**DoD:** Each agent crate has test coverage; `cargo test` exercises happy path
+and error cases.
+
+### S5. High: Code duplication cleanup (P1)
+
+- [ ] **Extract environment variable helpers**: Consolidate unsafe env var
+      manipulation from `rlp/main.rs:611-617`, `rlp/shell.rs:738-754`,
+      `runtime/secrets.rs:572-574` into a shared utility.
+- [ ] **Extract bus test helpers**: Create test utilities for repeated setup
+      pattern in `bus/src/lib.rs` tests (~12 occurrences).
+- [ ] **Define constants for magic numbers**: Replace hardcoded values in
+      `bus/src/lib.rs` (TTL 1000ms, throughput 1200, threshold 600) with named
+      constants.
+
+**DoD:** No duplicate unsafe env var patterns; test helpers reduce boilerplate
+by ≥50%.
+
+### S6. High: Mutex poisoning resilience (P1)
+
+- [ ] **Bus registry recovery** (`crates/bus/src/lib.rs:143,175,256,685`): Replace
+      `.expect("registry poisoned")` with recovery logic or `parking_lot::Mutex`
+      which doesn't poison.
+- [ ] **Dedupe cache recovery** (`crates/bus/src/lib.rs:685`): Same pattern for
+      dedupe mutex.
+
+**DoD:** System recovers from thread panics without full crash; tests verify
+recovery.
+
+### S7. Medium: Architectural refactoring (P2)
+
+- [ ] **Split KB god object** (`crates/kb/src/lib.rs`, 2383 lines): Extract audit,
+      validation, and redaction into separate modules.
+- [ ] **Split model-broker** (`crates/model-broker/src/lib.rs`, 2535 lines):
+      Separate provider abstraction, caching, and budgeting into modules.
+- [ ] **Agent registry abstraction**: Remove direct agent imports from
+      `executor-local/src/lib.rs:7-17`; introduce dynamic registry.
+- [ ] **Unify error types**: Create proper error hierarchy instead of flattening
+      to strings in `core::Error`.
+
+**DoD:** No file exceeds 1000 lines; dependency graph shows cleaner layering.
+
+### S8. Medium: Async/sync impedance (P2)
+
+- [ ] **Async SQLite**: Replace `Mutex<Connection>` with async SQLite
+      (`tokio-rusqlite` or similar) to eliminate `spawn_blocking` in
+      `runloopd/src/main.rs:43,148`.
+- [ ] **Remove global bus registry**: Replace static `REGISTRY` in
+      `bus/src/lib.rs:32-33` with dependency injection.
+
+**DoD:** No `spawn_blocking` for DB operations; bus is fully injectable for
+testing.
+
+### S9. Medium: Roadmap alignment (P2)
+
+- [ ] **Add performance harness** (per M6.0): Implement lab capturing cold/warm
+      startup, message latency, RSS, throughput against 40ms/8MB targets.
+- [ ] **Router corpus completion** (per M3.0): Complete 50 shell + 50 agent
+      prompt corpus for validation.
+- [ ] **Replay fidelity test** (per M3.2): Implement deterministic replay
+      validation with hash matching.
+
+**DoD:** CI runs performance harness; router corpus achieves ≥98% accuracy.
+
+### S10. Low: Build and CI hygiene (P3)
+
+- [ ] **Enforce WASM builds in CI**: Add CI job that strictly builds
+      `crates/agents-wasm` with `wasm32-wasip1` target.
+- [ ] **Deprecate native agent execution**: Mark `executor-local` native path as
+      deprecated with compile-time warning.
+- [ ] **Remove clippy suppressions**: Address root causes for
+      `#[allow(clippy::too_many_arguments)]` (use builder pattern),
+      `#[allow(clippy::unused_async)]`, `#[allow(dead_code)]`.
+
+**DoD:** CI fails on WASM build regression; no new clippy suppressions added.
+
+---
+
 ## MVP Acceptance (end‑to‑end manual test)
 
 1. **Start daemon & monitor**
@@ -846,3 +976,5 @@ INFO banner explaining how to add custom bundles.
 12. Golden harness + docs sync (M & N)
 13. Prompt routing & shell integration (O)
 14. Refactoring & Optimization (Q)
+15. Agent discovery parity (R)
+16. **Code Quality & Tech Debt (S) — P0/P1 items before MVP gate**

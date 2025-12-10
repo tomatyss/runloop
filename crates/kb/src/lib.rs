@@ -2,6 +2,7 @@
 
 pub mod trace_store;
 
+use data_encoding::BASE32_NOPAD;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -12,11 +13,11 @@ use blake3::Hasher;
 use json_canon::to_string as jcs_to_string;
 use jsonschema::{Validator, error::ValidationError};
 use parking_lot::Mutex;
-use runloop_core::config::KbConfig;
+use runloop_core::config::{KbConfig, KbRedactionConfig};
 use runloop_core::ids::{AgentId, EventId, TraceId};
 use rusqlite::backup::Backup;
 use rusqlite::types::ValueRef;
-use rusqlite::{Connection, OpenFlags, Row, Statement, Transaction, params};
+use rusqlite::{Connection, OpenFlags, Statement, Transaction, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use thiserror::Error;
@@ -56,6 +57,7 @@ pub struct KnowledgeBase {
     views_path: Arc<PathBuf>,
     schemas: Arc<SchemaRegistry>,
     cap_audits: Arc<Mutex<Vec<CapAuditRecord>>>,
+    redactor: Arc<Redactor>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -92,13 +94,262 @@ pub struct KbBackupReport {
     pub views_backup_path: PathBuf,
 }
 
+#[derive(Clone, Debug)]
+pub struct RedactionContext {
+    pub pii_clearance: bool,
+    pub drop_masked_rows: bool,
+}
+
+impl RedactionContext {
+    pub fn masked(drop_masked_rows: bool) -> Self {
+        Self {
+            pii_clearance: false,
+            drop_masked_rows,
+        }
+    }
+
+    pub fn unredacted() -> Self {
+        Self {
+            pii_clearance: true,
+            drop_masked_rows: false,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct Redactor {
+    config: KbRedactionConfig,
+    salt: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PiiKind {
+    Email,
+}
+
+#[derive(Clone, Copy)]
+struct PiiField {
+    path: &'static str,
+    kind: PiiKind,
+}
+
+static EVENT_PII_FIELDS: &[(&str, &[PiiField])] = &[
+    (
+        "contact.upserted",
+        &[PiiField {
+            path: "/email",
+            kind: PiiKind::Email,
+        }],
+    ),
+    (
+        "email.sent",
+        &[
+            PiiField {
+                path: "/to",
+                kind: PiiKind::Email,
+            },
+            PiiField {
+                path: "/cc",
+                kind: PiiKind::Email,
+            },
+        ],
+    ),
+];
+
+fn pii_fields_for_kind(kind: &str) -> Option<&'static [PiiField]> {
+    EVENT_PII_FIELDS
+        .iter()
+        .find(|(k, _)| k == &kind)
+        .map(|(_, fields)| *fields)
+}
+
+impl Redactor {
+    fn new(config: KbRedactionConfig) -> Self {
+        Self {
+            salt: config.salt.as_bytes().to_vec(),
+            config,
+        }
+    }
+
+    fn default_context(&self) -> RedactionContext {
+        RedactionContext::masked(self.config.drop_masked_rows)
+    }
+
+    fn privileged_context(&self, allowed: bool) -> RedactionContext {
+        if allowed && self.config.allow_unredacted_admin {
+            RedactionContext::unredacted()
+        } else {
+            self.default_context()
+        }
+    }
+
+    fn should_mask(&self, ctx: &RedactionContext) -> bool {
+        self.config.mask_email && !ctx.pii_clearance
+    }
+
+    fn mask_column_value(
+        &self,
+        column: &str,
+        value: serde_json::Value,
+        ctx: &RedactionContext,
+    ) -> (serde_json::Value, bool) {
+        if !column_carries_email(column) {
+            return (value, false);
+        }
+        self.mask_email_value(value, ctx)
+    }
+
+    fn mask_payload_for_kind(
+        &self,
+        kind: &str,
+        payload: &mut serde_json::Value,
+        ctx: &RedactionContext,
+    ) -> bool {
+        let mut masked = false;
+        if let Some(fields) = pii_fields_for_kind(kind) {
+            for field in fields {
+                if let Some(slot) = payload.pointer_mut(field.path) {
+                    let original = std::mem::take(slot);
+                    let (masked_value, did_mask) =
+                        self.mask_value_for_kind(original, field.kind, ctx);
+                    *slot = masked_value;
+                    masked |= did_mask;
+                }
+            }
+        }
+        masked
+    }
+
+    fn mask_payload_generic(
+        &self,
+        payload: &mut serde_json::Value,
+        ctx: &RedactionContext,
+    ) -> bool {
+        self.mask_value_emails_deep(payload, ctx)
+    }
+
+    fn mask_value_emails_deep(
+        &self,
+        value: &mut serde_json::Value,
+        ctx: &RedactionContext,
+    ) -> bool {
+        match value {
+            serde_json::Value::String(s) => {
+                let (masked, did_mask) = self.mask_email_string(s, ctx);
+                *s = masked;
+                did_mask
+            }
+            serde_json::Value::Array(values) => {
+                let mut masked_any = false;
+                for item in values {
+                    masked_any |= self.mask_value_emails_deep(item, ctx);
+                }
+                masked_any
+            }
+            serde_json::Value::Object(map) => {
+                let mut masked_any = false;
+                for (_k, v) in map.iter_mut() {
+                    masked_any |= self.mask_value_emails_deep(v, ctx);
+                }
+                masked_any
+            }
+            _ => false,
+        }
+    }
+
+    fn mask_value_for_kind(
+        &self,
+        value: serde_json::Value,
+        kind: PiiKind,
+        ctx: &RedactionContext,
+    ) -> (serde_json::Value, bool) {
+        match kind {
+            PiiKind::Email => self.mask_email_value(value, ctx),
+        }
+    }
+
+    fn mask_email_value(
+        &self,
+        value: serde_json::Value,
+        ctx: &RedactionContext,
+    ) -> (serde_json::Value, bool) {
+        match value {
+            serde_json::Value::String(s) => {
+                let (masked, did_mask) = self.mask_email_string(&s, ctx);
+                (serde_json::Value::String(masked), did_mask)
+            }
+            serde_json::Value::Array(values) => {
+                let mut masked_any = false;
+                let mut out = Vec::with_capacity(values.len());
+                for item in values {
+                    let (masked, did_mask) = self.mask_email_value(item, ctx);
+                    masked_any |= did_mask;
+                    out.push(masked);
+                }
+                (serde_json::Value::Array(out), masked_any)
+            }
+            other => (other, false),
+        }
+    }
+
+    fn mask_email_string(&self, email: &str, ctx: &RedactionContext) -> (String, bool) {
+        if !self.should_mask(ctx) {
+            return (email.to_string(), false);
+        }
+        let (local, domain) = match email.split_once('@') {
+            Some(parts) => parts,
+            None => return (email.to_string(), false),
+        };
+        if local.is_empty() || domain.is_empty() {
+            return (email.to_string(), false);
+        }
+        let mut hasher = Hasher::new();
+        hasher.update(&self.salt);
+        hasher.update(local.as_bytes());
+        let digest = hasher.finalize();
+        let encoded = BASE32_NOPAD.encode(digest.as_bytes());
+        let short = encoded[..6].to_ascii_lowercase();
+        let first = local.chars().next().unwrap_or('x');
+        let masked = format!("{first}{short}@{domain}");
+        (masked, true)
+    }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+fn column_carries_email(column: &str) -> bool {
+    let lower = column.to_ascii_lowercase();
+    lower == "email" || lower == "to" || lower == "cc" || lower.ends_with("_email")
+}
+
+fn mask_email_option(
+    redactor: &Redactor,
+    email: Option<String>,
+    ctx: &RedactionContext,
+) -> (Option<String>, bool) {
+    match email {
+        Some(raw) => {
+            let (value, masked) = redactor.mask_email_value(Value::String(raw), ctx);
+            (value.as_str().map(|s| s.to_string()), masked)
+        }
+        None => (None, false),
+    }
+}
+
 impl KnowledgeBase {
     /// Construct an in-memory knowledge base (primarily for tests).
     pub fn new() -> Self {
-        Self::new_in_memory().expect("in-memory knowledge base")
+        Self::new_with_redaction(KbRedactionConfig::default())
     }
 
-    fn new_in_memory() -> Result<Self, Error> {
+    /// Construct an in-memory knowledge base with a custom redaction policy.
+    pub fn new_with_redaction(config: KbRedactionConfig) -> Self {
+        Self::new_in_memory(config).expect("in-memory knowledge base")
+    }
+
+    fn new_in_memory(config: KbRedactionConfig) -> Result<Self, Error> {
         let events = Connection::open_in_memory()?;
         configure_events(&events)?;
         apply_events_migrations(&events)?;
@@ -107,6 +358,8 @@ impl KnowledgeBase {
         configure_views(&views)?;
         apply_views_migrations(&views)?;
 
+        let redactor = Arc::new(Redactor::new(config));
+
         Ok(Self {
             events: Arc::new(Mutex::new(events)),
             views: Arc::new(Mutex::new(views)),
@@ -114,6 +367,7 @@ impl KnowledgeBase {
             views_path: Arc::new(PathBuf::from(":memory:views")),
             schemas: Arc::new(SchemaRegistry::load()?),
             cap_audits: Arc::new(Mutex::new(Vec::new())),
+            redactor,
         })
     }
 
@@ -136,6 +390,8 @@ impl KnowledgeBase {
         configure_views(&views)?;
         apply_views_migrations(&views)?;
 
+        let redactor = Arc::new(Redactor::new(config.redaction.clone()));
+
         Ok(Self {
             events: Arc::new(Mutex::new(events)),
             views: Arc::new(Mutex::new(views)),
@@ -143,6 +399,7 @@ impl KnowledgeBase {
             views_path: Arc::new(views_path),
             schemas: Arc::new(SchemaRegistry::load()?),
             cap_audits: Arc::new(Mutex::new(Vec::new())),
+            redactor,
         })
     }
 
@@ -159,6 +416,16 @@ impl KnowledgeBase {
             apply_views_migrations(&conn)?;
         }
         Ok(())
+    }
+
+    /// Default redaction context reflecting KB configuration.
+    pub fn redaction_context(&self) -> RedactionContext {
+        self.redactor.default_context()
+    }
+
+    /// Privileged redaction context (no masking). Callers should audit access.
+    pub fn redaction_context_privileged(&self, allowed: bool) -> RedactionContext {
+        self.redactor.privileged_context(allowed)
     }
 
     /// Verify canonical payloads/provenance and stored hashes.
@@ -381,6 +648,12 @@ impl KnowledgeBase {
 
     /// Execute a read-only SQL query against the materialized view database.
     pub fn query(&self, sql: &str) -> Result<QueryResult, Error> {
+        let ctx = self.redaction_context();
+        self.query_with_ctx(sql, &ctx)
+    }
+
+    /// Execute a read-only SQL query with an explicit redaction context.
+    pub fn query_with_ctx(&self, sql: &str, ctx: &RedactionContext) -> Result<QueryResult, Error> {
         let conn = self.views.lock();
         let mut stmt = conn.prepare(sql)?;
         if !stmt.readonly() {
@@ -391,15 +664,27 @@ impl KnowledgeBase {
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<_>>();
-        let rows = collect_rows(&mut stmt, &column_names)?;
+        let (rows, masked_rows) =
+            collect_event_rows(&mut stmt, &column_names, &self.redactor, ctx)?;
         Ok(QueryResult {
             columns: column_names,
             rows,
+            masked_rows,
         })
     }
 
     /// Execute a read-only SQL query against the ledger events database.
     pub fn query_events(&self, sql: &str) -> Result<QueryResult, Error> {
+        let ctx = self.redaction_context();
+        self.query_events_with_ctx(sql, &ctx)
+    }
+
+    /// Execute a read-only SQL query against the ledger with explicit redaction context.
+    pub fn query_events_with_ctx(
+        &self,
+        sql: &str,
+        ctx: &RedactionContext,
+    ) -> Result<QueryResult, Error> {
         let conn = self.events.lock();
         let mut stmt = conn.prepare(sql)?;
         if !stmt.readonly() {
@@ -410,15 +695,27 @@ impl KnowledgeBase {
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<_>>();
-        let rows = collect_rows(&mut stmt, &column_names)?;
+        let (rows, masked_rows) =
+            collect_event_rows(&mut stmt, &column_names, &self.redactor, ctx)?;
         Ok(QueryResult {
             columns: column_names,
             rows,
+            masked_rows,
         })
     }
 
     /// Perform a keyword search across common domains (contacts, artifacts, events, runs).
     pub fn search(&self, keyword: &str) -> Result<Vec<SearchHit>, Error> {
+        let ctx = self.redaction_context();
+        self.search_with_ctx(keyword, &ctx)
+    }
+
+    /// Perform a keyword search with explicit redaction context.
+    pub fn search_with_ctx(
+        &self,
+        keyword: &str,
+        ctx: &RedactionContext,
+    ) -> Result<Vec<SearchHit>, Error> {
         let like = format!("%{}%", keyword);
         let mut hits = Vec::new();
 
@@ -430,17 +727,24 @@ impl KnowledgeBase {
                  WHERE name LIKE ?1 OR email LIKE ?1 OR org LIKE ?1",
             )?;
             let rows = stmt.query_map(params![&like], |row| {
+                let raw_email: Option<String> = row.get::<_, Option<String>>(2)?;
+                let (masked_email, masked) = mask_email_option(&self.redactor, raw_email, ctx);
                 Ok(SearchHit::contact(
                     row.get(0)?,
                     row.get::<_, Option<String>>(1)?,
-                    row.get::<_, Option<String>>(2)?,
+                    masked_email,
                     row.get::<_, Option<String>>(3)?,
                     row.get::<_, f64>(4)?,
                     row.get::<_, i64>(5)?,
+                    masked,
                 ))
             })?;
             for hit in rows {
-                hits.push(hit?);
+                let hit = hit?;
+                if hit.masked && ctx.drop_masked_rows {
+                    continue;
+                }
+                hits.push(hit);
             }
         }
 
@@ -457,6 +761,7 @@ impl KnowledgeBase {
                     row.get::<_, String>(2)?,
                     row.get::<_, Option<String>>(3)?,
                     row.get::<_, i64>(4)?,
+                    false,
                 ))
             })?;
             for hit in rows {
@@ -508,6 +813,16 @@ impl KnowledgeBase {
 
     /// Return ordered source events associated with a domain key.
     pub fn why(&self, key: &str) -> Result<Vec<EventRecord>, Error> {
+        let ctx = self.redaction_context();
+        self.why_with_ctx(key, &ctx)
+    }
+
+    /// Return ordered source events with explicit redaction context.
+    pub fn why_with_ctx(
+        &self,
+        key: &str,
+        ctx: &RedactionContext,
+    ) -> Result<Vec<EventRecord>, Error> {
         let candidate_keys = entity_key_candidates(key);
 
         let conn = self.views.lock();
@@ -538,7 +853,14 @@ impl KnowledgeBase {
              ORDER BY id ASC",
         )?;
         for id in event_ids {
-            if let Some(record) = load_event(&mut stmt, id)? {
+            if let Some(mut record) = load_event(&mut stmt, id)? {
+                let masked =
+                    self.redactor
+                        .mask_payload_for_kind(&record.kind, &mut record.payload, ctx);
+                record.masked = masked;
+                if masked && ctx.drop_masked_rows {
+                    continue;
+                }
                 results.push(record);
             }
         }
@@ -684,6 +1006,8 @@ static EMBEDDED_SCHEMAS: &[(&str, &str)] = &[
 pub struct QueryResult {
     pub columns: Vec<String>,
     pub rows: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub masked_rows: Vec<bool>,
 }
 
 /// Search hit spanning standard KB domains.
@@ -695,6 +1019,8 @@ pub struct SearchHit {
     pub source_event: EventId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extra: Option<Value>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub masked: bool,
 }
 
 impl SearchHit {
@@ -705,6 +1031,7 @@ impl SearchHit {
         org: Option<String>,
         trust: f64,
         source_event: i64,
+        masked: bool,
     ) -> Self {
         let mut extra = Map::new();
         if let Some(email) = email {
@@ -722,6 +1049,7 @@ impl SearchHit {
             label: name.unwrap_or_else(|| "contact".into()),
             source_event: EventId(source_event),
             extra: Some(Value::Object(extra)),
+            masked,
         }
     }
 
@@ -731,6 +1059,7 @@ impl SearchHit {
         path: String,
         summary: Option<String>,
         source_event: i64,
+        masked: bool,
     ) -> Self {
         let mut extra = Map::new();
         extra.insert("kind".into(), Value::String(kind));
@@ -744,6 +1073,7 @@ impl SearchHit {
             label: "artifact".into(),
             source_event: EventId(source_event),
             extra: Some(Value::Object(extra)),
+            masked,
         }
     }
 
@@ -756,6 +1086,7 @@ impl SearchHit {
             label: kind,
             source_event: EventId(id),
             extra: Some(Value::Object(extra)),
+            masked: false,
         }
     }
 
@@ -769,6 +1100,7 @@ impl SearchHit {
             label: status,
             source_event: EventId(source_event),
             extra: Some(Value::Object(extra)),
+            masked: false,
         }
     }
 }
@@ -793,6 +1125,8 @@ pub struct EventRecord {
     pub scope: String,
     pub payload: Value,
     pub provenance: Value,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub masked: bool,
 }
 
 /// Applies ledger events into materialized views.
@@ -1175,34 +1509,87 @@ fn load_event(stmt: &mut Statement<'_>, id: i64) -> Result<Option<EventRecord>, 
             scope: row.get::<_, String>(4)?,
             payload: serde_json::from_str(&payload).unwrap_or(Value::String(payload)),
             provenance: serde_json::from_str(&provenance).unwrap_or(Value::String(provenance)),
+            masked: false,
         }))
     } else {
         Ok(None)
     }
 }
 
-fn collect_rows(stmt: &mut Statement<'_>, column_names: &[String]) -> Result<Vec<Value>, Error> {
+fn collect_event_rows(
+    stmt: &mut Statement<'_>,
+    column_names: &[String],
+    redactor: &Redactor,
+    ctx: &RedactionContext,
+) -> Result<(Vec<Value>, Vec<bool>), Error> {
+    let kind_idx = column_names
+        .iter()
+        .position(|c| c.eq_ignore_ascii_case("kind"));
+    let payload_idx = column_names
+        .iter()
+        .position(|c| c.eq_ignore_ascii_case("payload_json"));
+
     let mut rows = Vec::new();
+    let mut masked_rows = Vec::new();
     let mut query = stmt.query([])?;
     while let Some(row) = query.next()? {
-        rows.push(row_to_object(row, column_names)?);
-    }
-    Ok(rows)
-}
+        let mut map = Map::new();
+        let mut masked_row = false;
+        let mut kind_value: Option<String> = None;
+        let mut payload_value: Option<Value> = None;
 
-fn row_to_object(row: &Row<'_>, column_names: &[String]) -> Result<Value, Error> {
-    let mut map = Map::new();
-    for (idx, name) in column_names.iter().enumerate() {
-        let value = match row.get_ref(idx)? {
-            ValueRef::Null => Value::Null,
-            ValueRef::Integer(i) => Value::from(i),
-            ValueRef::Real(r) => Value::from(r),
-            ValueRef::Text(text) => Value::String(String::from_utf8_lossy(text).into_owned()),
-            ValueRef::Blob(blob) => Value::String(hex::encode(blob)),
-        };
-        map.insert(name.clone(), value);
+        for (idx, name) in column_names.iter().enumerate() {
+            let value = match row.get_ref(idx)? {
+                ValueRef::Null => Value::Null,
+                ValueRef::Integer(i) => Value::from(i),
+                ValueRef::Real(r) => Value::from(r),
+                ValueRef::Text(text) => Value::String(String::from_utf8_lossy(text).into_owned()),
+                ValueRef::Blob(blob) => Value::String(hex::encode(blob)),
+            };
+
+            if Some(idx) == kind_idx {
+                if let Value::String(s) = &value {
+                    kind_value = Some(s.clone());
+                }
+                map.insert(name.clone(), value);
+                continue;
+            }
+
+            if Some(idx) == payload_idx {
+                payload_value = Some(match value {
+                    Value::String(ref s) => {
+                        serde_json::from_str(s).unwrap_or(Value::String(s.clone()))
+                    }
+                    other => other,
+                });
+                continue;
+            }
+
+            let (value, masked) = redactor.mask_column_value(name, value, ctx);
+            masked_row |= masked;
+            map.insert(name.clone(), value);
+        }
+
+        if let Some(idx) = payload_idx {
+            let mut payload = payload_value.unwrap_or(Value::Null);
+            if let Some(kind) = kind_value.as_deref() {
+                masked_row |= redactor.mask_payload_for_kind(kind, &mut payload, ctx);
+            }
+            // Also apply generic masking so payloads are protected even when kind is absent
+            // or schemas do not enumerate every email-bearing field.
+            masked_row |= redactor.mask_payload_generic(&mut payload, ctx);
+            let payload_string =
+                serde_json::to_string(&payload).unwrap_or_else(|_| payload.to_string());
+            map.insert(column_names[idx].clone(), Value::String(payload_string));
+        }
+
+        if masked_row && ctx.drop_masked_rows {
+            continue;
+        }
+        rows.push(Value::Object(map));
+        masked_rows.push(masked_row);
     }
-    Ok(Value::Object(map))
+    Ok((rows, masked_rows))
 }
 
 fn configure_events(conn: &Connection) -> Result<(), Error> {
@@ -1449,6 +1836,27 @@ mod tests {
         )
     }
 
+    fn seed_contact(kb: &KnowledgeBase, email: &str) {
+        let payload = json!({
+            "name": "John Smith",
+            "email": email,
+            "org": "Acme",
+            "trust": 0.9,
+            "evidence": []
+        });
+        let provenance = Provenance {
+            trace_id: "trace:test".into(),
+            opening_id: "opening:test".into(),
+            agent_id: "agent:test".into(),
+            inputs_hash: None,
+            rationale: None,
+        };
+        let delta = StateDelta::new("contact.upserted", "agent:test", None, payload, provenance);
+        kb.propose(delta).expect("seed contact");
+        let materializer = Materializer::new(kb.clone());
+        while materializer.sync().expect("sync materializer") {}
+    }
+
     #[test]
     fn duplicate_hash_rejected() {
         let kb = KnowledgeBase::new();
@@ -1486,6 +1894,55 @@ mod tests {
             ),
             other => panic!("unexpected error variant: {other:?}"),
         }
+    }
+
+    #[test]
+    fn redacts_contact_search_by_default() {
+        let kb = KnowledgeBase::new();
+        seed_contact(&kb, "john@acme.com");
+
+        let hits = kb.search("john").expect("search succeeds");
+        let contact = hits
+            .iter()
+            .find(|h| h.domain == SearchDomain::Contacts)
+            .expect("contact hit");
+        let email = contact
+            .extra
+            .as_ref()
+            .and_then(|obj| obj.get("email"))
+            .and_then(Value::as_str)
+            .expect("masked email present");
+
+        assert!(contact.masked, "contact row should be marked masked");
+        assert_ne!(email, "john@acme.com", "email should be masked");
+    }
+
+    #[test]
+    fn privileged_context_shows_clear_email() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut cfg = KbConfig::default();
+        cfg.root_dir = tmp.path().to_string_lossy().into_owned();
+        cfg.redaction.allow_unredacted_admin = true;
+        let kb = KnowledgeBase::open(&cfg).expect("kb open");
+        seed_contact(&kb, "john@acme.com");
+
+        let ctx = kb.redaction_context_privileged(true);
+        let hits = kb
+            .search_with_ctx("john", &ctx)
+            .expect("unredacted search succeeds");
+        let contact = hits
+            .iter()
+            .find(|h| h.domain == SearchDomain::Contacts)
+            .expect("contact hit");
+        let email = contact
+            .extra
+            .as_ref()
+            .and_then(|obj| obj.get("email"))
+            .and_then(Value::as_str)
+            .expect("email present");
+
+        assert!(!contact.masked, "privileged context should not mask");
+        assert_eq!(email, "john@acme.com");
     }
 
     #[test]
@@ -1563,6 +2020,60 @@ mod tests {
         assert!(
             !result.rows.is_empty(),
             "expected at least one row from events query"
+        );
+    }
+
+    #[test]
+    fn query_events_masks_payload_json() {
+        let kb = KnowledgeBase::new();
+        let delta = contact_delta("Mask Me", "maskme@example.com", 0.8);
+        kb.propose(delta).expect("insert contact event");
+
+        let result = kb
+            .query_events("SELECT id, kind, payload_json FROM events ORDER BY id DESC LIMIT 1")
+            .expect("query events succeeds");
+
+        let row = result.rows.first().expect("one row returned");
+        let payload_raw = row
+            .as_object()
+            .and_then(|obj| obj.get("payload_json"))
+            .and_then(Value::as_str)
+            .expect("payload_json as string");
+
+        assert!(
+            !payload_raw.contains("maskme@example.com"),
+            "payload should be redacted"
+        );
+        assert!(
+            result.masked_rows.first().copied().unwrap_or(false),
+            "masked_rows should mark masking"
+        );
+    }
+
+    #[test]
+    fn query_events_masks_payload_without_kind_column() {
+        let kb = KnowledgeBase::new();
+        let delta = contact_delta("No Kind", "nokind@example.com", 0.5);
+        kb.propose(delta).expect("insert contact event");
+
+        let result = kb
+            .query_events("SELECT payload_json FROM events ORDER BY id DESC LIMIT 1")
+            .expect("query events succeeds");
+
+        let row = result.rows.first().expect("one row returned");
+        let payload_raw = row
+            .as_object()
+            .and_then(|obj| obj.get("payload_json"))
+            .and_then(Value::as_str)
+            .expect("payload_json as string");
+
+        assert!(
+            !payload_raw.contains("nokind@example.com"),
+            "payload should be redacted even without kind column"
+        );
+        assert!(
+            result.masked_rows.first().copied().unwrap_or(false),
+            "masked_rows should mark masking"
         );
     }
 
