@@ -22,7 +22,7 @@ parking_lot = "0.12"
 once_cell = "1.19"
 dashmap = "6"
 async-trait = "0.1"
-toml = { version = "0.8", features = ["parse"] }
+toml = { version = "0.9", features = ["parse"] }
 directories = "6.0"
 camino = "1.1"
 cfg-if = "1.0"
