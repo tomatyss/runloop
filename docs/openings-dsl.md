@@ -142,9 +142,11 @@ opening "compose_email" {
   nodes:
     contacts := agent("contact_resolver", query="{{params.recipient}}")
     context  := agent("context_gatherer", topic="{{params.topic}}")
-    draft    := agent("writer", model="mixtral-8x7b", topic="{{params.topic}}", tone="neutral-friendly")
+    draft    := agent("writer", model="mixtral-8x7b",
+                      topic="{{params.topic}}", tone="neutral-friendly")
     review   := agent("critic")
-    send     := agent("mailer", require_human_confirm=true, topic="{{params.topic}}")
+    send     := agent("mailer", require_human_confirm=true,
+                      topic="{{params.topic}}")
   edges:
     contacts.out -> draft.recipients
     contacts.out -> context.contact
