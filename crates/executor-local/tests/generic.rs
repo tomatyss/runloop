@@ -30,6 +30,16 @@ async fn generic_agent_runs_via_registry() {
     let source_wasm = repo_root.join("agents/contact_resolver/bin/contact_resolver.wasm");
     let source_policy = repo_root.join("agents/contact_resolver/policy.caps");
 
+    // Skip gracefully if WASM hasn't been built yet
+    if !source_wasm.exists() {
+        eprintln!(
+            "Skipping generic_agent_runs_via_registry: WASM not found at {:?}\n\
+             Run `just build-agents-wasm` to build the required artifacts.",
+            source_wasm
+        );
+        return;
+    }
+
     let tmp = tempdir().expect("temp dir");
     let agent_root = tmp.path().join("agents");
     let bundle_dir = agent_root.join("demo_contact");
