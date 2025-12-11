@@ -35,6 +35,7 @@ use runloop_openings::{
     LadderHop, NodeKind, Opening, ReplayMismatch, RunReport, RunTrace, Runner, RunnerError,
     SchemaHintFragment, parse_opening_str, replay,
 };
+use runloop_registry::{PathOverrides, RegistryPaths, resolve_opening_path, resolve_paths};
 use runloop_rmp::{Header, decode_payload, encode_payload};
 use runloop_router::{Classification as RouterClassification, Route as RouterRoute, Router};
 use serde::Serialize;
@@ -64,6 +65,27 @@ const ROUTE_EXIT_CODE_AGENT: i32 = 11;
 const ROUTE_EXIT_CODE_TIMEOUT: i32 = 12;
 const ROUTE_DEFAULT_TIMEOUT_MS: u64 = 200;
 
+#[derive(Args, Debug, Clone, Default)]
+struct PathOverridesArgs {
+    /// Override agent search dir (prepended to configured agents.search_dirs).
+    #[arg(long = "agents-dir", global = true, value_name = "PATH")]
+    agents_dir: Option<PathBuf>,
+    /// Override opening search dir (prepended to configured openings.search_dirs).
+    #[arg(long = "openings-dir", global = true, value_name = "PATH")]
+    openings_dir: Option<PathBuf>,
+}
+
+impl PathOverridesArgs {
+    fn to_overrides(&self) -> PathOverrides {
+        PathOverrides {
+            agents_dir: self.agents_dir.clone(),
+            openings_dir: self.openings_dir.clone(),
+            cwd: env::current_dir().ok(),
+            workspace_root: None,
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "rlp",
@@ -72,6 +94,8 @@ const ROUTE_DEFAULT_TIMEOUT_MS: u64 = 200;
     long_about = None
 )]
 struct Cli {
+    #[command(flatten)]
+    paths: PathOverridesArgs,
     #[command(subcommand)]
     command: Commands,
 }
@@ -320,6 +344,8 @@ enum CliError {
     InvalidParams(String),
     #[error("invalid trace: {0}")]
     InvalidTrace(String),
+    #[error("opening not found: {0}")]
+    OpeningNotFound(String),
     #[error("trace {0} not found in knowledge base")]
     TraceNotFound(TraceId),
     #[error("opening run failed (trace {0})")]
@@ -431,6 +457,7 @@ async fn run() -> Result<i32, CliError> {
         return Ok(0);
     }
     let cli = Cli::parse();
+    let path_overrides = cli.paths.clone();
     match cli.command {
         Commands::Route(args) => handle_route(args).await,
         Commands::Why(args) => {
@@ -438,11 +465,11 @@ async fn run() -> Result<i32, CliError> {
             Ok(0)
         }
         Commands::Run(args) => {
-            handle_run(args).await?;
+            handle_run(args, &path_overrides).await?;
             Ok(0)
         }
         Commands::Replay(args) => {
-            handle_replay(args).await?;
+            handle_replay(args, &path_overrides).await?;
             Ok(0)
         }
         Commands::Trace(args) => {
@@ -463,7 +490,8 @@ async fn run() -> Result<i32, CliError> {
         }
         Commands::Agent(cmd) => {
             let config = Config::load()?;
-            handle_agent(cmd, &config)?;
+            let overrides = path_overrides.to_overrides();
+            handle_agent(cmd, &config, &overrides)?;
             Ok(0)
         }
         Commands::Version => {
@@ -689,16 +717,37 @@ async fn handle_why(args: WhyArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-async fn handle_run(args: RunArgs) -> Result<(), CliError> {
+async fn handle_run(args: RunArgs, path_overrides: &PathOverridesArgs) -> Result<(), CliError> {
     let config = Config::load()?;
-    let prepared = prepare_opening(&args.path, args.params.as_deref())?;
+    let registry_paths = resolve_paths(&config, &path_overrides.to_overrides());
+    if let Some(demo_dir) = &registry_paths.demo_agents {
+        eprintln!(
+            "info: using demo agent bundles (no agent search dirs found); add bundles under {} or set --agents-dir",
+            demo_dir.display()
+        );
+    }
+    for warning in &registry_paths.warnings {
+        eprintln!("warning: {warning}");
+    }
+    if !args.local && path_overrides.agents_dir.is_some() {
+        eprintln!(
+            "info: --agents-dir affects CLI lookup; ensure the daemon user can read the same path"
+        );
+    }
+    if !args.local && path_overrides.openings_dir.is_some() {
+        eprintln!(
+            "info: --openings-dir affects CLI lookup; ensure the daemon config uses the same openings dir"
+        );
+    }
+    let prepared = prepare_opening(&args.path, args.params.as_deref(), &registry_paths.openings)?;
     let agent_refs = prepared.opening.agent_refs();
-    let registry = AgentRegistry::new(config.agents.search_dirs.clone());
+    let registry = AgentRegistry::new(registry_paths.agents.clone());
 
     if args.local {
         let descriptors = load_descriptors_local(&registry, &agent_refs)?;
         validate_opening_params(&prepared.opening, &descriptors, args.errors_format)?;
-        return run_opening_locally(&config, prepared, args.trace_out.clone()).await;
+        return run_opening_locally(&config, &registry_paths, prepared, args.trace_out.clone())
+            .await;
     }
 
     let mut client = DaemonClient::connect(&config).await?;
@@ -736,7 +785,10 @@ async fn handle_run(args: RunArgs) -> Result<(), CliError> {
     }
 }
 
-async fn handle_replay(args: ReplayArgs) -> Result<(), CliError> {
+async fn handle_replay(
+    args: ReplayArgs,
+    path_overrides: &PathOverridesArgs,
+) -> Result<(), CliError> {
     let config = Config::load()?;
     let replay_source = ReplaySource::parse(&args.trace_ref)?;
     let trace = match replay_source {
@@ -744,10 +796,21 @@ async fn handle_replay(args: ReplayArgs) -> Result<(), CliError> {
         ReplaySource::TraceId(trace_id) => load_trace_from_kb(&config, trace_id)?,
     };
 
-    let opening_source = fs::read_to_string(&args.opening)?;
+    let registry_paths = resolve_paths(&config, &path_overrides.to_overrides());
+    if let Some(demo_dir) = &registry_paths.demo_agents {
+        eprintln!(
+            "info: using demo agent bundles (no agent search dirs found); add bundles under {} or set --agents-dir",
+            demo_dir.display()
+        );
+    }
+    for warning in &registry_paths.warnings {
+        eprintln!("warning: {warning}");
+    }
+    let opening_path = resolve_opening_path(&args.opening, &registry_paths.openings)
+        .map_err(|err| CliError::OpeningNotFound(err.to_string()))?;
+    let opening_source = fs::read_to_string(&opening_path)?;
     let opening = parse_opening_str(&opening_source)?;
-
-    let executor = build_executor(config)?;
+    let executor = build_executor(config, &registry_paths)?;
     let report = replay(executor.as_ref(), &opening, &trace).await?;
 
     println!("trace id: {}", trace.trace_id);
@@ -1884,11 +1947,11 @@ fn summarize_event(event: &EventRecord) -> String {
     summarize_json(&event.payload, 48)
 }
 
-fn build_executor(config: Config) -> Result<Arc<LocalExecutor>, CliError> {
+fn build_executor(config: Config, paths: &RegistryPaths) -> Result<Arc<LocalExecutor>, CliError> {
     let confirmation = Arc::new(CliConfirmationProvider::new(
         config.security.confirm_external_actions,
     ));
-    let registry = Arc::new(AgentRegistry::new(config.agents.search_dirs.clone()));
+    let registry = Arc::new(AgentRegistry::new(paths.agents.clone()));
     let executor = build_local_executor(config, confirmation, registry)?;
     Ok(executor)
 }
@@ -2271,8 +2334,14 @@ impl HintLogger {
     }
 }
 
-fn prepare_opening(path: &str, params_override: Option<&str>) -> Result<PreparedOpening, CliError> {
-    let source = fs::read_to_string(path)?;
+fn prepare_opening(
+    path: &str,
+    params_override: Option<&str>,
+    search_paths: &[PathBuf],
+) -> Result<PreparedOpening, CliError> {
+    let resolved = resolve_opening_path(path, search_paths)
+        .map_err(|err| CliError::OpeningNotFound(err.to_string()))?;
+    let source = fs::read_to_string(&resolved)?;
     let mut doc: YamlValue = serde_yaml::from_str(&source)
         .map_err(|err| CliError::InvalidTrace(format!("invalid YAML: {err}")))?;
 
@@ -2316,6 +2385,7 @@ fn prepare_opening(path: &str, params_override: Option<&str>) -> Result<Prepared
 
 async fn run_opening_locally(
     config: &Config,
+    paths: &RegistryPaths,
     prepared: PreparedOpening,
     trace_out: Option<PathBuf>,
 ) -> Result<(), CliError> {
@@ -2325,7 +2395,7 @@ async fn run_opening_locally(
         params,
         ..
     } = prepared;
-    let executor = build_executor(config.clone())?;
+    let executor = build_executor(config.clone(), paths)?;
     let trace_store = TraceStore::open(&config.kb, CLI_AGENT_ID, Some("user".into()))?;
     let runner = Runner::new(opening, executor);
     let mut emitter =

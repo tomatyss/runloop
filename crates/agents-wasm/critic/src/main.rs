@@ -3,6 +3,9 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 
+const MIN_WORDS: usize = 10;
+const MAX_WORDS: usize = 180;
+
 #[allow(unsafe_code)]
 mod host {
     #[link(wasm_import_module = "runloop")]
@@ -24,12 +27,6 @@ struct Cli {
     draft_base64: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct DraftInput {
-    #[serde(default)]
-    body_md: String,
-}
-
 #[derive(Debug, Serialize)]
 struct CriticOutput {
     ok: bool,
@@ -46,8 +43,8 @@ struct ReviewNotes {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     host::signal_ready();
-    let draft: DraftInput = decode_json(&cli.draft_base64, "draft")?;
-    let review = critique(&draft.body_md);
+    let draft: DraftArtifact = decode_json(&cli.draft_base64, "draft")?;
+    let review = critique(&draft);
     println!("{}", serde_json::to_string_pretty(&review)?);
     Ok(())
 }
@@ -59,25 +56,134 @@ fn decode_json<T: for<'de> Deserialize<'de>>(encoded: &str, label: &str) -> Resu
     serde_json::from_slice(&bytes).with_context(|| format!("invalid {label} JSON"))
 }
 
-fn critique(body: &str) -> CriticOutput {
+#[derive(Debug, Deserialize)]
+struct DraftArtifact {
+    #[serde(default)]
+    body_md: String,
+    #[serde(default)]
+    word_count: usize,
+}
+
+fn critique(draft: &DraftArtifact) -> CriticOutput {
     let mut suggestions = Vec::new();
-    if body.split_whitespace().count() < 40 {
-        suggestions.push("Add more detail so the recipient has clear next steps.".into());
+    let mut blocking = false;
+
+    let word_count = effective_word_count(&draft.body_md, draft.word_count);
+
+    if word_count < MIN_WORDS {
+        blocking = true;
+        suggestions.push(format!(
+            "Add more detail so the draft reaches at least {MIN_WORDS} words (currently {}).",
+            word_count
+        ));
     }
-    if !body.to_ascii_lowercase().contains("follow up") {
-        suggestions.push("Explicitly mention that this is a follow-up on the topic.".into());
+    if word_count > MAX_WORDS {
+        blocking = true;
+        suggestions.push(format!(
+            "Trim the draft to at most {MAX_WORDS} words (currently {}).",
+            word_count
+        ));
     }
-    let ok = suggestions.is_empty();
-    let summary = if ok {
-        "Draft looks good overall."
-    } else {
-        "Draft needs adjustments."
+    if !has_thank_you(&draft.body_md) {
+        suggestions.push("Consider closing with a courteous thank-you.".into());
+    }
+
+    let ok = !blocking;
+    let summary = match (ok, suggestions.is_empty()) {
+        (true, true) => "Draft looks good.",
+        (true, false) => "Draft looks good with minor polish.",
+        (false, _) => "Draft needs attention.",
     };
+
     CriticOutput {
         ok,
         notes: ReviewNotes {
             summary: summary.into(),
             suggestions,
         },
+    }
+}
+
+fn effective_word_count(body: &str, reported: usize) -> usize {
+    if reported > 0 {
+        reported
+    } else {
+        body.split_whitespace().count()
+    }
+}
+
+fn has_thank_you(body: &str) -> bool {
+    let body_lower = body.to_ascii_lowercase();
+    body_lower.contains("thanks")
+        || body_lower.contains("thank you")
+        || body_lower.contains("thank-you")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn draft(body: &str) -> DraftArtifact {
+        DraftArtifact {
+            body_md: body.into(),
+            word_count: body.split_whitespace().count(),
+        }
+    }
+
+    #[test]
+    fn marks_overlong_as_blocking() {
+        let body = "word ".repeat(200);
+        let review = critique(&draft(&body));
+        assert!(!review.ok);
+        assert_eq!(review.notes.summary, "Draft needs attention.");
+        assert!(
+            review
+                .notes
+                .suggestions
+                .iter()
+                .any(|s| s.contains("Trim the draft"))
+        );
+    }
+
+    #[test]
+    fn missing_thank_you_is_non_blocking() {
+        let body = "hello ".repeat(25);
+        let review = critique(&draft(&body));
+        assert!(review.ok);
+        assert_eq!(
+            review.notes.summary,
+            "Draft looks good with minor polish."
+        );
+        assert!(
+            review
+                .notes
+                .suggestions
+                .iter()
+                .any(|s| s.contains("thank-you"))
+        );
+    }
+
+    #[test]
+    fn blocks_too_short_draft() {
+        let review = critique(&draft("Hello there"));
+        assert!(!review.ok);
+        assert_eq!(review.notes.summary, "Draft needs attention.");
+        assert!(
+            review
+                .notes
+                .suggestions
+                .iter()
+                .any(|s| s.contains("at least"))
+        );
+    }
+
+    #[test]
+    fn approves_clean_draft() {
+        let body =
+            "thanks for reviewing this draft. it covers the requested updates and next steps we discussed.".repeat(2);
+        let review = critique(&draft(&body));
+        assert!(review.ok);
+        assert_eq!(review.notes.summary, "Draft looks good.");
+        assert!(review.notes.suggestions.is_empty());
     }
 }
