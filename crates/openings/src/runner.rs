@@ -287,7 +287,7 @@ where
         }
 
         let mut outputs_cache: HashMap<String, NodeOutputs> = HashMap::new();
-        let mut rng = StdRng::from_entropy();
+        let mut rng = StdRng::from_os_rng();
         let mut run_failed = false;
         let mut processed = HashMap::new();
 
@@ -650,7 +650,7 @@ fn compute_backoff_ms<R: Rng>(retry: &Retry, attempt: u32, rng: &mut R) -> u64 {
     }
     if retry.jitter > 0.0 {
         let jitter_span = retry.jitter.min(1.0);
-        let jitter_offset = rng.gen_range(-jitter_span..=jitter_span);
+        let jitter_offset = rng.random_range(-jitter_span..=jitter_span);
         backoff *= 1.0 + jitter_offset;
     }
     backoff.max(10.0).round() as u64
