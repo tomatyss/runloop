@@ -26,19 +26,19 @@ epic.
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ agtop • mode:user • opening:compose_email (trace 63f1…) • pane:Log • token  │
-│ agents_running:3 • bus_queue_depth:1 • CONFIRM STATUS: clear                │
-├───────────────────────────────┬─────────────────────────────────────────────┤
-│ LOG (rlp/runs/<id>/events)    │ PLAN (DAG from run events)                   │
-│ [12:01:03] writer ▸ draft ok  │ contacts ✔  context ✔  draft ✱  review …     │
-│ [12:01:05] critic warn retry  │ edges animate attempts / retries             │
-│ …                             │                                              │
-├───────────────────────────────┼─────────────────────────────────────────────┤
-│ agtop metrics (rlp/sys/*)     │ TRACE (rlp/runs/<id>/events kind=trace)      │
-│ agents_running:3  rss:420MB   │ [12:01:02] CLI → router → contact_resolver   │
-│ msgs_sent:134 drops:0         │ [12:01:04] writer → critic                   │
-│ bus_queue_depth:1 cache_hits:4│ … ladder scroll                              │
-└───────────────────────────────┴─────────────────────────────────────────────┘
+│ agtop • mode:user • opening:compose_email (trace 63f1…) • pane:Log • tkns  │
+│ agents_running:3 • bus_queue_depth:1 • CONFIRM STATUS: clear               │
+├──────────────────────────────┬──────────────────────────────────────────────┤
+│ LOG (rlp/runs/<id>/events)   │ PLAN (DAG from run events)                   │
+│ [12:01:03] writer ▸ draft ok │ contacts ✔  context ✔  draft ✱  review …     │
+│ [12:01:05] critic warn retry │ edges animate attempts / retries             │
+│ …                            │                                              │
+├──────────────────────────────┼──────────────────────────────────────────────┤
+│ agtop metrics (rlp/sys/*)    │ TRACE (rlp/runs/<id>/events kind=trace)      │
+│ agents_running:3  rss:420MB  │ [12:01:02] CLI → router → contact_resolver   │
+│ msgs_sent:134 drops:0        │ [12:01:04] writer → critic                   │
+│ bus_queue_depth:1 cache:4    │ … ladder scroll                              │
+└──────────────────────────────┴──────────────────────────────────────────────┘
 ```
 
 Keyed areas:

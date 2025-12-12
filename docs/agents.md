@@ -11,6 +11,11 @@ built from the companion crate.
 - `agents/<name>/tools.json` — optional host tools exposed to the agent.
 - `agents/<name>/bin/*.wasm` — compiled wasm binaries.
 - `crates/agents-wasm/<name>/` — source crate that produces the wasm binary.
+- Discovery defaults (user mode): `~/.runloop/agents` for bundles and
+  `~/.runloop/examples/openings` for openings, with repo paths (`./agents`,
+  `./examples/openings`) and system paths (`/var/lib/runloop/agents`) searched
+  as fallbacks; use `--agents-dir`/`--openings-dir` to point `rlp` at custom
+  locations.
 
 Use `just build-agents-wasm` to rebuild the canonical bundles and refresh their
 digests, or `just test-agents-wasm` for an end-to-end smoke test of the

@@ -199,6 +199,10 @@ pub struct MailResult {
     pub status: String,
     pub recipients: Vec<String>,
     pub artifact_id: EventId,
+    #[serde(default)]
+    pub message_id: String,
+    #[serde(default)]
+    pub delivered_at_ms: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

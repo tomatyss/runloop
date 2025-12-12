@@ -36,3 +36,11 @@ Flags:
   wizard values or bypass prompts when `--non-interactive`.
 - `--model-secret` overrides the provider secret id in non-interactive mode.
 - `--force` allows scaffolding into existing paths (overwrites files).
+
+Global CLI overrides (local runs only):
+
+- `--agents-dir` prepends a search directory for agent bundles (ahead of
+  `agents.search_dirs` from config). For daemon runs, configure the daemon with
+  the same search dir instead.
+- `--openings-dir` prepends a search directory for openings (ahead of
+  `openings.search_dirs`); requires `--local`.

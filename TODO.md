@@ -729,6 +729,11 @@ disable integration via a documented toggle.
       `agents.cache_dir`, `openings.search_dirs`) with sensible defaults for
       user mode (`$HOME/.runloop/agents`, repo `./agents`) and packaged/system
       mode (`/var/lib/runloop/agents`).
+- [ ] _Progress:_ added `runloop-registry` path resolver consumed by CLI/daemon
+      (tilde/env expansion, demo fallback) for agent/opening search dirs; CLI
+      agent commands now use the same resolver and scaffold defaults to the
+      registry opening dirs; still need opening registry wiring and daemon
+      overrides for parity.
 - [ ] Keep demo bundles as a fallback only when no configured dirs exist; emit a
       clear INFO banner describing how to add custom bundles instead of silently
       ignoring user agents.
@@ -740,7 +745,9 @@ disable integration via a documented toggle.
 
 - [ ] Remove the demo-only guard from the local executor path so `rlp --local`
       uses the unified registry and surfaces a structured error when a manifest
-      or wasm is missing.
+      or wasm is missing. _Progress: local executor now runs arbitrary registry
+      wasm bundles with digest validation and structured errors; still need to
+      drop native fallbacks and align daemon path._
 - [ ] Ensure daemon execution reads the same registry and validates read
       permissions for each bundle; add a warning when the daemon user cannot
       read a configured search dir.
