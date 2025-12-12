@@ -1,10 +1,7 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 #[allow(unsafe_code)]
 mod host {
@@ -36,6 +33,8 @@ struct Cli {
 #[derive(Debug, Deserialize)]
 struct DraftInput {
     #[serde(default)]
+    artifact_id: i64,
+    #[serde(default)]
     body_md: String,
 }
 
@@ -54,7 +53,6 @@ struct ReviewInput {
 struct MailerOutput {
     status: String,
     recipients: Vec<String>,
-    topic: String,
     message_id: String,
     delivered_at_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -82,17 +80,42 @@ fn decode_json<T: for<'de> Deserialize<'de>>(encoded: &str, label: &str) -> Resu
     serde_json::from_slice(&bytes).with_context(|| format!("invalid {label} JSON"))
 }
 
-fn send(draft: &DraftInput, contact: &ContactInput, topic: &str) -> MailerOutput {
-    let delivered_at_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
+fn send(draft: &DraftInput, contact: &ContactInput, _topic: &str) -> MailerOutput {
+    let message_id = if draft.artifact_id != 0 {
+        format!("dryrun-{}", draft.artifact_id)
+    } else {
+        "dryrun".into()
+    };
     MailerOutput {
-        status: "sent".into(),
+        status: "dry-run".into(),
         recipients: vec![contact.email.clone()],
-        topic: topic.to_string(),
-        message_id: format!("msg-{}", Uuid::new_v4().simple()),
-        delivered_at_ms,
+        message_id,
+        delivered_at_ms: 0,
         body_preview: Some(draft.body_md.lines().take(8).collect::<Vec<_>>().join("\n")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn draft(body: &str, artifact_id: i64) -> DraftInput {
+        DraftInput {
+            artifact_id,
+            body_md: body.into(),
+        }
+    }
+
+    #[test]
+    fn includes_delivery_metadata() {
+        let draft = draft("hello", 42);
+        let contact = ContactInput {
+            email: "test@example.com".into(),
+        };
+        let mail = send(&draft, &contact, "topic");
+        assert_eq!(mail.status, "dry-run");
+        assert_eq!(mail.message_id, "dryrun-42");
+        assert_eq!(mail.delivered_at_ms, 0);
+        assert!(mail.body_preview.as_ref().is_some_and(|p| p.contains("hello")));
     }
 }

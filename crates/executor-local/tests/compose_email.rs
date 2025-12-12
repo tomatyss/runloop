@@ -9,6 +9,7 @@ use runloop_core::Config;
 use runloop_core::config::{ModelProvider, ModelRoute, ProviderKind, TestingConfig};
 use runloop_executor_local::build_executor;
 use runloop_openings::{Runner, parse_opening_str};
+use serde_json::Value;
 use tempfile::tempdir;
 
 struct TestConfirmation;
@@ -53,6 +54,7 @@ async fn compose_email_opening_runs_end_to_end() {
     config.security.secrets.root = Some(secrets_dir.to_string_lossy().into_owned());
     config.security.testing = Some(TestingConfig {
         allow_missing_secrets: true,
+        expose_raw_secrets: true,
         ..Default::default()
     });
     config.agents.search_dirs = vec![agents_dir.to_string_lossy().into_owned()];
@@ -79,9 +81,37 @@ async fn compose_email_opening_runs_end_to_end() {
     let opening = parse_opening_str(&opening_yaml).expect("parse opening");
     let runner = Runner::new(opening, executor);
     let report = runner.run().await.expect("run opening");
+    if !report.trace.success {
+        eprintln!("compose_email trace failed: {:#?}", report.trace);
+    }
+    assert!(report.trace.success, "compose_email trace should succeed");
+
+    let send_record = report
+        .node_records
+        .iter()
+        .find(|rec| rec.node_id == "send")
+        .expect("send node present");
+    let send_output = send_record
+        .attempts
+        .last()
+        .and_then(|attempt| attempt.output.as_ref())
+        .expect("send output present");
+    let mail_json = send_output
+        .ports
+        .get("out")
+        .and_then(|values| values.first())
+        .cloned()
+        .expect("mailer output available");
+    let mail: Value = mail_json;
+    assert_eq!(mail.get("status").and_then(Value::as_str), Some("dry-run"));
     assert!(
-        report.trace.success,
-        "compose_email trace should succeed: {:#?}",
-        report.trace
+        mail.get("message_id").is_some(),
+        "expected message_id in mail result"
+    );
+    assert!(
+        mail.get("delivered_at_ms")
+            .and_then(Value::as_u64)
+            .is_some(),
+        "expected delivered_at_ms in mail result"
     );
 }

@@ -29,7 +29,8 @@ installed from the `.deb` packages (no source checkout required).
    - `~/.runloop/agents/my_agent/` bundle with `manifest.toml`, `policy.caps`,
      `tools.json`, `bin/`.
    - `~/.runloop/agents-wasm/my_agent/` crate with a stub `src/main.rs`.
-   - Optional starter opening YAML if requested.
+   - Optional starter opening YAML under
+     `~/.runloop/examples/openings/<name>.yaml` if requested.
 
 2. **Author**
    - Edit `~/.runloop/agents-wasm/my_agent/src/main.rs` with your logic.
@@ -49,7 +50,7 @@ installed from the `.deb` packages (no source checkout required).
 
 4. **Run**
    - If you generated a starter opening:
-     `rlp run examples/openings/my_agent.yaml --params '{"prompt":"..."}'`
+     `rlp run ~/.runloop/examples/openings/my_agent.yaml --params '{"prompt":"..."}'`
    - Otherwise wire the agent into an opening and run it via
      `rlp run <opening.yaml>`.
 
@@ -74,7 +75,7 @@ agents:
     - $HOME/.runloop/agents
 openings:
   search_dirs:
-    - $HOME/examples/openings   # adjust to where you keep openings
+    - $HOME/.runloop/examples/openings   # adjust to where you keep openings
 runtime:
   sockets_dir: /run/runloop   # matches the packaged service default
 EOF

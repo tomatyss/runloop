@@ -29,6 +29,14 @@
     "artifact_id": {
       "type": "integer",
       "minimum": 1
+    },
+    "message_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "delivered_at_ms": {
+      "type": "integer",
+      "minimum": 0
     }
   }
 }
