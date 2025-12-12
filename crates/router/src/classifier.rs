@@ -461,4 +461,215 @@ mod tests {
         assert_eq!(classification.route, Route::Agent);
         assert_eq!(classification.rule, "fallback:opening");
     }
+
+    #[test]
+    fn empty_string_routes_to_agent() {
+        let router = router_with(|_| {});
+        let classification = router.classify("");
+        assert_eq!(classification.route, Route::Agent);
+        assert_eq!(classification.rule, "fallback:empty");
+    }
+
+    #[test]
+    fn whitespace_only_routes_to_agent() {
+        let router = router_with(|_| {});
+        for input in &["   ", "\t", "\n", "  \t\n  "] {
+            let classification = router.classify(input);
+            assert_eq!(
+                classification.route,
+                Route::Agent,
+                "whitespace-only '{}' should route to agent",
+                input.escape_debug()
+            );
+            assert_eq!(classification.rule, "fallback:empty");
+        }
+    }
+
+    #[test]
+    fn single_character_inputs() {
+        let router = router_with(|_| {});
+        // Single punctuation characters should not panic
+        for ch in &[
+            '|', '&', ';', '<', '>', '\'', '"', '`', '(', ')', '{', '}', '[', ']',
+        ] {
+            let input = ch.to_string();
+            let classification = router.classify(&input);
+            // Just verify it doesn't panic; route depends on specific character
+            let _ = classification;
+        }
+        // Single letter (potential command)
+        let classification = router.classify("a");
+        assert_eq!(classification.route, Route::Agent);
+    }
+
+    #[test]
+    fn unicode_inputs_do_not_panic() {
+        let router = router_with(|_| {});
+        // Various Unicode edge cases
+        let inputs = [
+            "日本語コマンド",
+            "émoji 🚀 command",
+            "مرحبا",
+            "Ω≈ç√∫",
+            "\u{200B}",  // zero-width space
+            "\u{FEFF}",  // BOM
+            "a\u{0300}", // 'a' with combining grave accent
+            "🏳️‍🌈",        // complex emoji sequence
+        ];
+        for input in &inputs {
+            let classification = router.classify(input);
+            // Just verify it doesn't panic
+            let _ = classification;
+        }
+    }
+
+    #[test]
+    fn long_inputs_do_not_panic() {
+        let router = router_with(|_| {});
+        // Very long input
+        let long_input = "a".repeat(100_000);
+        let classification = router.classify(&long_input);
+        assert_eq!(classification.route, Route::Agent);
+
+        // Long input with shell operators
+        let long_with_pipes = format!("{} | {}", "a".repeat(10_000), "b".repeat(10_000));
+        let classification = router.classify(&long_with_pipes);
+        let _ = classification; // Just verify no panic
+    }
+
+    #[test]
+    fn pathological_operator_sequences() {
+        let router = router_with(|_| {});
+        // Repeated operators
+        let inputs = [
+            "||||||||",
+            "&&&&&&&&",
+            ";;;;;;;;",
+            "<<<<<<<<",
+            ">>>>>>>>",
+            "| | | | |",
+            "&& || && ||",
+        ];
+        for input in &inputs {
+            let classification = router.classify(input);
+            let _ = classification; // Just verify no panic
+        }
+    }
+}
+
+#[cfg(test)]
+mod proptest_tests {
+    use super::*;
+    use proptest::prelude::*;
+    use runloop_core::config::RouterConfig;
+
+    fn router_default() -> Router {
+        Router::with_commands(&RouterConfig::default(), std::iter::empty::<String>())
+    }
+
+    proptest! {
+        /// The classifier should never panic on any arbitrary Unicode string.
+        #[test]
+        fn classifier_never_panics_on_arbitrary_input(input in ".*") {
+            let router = router_default();
+            let classification = router.classify(&input);
+            // Just verify it returns without panicking and produces valid output
+            prop_assert!(matches!(classification.route, Route::Shell | Route::Agent));
+            prop_assert!(!classification.rule.is_empty());
+        }
+
+        /// The classifier should handle strings with embedded null bytes.
+        #[test]
+        fn classifier_handles_embedded_nulls(
+            prefix in "[a-z]{0,10}",
+            suffix in "[a-z]{0,10}"
+        ) {
+            let router = router_default();
+            let input = format!("{}\0{}", prefix, suffix);
+            let classification = router.classify(&input);
+            prop_assert!(matches!(classification.route, Route::Shell | Route::Agent));
+        }
+
+        /// The classifier should handle strings of varying lengths.
+        #[test]
+        fn classifier_handles_varying_lengths(len in 0usize..10000) {
+            let router = router_default();
+            let input = "x".repeat(len);
+            let classification = router.classify(&input);
+            prop_assert!(matches!(classification.route, Route::Shell | Route::Agent));
+        }
+
+        /// The classifier should handle shell-like patterns without panicking.
+        #[test]
+        fn classifier_handles_shell_patterns(
+            cmd in "[a-z_][a-z0-9_-]{0,20}",
+            args in "([ ][a-z0-9./=-]{0,30}){0,5}",
+            ops in "([ ]*[|&;<>][ ]*){0,3}"
+        ) {
+            let router = router_default();
+            let input = format!("{}{}{}", cmd, args, ops);
+            let classification = router.classify(&input);
+            prop_assert!(matches!(classification.route, Route::Shell | Route::Agent));
+        }
+
+        /// The classifier should handle inputs with mixed whitespace.
+        #[test]
+        fn classifier_handles_mixed_whitespace(
+            parts in prop::collection::vec("[a-z]{1,10}", 0..10),
+            sep_choice in prop::collection::vec(0u8..4, 0..10)
+        ) {
+            let router = router_default();
+            let separators = [" ", "\t", "\n", "  "];
+            let mut input = String::new();
+            for (i, part) in parts.iter().enumerate() {
+                if i > 0 {
+                    let sep_idx = sep_choice.get(i - 1).copied().unwrap_or(0) as usize;
+                    input.push_str(separators[sep_idx % separators.len()]);
+                }
+                input.push_str(part);
+            }
+            let classification = router.classify(&input);
+            prop_assert!(matches!(classification.route, Route::Shell | Route::Agent));
+        }
+
+        /// The classifier should handle inputs starting/ending with various quote types.
+        #[test]
+        fn classifier_handles_quoted_patterns(
+            content in "[a-z ]{0,20}",
+            quote in prop_oneof!["'", "\"", "`"]
+        ) {
+            let router = router_default();
+            // Quoted content
+            let input = format!("{}{}{}", quote, content, quote);
+            let classification = router.classify(&input);
+            prop_assert!(matches!(classification.route, Route::Shell | Route::Agent));
+
+            // Unbalanced quotes
+            let input = format!("{}{}", quote, content);
+            let classification = router.classify(&input);
+            prop_assert!(matches!(classification.route, Route::Shell | Route::Agent));
+        }
+
+        /// Token iterator should handle all inputs without panicking.
+        #[test]
+        fn token_iterator_never_panics(input in ".*") {
+            let tokens: Vec<&str> = token_candidates(&input).collect();
+            // Just verify it completes without panicking
+            let _ = tokens;
+        }
+
+        /// Token iterator on pathological inputs.
+        #[test]
+        fn token_iterator_pathological(
+            ops in "[|&;<>]{0,100}",
+            content in "[a-z]{0,50}"
+        ) {
+            let input = format!("{}{}{}", ops, content, ops);
+            let tokens: Vec<&str> = token_candidates(&input).collect();
+            // Verify no panic and tokens are valid slices
+            for token in &tokens {
+                prop_assert!(!token.is_empty());
+            }
+        }
+    }
 }
