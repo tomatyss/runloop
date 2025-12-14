@@ -4,6 +4,19 @@ This guide captures the day-to-day expectations that supplement
 `CONTRIBUTING.md` and the workflows documented in `AGENTS.md`. Treat it as the
 single source of truth for onboarding new collaborators.
 
+## Before Your First PR
+
+Read these documents in order:
+
+1. **[Engineering Standards](engineering-standards.md)** — Technical standards,
+   architectural guidelines, code size limits, and decision-making framework.
+   This is the authoritative reference for how we write code.
+
+2. **[CONTRIBUTING.md](../CONTRIBUTING.md)** — Process, workflow, commit style,
+   and DCO requirements.
+
+3. **This guide** — Day-to-day expectations and communication norms.
+
 ## Picking an Issue
 
 - Start with the GitHub issue tracker and filter by `good-first-issue` or
@@ -71,3 +84,32 @@ single source of truth for onboarding new collaborators.
   link if necessary.
 - Security-sensitive reports (e.g., capability bypasses) should go to the
   contact listed in `SECURITY.md` rather than a public issue.
+
+## Technical Decision Checklist
+
+Before submitting code for review, verify your changes against the
+[Engineering Standards](engineering-standards.md). Quick checklist:
+
+### Code Quality
+- [ ] Functions under 100 lines, modules under 800 lines
+- [ ] No `.unwrap()` or `.expect()` in library code
+- [ ] All `unsafe` blocks have `// SAFETY:` comments
+- [ ] Public items documented with `///` doc comments
+- [ ] `#[non_exhaustive]` on new public enums
+
+### Architecture
+- [ ] Dependencies flow downward (see crate diagram in engineering standards)
+- [ ] New crates justified (not just "might need it later")
+- [ ] Traits have multiple implementations or clear mocking need
+
+### Testing
+- [ ] New functionality has tests
+- [ ] Error paths exercised
+- [ ] Property tests for parsers or security-critical code
+
+### Decision Framework
+For significant choices, document in PR description:
+1. What options were considered?
+2. How does chosen option rank on: Reliability > Security > Debuggability >
+   Maintainability > Performance?
+3. What trade-offs were accepted and why?

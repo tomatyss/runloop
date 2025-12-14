@@ -1,5 +1,8 @@
 # Contributing to Runloop
 
+Welcome! This document covers the contribution process. For technical standards
+and coding guidelines, see [Engineering Standards](docs/engineering-standards.md).
+
 ## Workflow & branches
 
 - We use trunk-based development. Create a short-lived branch off `main`, open a
@@ -47,3 +50,14 @@ a trailer to each commit: `Signed-off-by: Your Name <you@example.com>`
 
 - At least 1 reviewer from CODEOWNERS for owned paths
 - CI must be green
+
+## Technical standards
+
+For detailed guidance on:
+- Architectural decisions (when to create crates, dependency rules)
+- Code size limits (function, module, crate limits)
+- Rust idioms (error handling, ownership, async patterns)
+- Testing requirements (coverage, property tests, mocking)
+- Decision-making framework (trade-off evaluation)
+
+See [docs/engineering-standards.md](docs/engineering-standards.md).
