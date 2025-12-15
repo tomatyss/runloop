@@ -24,7 +24,7 @@ dashmap = "6"
 async-trait = "0.1"
 toml = { version = "0.9", features = ["parse"] }
 directories = "6.0"
-camino = "1.1"
+camino = "1.2"
 cfg-if = "1.0"
 serde_json = "1.0"
 metrics = "0.24"
