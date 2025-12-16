@@ -14,6 +14,7 @@ pub struct SchemaViolation {
 
 /// Error returned when compiling or applying a schema fails.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum SchemaValidationError {
     #[error("invalid schema: {0}")]
     InvalidSchema(String),
@@ -41,11 +42,11 @@ pub fn validate_instance(
 
 fn schema_violation(err: ValidationError<'_>) -> SchemaViolation {
     SchemaViolation {
-        instance_path: err.instance_path.as_str().to_string(),
-        schema_path: err.schema_path.as_str().to_string(),
+        instance_path: err.instance_path().as_str().to_string(),
+        schema_path: err.schema_path().as_str().to_string(),
         message: err.to_string(),
-        kind: describe_kind(&err.kind),
-        value: err.instance.into_owned(),
+        kind: describe_kind(err.kind()),
+        value: err.instance().clone().into_owned(),
     }
 }
 

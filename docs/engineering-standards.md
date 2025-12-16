@@ -289,12 +289,12 @@ The workspace follows a layered architecture:
 
 **Keep as a module when:**
 
-| Signal                   | Example                               |
-| ------------------------ | ------------------------------------- |
+| Signal                    | Example                               |
+| ------------------------- | ------------------------------------- |
 | Tightly coupled to parent | `runner.rs` + `openings` inseparable  |
-| Shares private types     | Internal state machines               |
-| Less than 500 lines      | Doesn't warrant its own crate         |
-| No external consumers    | Implementation details                |
+| Shares private types      | Internal state machines               |
+| Less than 500 lines       | Doesn't warrant its own crate         |
+| No external consumers     | Implementation details                |
 
 ### Crate Naming Convention
 

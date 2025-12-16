@@ -1317,6 +1317,10 @@ fn run_schema_validation(
             }
             Ok(rows)
         }
+        Err(err) => Err(CliError::AgentMetadata(format!(
+            "schema validation error for {}: {err}",
+            reference
+        ))),
     }
 }
 
