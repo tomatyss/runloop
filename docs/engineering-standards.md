@@ -5,6 +5,7 @@ decision-making framework for Runloop OS development. It is the authoritative
 reference for code quality expectations.
 
 **Related documents:**
+
 - [CONTRIBUTING.md](../CONTRIBUTING.md) — Process, workflow, DCO
 - [AGENTS.md](../AGENTS.md) — Quick reference for AI coding agents
 - [Contributor Guide](contributor-guide.md) — Onboarding, issue selection
@@ -43,6 +44,7 @@ over clever solutions. A 10x slower approach that never fails beats a fast one
 that fails 0.1% of the time.
 
 **Indicators:**
+
 - All error paths are handled explicitly
 - State changes are atomic or recoverable
 - Failures are visible (logs, metrics, alerts)
@@ -53,6 +55,7 @@ This runs as a system service with access to user data and external APIs. Assume
 adversarial inputs. Capability enforcement is not optional.
 
 **Indicators:**
+
 - Input validation at all system boundaries
 - Principle of least privilege for agents
 - No secrets in logs or error messages
@@ -65,6 +68,7 @@ happened? Structured logs, traces, and deterministic replay matter more than raw
 performance.
 
 **Indicators:**
+
 - Every operation has a trace_id
 - Errors include context (file, line, inputs)
 - KB event log enables replay
@@ -76,6 +80,7 @@ Code will be read 10x more than written. Optimize for the next developer (who
 may be you in 6 months with no context).
 
 **Indicators:**
+
 - Functions fit on one screen
 - Names are descriptive, not abbreviated
 - Complex logic has comments explaining "why"
@@ -87,6 +92,7 @@ Only after the above are satisfied. Profile before optimizing. Benchmark claims
 require reproducible numbers.
 
 **Indicators:**
+
 - Hot paths identified via profiling
 - Benchmarks exist for critical operations
 - Optimization PRs include before/after numbers
@@ -101,7 +107,7 @@ When facing a technical choice, ask these questions in order:
 
 #### Question 1: "What happens when this fails?"
 
-```
+```text
 BAD:  "It won't fail"
       Wrong answer. Everything fails.
 
@@ -112,7 +118,7 @@ GOOD: "It returns Err(...) and the caller retries/logs/propagates"
 
 #### Question 2: "Can I debug this at 3 AM with only logs?"
 
-```
+```text
 BAD:  "You'd need to attach a debugger"
       Unacceptable for production.
 
@@ -126,7 +132,7 @@ GOOD: "The trace_id connects all related log lines"
 
 #### Question 3: "Will this still work in 2 years?"
 
-```
+```text
 BAD:  "We can refactor later"
       Technical debt accrues interest.
 
@@ -140,7 +146,7 @@ GOOD: "The API is stable and versioned"
 
 #### Question 4: "What's the simplest thing that works?"
 
-```
+```text
 BAD:  "I added a framework for future flexibility"
 BAD:  "This handles edge cases we might need"
 
@@ -152,14 +158,14 @@ GOOD: "It does exactly what's required, no more"
 
 When two valid approaches exist, score them:
 
-| Factor | Weight | Option A | Option B |
-|--------|--------|----------|----------|
-| Reliability | 5 | ? / 5 | ? / 5 |
-| Security | 4 | ? / 5 | ? / 5 |
-| Debuggability | 3 | ? / 5 | ? / 5 |
-| Maintainability | 3 | ? / 5 | ? / 5 |
-| Performance | 2 | ? / 5 | ? / 5 |
-| **Weighted Total** | | | |
+| Factor             | Weight | Option A | Option B |
+| ------------------ | ------ | -------- | -------- |
+| Reliability        | 5      | ? / 5    | ? / 5    |
+| Security           | 4      | ? / 5    | ? / 5    |
+| Debuggability      | 3      | ? / 5    | ? / 5    |
+| Maintainability    | 3      | ? / 5    | ? / 5    |
+| Performance        | 2      | ? / 5    | ? / 5    |
+| **Weighted Total** |        |          |          |
 
 Document this in the PR description for significant architectural decisions.
 
@@ -168,12 +174,14 @@ Document this in the PR description for significant architectural decisions.
 #### "Should I use a trait or concrete type?"
 
 **Use TRAIT when:**
+
 - Multiple implementations exist today
 - Testing requires mocking external dependencies
 - External crates will implement it
 - The abstraction is well-understood (Executor, SecretProvider)
 
 **Use CONCRETE TYPE when:**
+
 - Only one implementation exists
 - "Maybe we'll need it" is the only reason for abstraction
 - The type is internal to one crate
@@ -181,16 +189,19 @@ Document this in the PR description for significant architectural decisions.
 #### "Should I handle this error or propagate it?"
 
 **HANDLE (recover/retry) when:**
+
 - You have enough context to fix it
 - The error is expected in normal operation
 - Retrying might succeed (network, lock contention)
 
 **PROPAGATE (`?`) when:**
+
 - Caller has more context
 - Error is unrecoverable at this level
 - You're in library code (let app decide)
 
 **LOG AND PROPAGATE when:**
+
 - You're crossing a major boundary (crate, async spawn)
 - Context would be lost without logging
 - Error is unexpected (bug, corruption)
@@ -198,12 +209,14 @@ Document this in the PR description for significant architectural decisions.
 #### "Should I clone or restructure?"
 
 **CLONE when:**
+
 - Data is small (< 1KB)
 - Called infrequently (< 100/sec)
 - Restructuring would complicate the API significantly
 - You need owned data for `Send` across threads
 
 **RESTRUCTURE when:**
+
 - Clone appears in a hot loop
 - Data is large (buffers, collections)
 - The borrow checker complaint reveals a design issue
@@ -212,11 +225,13 @@ Document this in the PR description for significant architectural decisions.
 #### "Should I add a config option or hardcode?"
 
 **CONFIG OPTION when:**
+
 - Different deployments need different values
 - Operators need to tune for their environment
 - The default might be wrong for some use cases
 
 **HARDCODE when:**
+
 - Changing it would break invariants
 - It's an implementation detail
 - "Just in case" is the only reason
@@ -230,7 +245,7 @@ Document this in the PR description for significant architectural decisions.
 
 The workspace follows a layered architecture:
 
-```
+```text
                     +------------------+
                     |   runloop-core   |  <- Shared types, IDs, config
                     +--------+---------+
@@ -264,26 +279,26 @@ The workspace follows a layered architecture:
 
 **Create a new crate when:**
 
-| Signal | Example |
-|--------|---------|
-| Separate compilation unit needed | WASM agents must be separate crates |
-| Different dependency tree | `agtop` needs `ratatui`, daemon doesn't |
-| Reusable by external consumers | `runloop-rmp` protocol for third-party tools |
-| Different lint/feature requirements | WASM SDK needs `#![allow(unsafe_code)]` |
-| Clear domain boundary | KB, Bus, Runtime are distinct subsystems |
+| Signal                   | Example                               |
+| ------------------------ | ------------------------------------- |
+| Separate compilation     | WASM agents must be separate crates   |
+| Different dependency     | `agtop` needs `ratatui`, not daemon   |
+| External consumers       | `runloop-rmp` for 3rd-party tools     |
+| Different lint needs     | WASM SDK: `#![allow(unsafe_code)]`    |
+| Clear domain boundary    | KB, Bus, Runtime are distinct         |
 
 **Keep as a module when:**
 
-| Signal | Example |
-|--------|---------|
-| Tightly coupled to parent | `runner.rs` is inseparable from `openings` |
-| Shares private types | Internal state machines |
-| Less than 500 lines | Probably doesn't warrant its own crate |
-| No external consumers | Implementation details |
+| Signal                   | Example                               |
+| ------------------------ | ------------------------------------- |
+| Tightly coupled to parent | `runner.rs` + `openings` inseparable  |
+| Shares private types     | Internal state machines               |
+| Less than 500 lines      | Doesn't warrant its own crate         |
+| No external consumers    | Implementation details                |
 
 ### Crate Naming Convention
 
-```
+```text
 runloop-{domain}         # Core libraries: runloop-kb, runloop-bus
 runloop-{domain}-{sub}   # Sub-components: runloop-agent-registry
 {binary-name}            # Binaries: runloopd, rlp, agtop
@@ -294,13 +309,13 @@ runloop-{domain}-{sub}   # Sub-components: runloop-agent-registry
 1. **Dependencies flow downward** — Lower layers never import higher layers
 2. **Core has no internal dependencies** — Only external crates (serde, thiserror)
 3. **Binaries depend on libraries** — Never library -> binary
-4. **No circular dependencies** — If A needs B and B needs A, extract common to C
+4. **No circular dependencies** — If A needs B and B needs A, extract to C
 5. **Trait in lower layer, impl in higher** — e.g., `Executor` trait in openings,
    impl in runtime
 
 ### Async vs Sync Boundaries
 
-```
+```text
 +-------------------------------------------------------------+
 |                    ASYNC BOUNDARY                           |
 |  runloopd, rlp, agtop - tokio runtime                       |
@@ -319,6 +334,7 @@ runloop-{domain}-{sub}   # Sub-components: runloop-agent-registry
 ```
 
 **Rules:**
+
 - Public APIs that do I/O should be `async`
 - CPU-bound work > 1ms should use `spawn_blocking`
 - Never block the async runtime with sync I/O
@@ -326,7 +342,7 @@ runloop-{domain}-{sub}   # Sub-components: runloop-agent-registry
 
 ### Module Organization Within a Crate
 
-```
+```text
 crates/kb/
 ├── Cargo.toml
 ├── src/
@@ -352,7 +368,8 @@ consider whether your changes can advance these goals.
 **Current state:** `runloop-kb` has SQLite implementation tightly coupled.
 
 **Target state:** Split into two crates:
-```
+
+```text
 runloop-kb-core     # Traits, event types, query interface
 runloop-kb-sqlite   # SQLite implementation (current code)
 runloop-kb-postgres # Future: PostgreSQL for multi-node deployments
@@ -371,7 +388,8 @@ changes require touching all consumers anyway.
 `runloop-core/src/content.rs`.
 
 **Target state:** Extract to standalone `runloop-protocol` crate:
-```
+
+```text
 runloop-protocol    # Message schemas, content types, wire format
 ```
 
@@ -384,6 +402,7 @@ versioning the protocol independently becomes necessary.
 #### WASM Agent SDK Consolidation
 
 **Current state:** Each WASM agent duplicates FFI boilerplate:
+
 ```rust
 // Repeated in 8+ agents
 #[allow(unsafe_code)]
@@ -397,6 +416,7 @@ mod host {
 ```
 
 **Target state:** Single implementation in `runloop-agent-wasm-sdk`:
+
 ```rust
 // In SDK
 pub fn signal_ready() {
@@ -420,7 +440,7 @@ When you notice duplicated patterns, follow this decision process:
 
 #### Step 1: Is it truly duplication?
 
-```
+```text
 Similar code in 2 places  → Probably coincidence, leave it
 Similar code in 3+ places → Likely pattern, consider extracting
 Identical code in 2+ places → Definitely extract
@@ -428,22 +448,24 @@ Identical code in 2+ places → Definitely extract
 
 #### Step 2: Where should shared code live?
 
-| Duplication Scope | Extract To |
-|-------------------|------------|
-| Within one crate | Private module in that crate |
-| Across crates in same domain | Lowest common dependency |
-| Across unrelated crates | `runloop-core` or new shared crate |
-| Test utilities only | `tests/common/mod.rs` or test-utils crate |
+| Duplication Scope              | Extract To                              |
+| ------------------------------ | --------------------------------------- |
+| Within one crate               | Private module in that crate            |
+| Across crates in same domain   | Lowest common dependency                |
+| Across unrelated crates        | `runloop-core` or new shared crate      |
+| Test utilities only            | `tests/common/mod.rs` or test-utils     |
 
 #### Step 3: Environment Variable Helpers (Specific Example)
 
 **Current state:** Unsafe env var manipulation scattered across:
+
 - `crates/rlp/src/main.rs:639-645`
 - `crates/rlp/src/shell.rs:738-754`
 - `crates/runtime/src/secrets.rs:572-574`
 - Multiple test files
 
 **Target state:** Single helper in `runloop-core`:
+
 ```rust
 // runloop-core/src/env.rs
 
@@ -510,23 +532,23 @@ Before extracting shared code:
 
 ### Hard Limits
 
-| Scope | Limit | Action if Exceeded |
-|-------|-------|-------------------|
-| **Function body** | 100 lines | Extract helper functions |
-| **impl block** | 300 lines | Split into multiple impl blocks or extract types |
-| **Module (single file)** | 800 lines | Split into submodules |
-| **Crate lib.rs** | 200 lines | Move logic to submodules, keep lib.rs as re-exports |
-| **Test module** | 500 lines | Split into multiple test files |
+| Scope              | Limit     | Action if Exceeded           |
+| ------------------ | --------- | ---------------------------- |
+| **Function body**  | 100 lines | Extract helper functions     |
+| **impl block**     | 300 lines | Split or extract types       |
+| **Module file**    | 800 lines | Split into submodules        |
+| **Crate lib.rs**   | 200 lines | Keep lib.rs as re-exports    |
+| **Test module**    | 500 lines | Split into test files        |
 
 ### Soft Limits (triggers review discussion)
 
-| Scope | Limit | Rationale |
-|-------|-------|-----------|
-| **Function parameters** | 5 | Use struct/builder if more |
-| **Match arms** | 10 | Consider lookup table or trait dispatch |
-| **Nesting depth** | 4 levels | Extract to functions, use early returns |
-| **Cyclomatic complexity** | 15 | Split into smaller functions |
-| **Crate total size** | 5000 lines | Consider splitting domain |
+| Scope            | Limit      | Rationale                     |
+| ---------------- | ---------- | ----------------------------- |
+| **Fn parameters**| 5          | Use struct/builder if more    |
+| **Match arms**   | 10         | Consider lookup or dispatch   |
+| **Nesting depth**| 4 levels   | Extract, use early returns    |
+| **Complexity**   | 15         | Split into smaller functions  |
+| **Crate size**   | 5000 lines | Consider splitting domain     |
 
 ### Measuring Code Size
 
@@ -544,12 +566,14 @@ tokei crates/kb/src
 ### When to Split
 
 **Split a function when:**
+
 - It has more than one level of abstraction
 - You need to scroll to see it all
 - The name doesn't fully describe what it does
 - You find yourself adding comments to explain sections
 
 **Split a module when:**
+
 - It has multiple distinct responsibilities
 - Tests are larger than the code they test
 - Two developers frequently have merge conflicts
@@ -612,6 +636,7 @@ mod ffi {
 ```
 
 **Rules:**
+
 - Every `unsafe` block MUST have a `// SAFETY:` comment directly above it
 - Prefer safe abstractions even at slight performance cost
 - When unsafe is required (WASM FFI, Pin projections), isolate in dedicated modules
@@ -693,7 +718,8 @@ impl Connection<Disconnected> {
 }
 
 impl Connection<Connected> {
-    pub fn authenticate(self, creds: &Creds) -> Result<Connection<Authenticated>, Error> { }
+    pub fn authenticate(self, creds: &Creds)
+        -> Result<Connection<Authenticated>, Error> { }
 }
 
 impl Connection<Authenticated> {
@@ -800,6 +826,7 @@ use dashmap::DashMap;
 ```
 
 **Decision tree:**
+
 - Need async `.lock().await`? -> `tokio::sync::Mutex`
 - Held across `.await`? -> `tokio::sync::Mutex`
 - Short critical sections, sync code? -> `parking_lot::Mutex`
@@ -864,12 +891,12 @@ async fn orchestrate() -> Result<(), Error> {
 
 ### Coverage Requirements
 
-| Code Type | Minimum Coverage |
-|-----------|-----------------|
-| Core logic (runner, KB, bus) | 80% line coverage |
-| Error paths | All error variants exercised |
-| Public API | Every public function has at least one test |
-| Unsafe code | 100% coverage + property tests |
+| Code Type            | Minimum Coverage                   |
+| -------------------- | ---------------------------------- |
+| Core logic           | 80% line coverage                  |
+| Error paths          | All error variants exercised       |
+| Public API           | Every public function tested       |
+| Unsafe code          | 100% coverage + property tests     |
 
 ### Test Organization
 
@@ -953,6 +980,7 @@ impl SecretProvider for MockSecretProvider {
 ### Property-Based Testing
 
 Use proptest for:
+
 - Parsers (never panic on arbitrary input)
 - Serialization (round-trip property)
 - Security-critical code (router classification)
@@ -1147,23 +1175,24 @@ Answer these questions:
 5. **License compatible?** Apache-2.0, MIT, BSD-3-Clause are safe
 
 **Approval required for:**
+
 - Any crate with `unsafe` in public API
 - Crates with > 50 transitive dependencies
 - Crates that add new system capabilities (network, filesystem, FFI)
 
 ### Preferred Crates
 
-| Purpose | Recommended | Avoid |
-|---------|-------------|-------|
-| Errors | `thiserror` | `failure`, `error-chain` |
-| Async runtime | `tokio` | `async-std` (for consistency) |
-| Serialization | `serde` + `serde_json` | hand-rolled |
-| Hashing | `blake3` | `sha2` (for non-crypto), `md5` |
-| CLI | `clap` | `structopt` (merged into clap) |
-| HTTP client | `reqwest` | `hyper` (unless low-level needed) |
-| Concurrency | `parking_lot`, `dashmap` | `crossbeam` (unless channels) |
-| Regex | `regex` | `pcre2`, `fancy-regex` (unless needed) |
-| UUID | `uuid` | `ulid` (unless ordering needed) |
+| Purpose       | Recommended               | Avoid                       |
+| ------------- | ------------------------- | --------------------------- |
+| Errors        | `thiserror`               | `failure`, `error-chain`    |
+| Async runtime | `tokio`                   | `async-std` (consistency)   |
+| Serialization | `serde` + `serde_json`    | hand-rolled                 |
+| Hashing       | `blake3`                  | `sha2` (non-crypto), `md5`  |
+| CLI           | `clap`                    | `structopt` (use clap)      |
+| HTTP client   | `reqwest`                 | `hyper` (unless low-level)  |
+| Concurrency   | `parking_lot`, `dashmap`  | `crossbeam` (unless chans)  |
+| Regex         | `regex`                   | `pcre2`, `fancy-regex`      |
+| UUID          | `uuid`                    | `ulid` (unless ordering)    |
 
 ### Updating Dependencies
 
@@ -1227,13 +1256,13 @@ pub async fn execute(&self, node_id: &str) -> Result<(), Error> {
 
 ### Log Levels
 
-| Level | Use For | Example |
-|-------|---------|---------|
-| `error` | Unrecoverable failures, data loss risk | DB write failed, capability violation |
-| `warn` | Recoverable issues, degraded operation | Retry succeeded, rate limited |
-| `info` | Significant state changes | Agent started, opening completed |
-| `debug` | Detailed flow for troubleshooting | Message received, cache hit |
-| `trace` | Very verbose, hot path details | Per-byte parsing, lock acquired |
+| Level   | Use For                    | Example                     |
+| ------- | -------------------------- | --------------------------- |
+| `error` | Unrecoverable failures     | DB write failed             |
+| `warn`  | Recoverable issues         | Retry succeeded             |
+| `info`  | Significant state changes  | Agent started               |
+| `debug` | Troubleshooting detail     | Message received            |
+| `trace` | Hot path verbosity         | Per-byte parsing            |
 
 ### Metrics
 
@@ -1443,8 +1472,8 @@ pub struct ExecutorRegistry {
 }
 
 impl ExecutorRegistry {
-    pub fn register(&mut self, name: impl Into<String>, executor: Arc<dyn Executor>) {
-        self.executors.insert(name.into(), executor);
+    pub fn register(&mut self, name: impl Into<String>, e: Arc<dyn Executor>) {
+        self.executors.insert(name.into(), e);
     }
 }
 ```
@@ -1546,7 +1575,7 @@ Before submitting a PR, verify against this checklist:
 
 ### Branch Naming
 
-```
+```text
 <type>/<issue-number>-<short-description>
 
 feat/42-add-replay-verification
@@ -1559,7 +1588,7 @@ refactor/115-extract-validation
 
 Follow Conventional Commits:
 
-```
+```text
 <type>(<scope>): <short description>
 
 <body explaining what and why, not how>
@@ -1571,7 +1600,7 @@ Follow Conventional Commits:
 
 **Examples:**
 
-```
+```text
 feat(router): add case-insensitive command matching
 
 The router now matches commands like "LS" and "Git" correctly.
@@ -1580,7 +1609,7 @@ Previously, only lowercase commands were recognized as shell routes.
 Closes #42
 ```
 
-```
+```text
 fix(kb): prevent deadlock on concurrent materialization
 
 The materializer was holding a read lock while requesting a write lock,
@@ -1606,12 +1635,12 @@ git commit --amend -s
 
 ### PR Size Guidelines
 
-| Size | Lines Changed | Review Time |
-|------|---------------|-------------|
-| Small | < 100 | Same day |
-| Medium | 100-400 | 1-2 days |
-| Large | 400-800 | 2-3 days |
-| Too Large | > 800 | Split the PR |
+| Size      | Lines Changed | Review Time  |
+| --------- | ------------- | ------------ |
+| Small     | < 100         | Same day     |
+| Medium    | 100-400       | 1-2 days     |
+| Large     | 400-800       | 2-3 days     |
+| Too Large | > 800         | Split the PR |
 
 **Splitting large PRs:**
 
@@ -1653,11 +1682,13 @@ Related to #456
 ### Review Etiquette
 
 **As author:**
+
 - Respond to all comments before requesting re-review
 - Don't resolve comments yourself (let reviewer resolve)
 - Keep PR updated with main (rebase preferred over merge)
 
 **As reviewer:**
+
 - Use conventional comment prefixes:
   - `nit:` — Minor style suggestion, non-blocking
   - `question:` — Seeking clarification
@@ -1714,6 +1745,7 @@ impl Drop for DedupeReservation {
 ```
 
 **Why it's exemplary:**
+
 - Automatic cleanup on drop (can't forget to rollback)
 - Explicit commit for success path
 - Handles partial failures gracefully
@@ -1756,6 +1788,7 @@ mod proptest_tests {
 ```
 
 **Why it's exemplary:**
+
 - Tests security-critical code with arbitrary input
 - Covers edge cases humans wouldn't think of
 - Documents expected invariants (never panics)
@@ -1799,6 +1832,7 @@ pub fn verify(&self) -> Result<VerifyReport, Error> {
 ```
 
 **Why it's exemplary:**
+
 - Post-hoc audit capability for compliance
 - Uses canonical serialization for reproducibility
 - Reports all issues rather than failing on first
@@ -1841,6 +1875,7 @@ impl CapDeniedInfo {
 ```
 
 **Why it's exemplary:**
+
 - Typed capability kinds enable matching
 - All context needed for debugging included
 - Links to audit log for forensics
@@ -1881,6 +1916,7 @@ impl Executor for MockExecutor {
 ```
 
 **Why it's exemplary:**
+
 - Tests opening logic without real agent execution
 - Configurable responses per node
 - Error on missing mock (catches test bugs)
@@ -2056,7 +2092,7 @@ fn validate(input: &str) -> Result<(), ValidationError> {
 
 ## 16. Quick Reference Card
 
-```
+```text
 +-------------------------------------------------------------+
 |                 RUNLOOP RUST GUIDELINES                     |
 +-------------------------------------------------------------+
@@ -2116,4 +2152,4 @@ fn validate(input: &str) -> Result<(), ValidationError> {
 
 ---
 
-*Last updated: 2025-01*
+Last updated: 2025-01

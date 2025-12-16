@@ -54,6 +54,7 @@ a trailer to each commit: `Signed-off-by: Your Name <you@example.com>`
 ## Technical standards
 
 For detailed guidance on:
+
 - Architectural decisions (when to create crates, dependency rules)
 - Code size limits (function, module, crate limits)
 - Rust idioms (error handling, ownership, async patterns)

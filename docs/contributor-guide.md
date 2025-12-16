@@ -91,6 +91,7 @@ Before submitting code for review, verify your changes against the
 [Engineering Standards](engineering-standards.md). Quick checklist:
 
 ### Code Quality
+
 - [ ] Functions under 100 lines, modules under 800 lines
 - [ ] No `.unwrap()` or `.expect()` in library code
 - [ ] All `unsafe` blocks have `// SAFETY:` comments
@@ -98,17 +99,21 @@ Before submitting code for review, verify your changes against the
 - [ ] `#[non_exhaustive]` on new public enums
 
 ### Architecture
+
 - [ ] Dependencies flow downward (see crate diagram in engineering standards)
 - [ ] New crates justified (not just "might need it later")
 - [ ] Traits have multiple implementations or clear mocking need
 
 ### Testing
+
 - [ ] New functionality has tests
 - [ ] Error paths exercised
 - [ ] Property tests for parsers or security-critical code
 
 ### Decision Framework
+
 For significant choices, document in PR description:
+
 1. What options were considered?
 2. How does chosen option rank on: Reliability > Security > Debuggability >
    Maintainability > Performance?

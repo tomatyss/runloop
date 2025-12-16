@@ -30,7 +30,7 @@ For the full technical standards with all examples, see
 
 ## Project Structure
 
-```
+```text
 runloop-os/
 ├── crates/
 │   ├── runloopd/          # Main daemon
@@ -57,7 +57,7 @@ runloop-os/
 
 ### Crate Dependency Diagram
 
-```
+```text
                  runloop-core (shared types)
                         │
         ┌───────────────┼───────────────┐
@@ -88,12 +88,12 @@ runloop-os/
 
 ### When to Create a New Crate
 
-| Create New Crate When | Keep as Module When |
-|-----------------------|---------------------|
-| Different dependency tree | Tightly coupled to parent |
-| Reusable by external tools | Shares private types |
-| Different lint requirements | Less than 500 lines |
-| Clear domain boundary | No external consumers |
+| Create New Crate When        | Keep as Module When       |
+| ---------------------------- | ------------------------- |
+| Different dependency tree    | Tightly coupled to parent |
+| Reusable by external tools   | Shares private types      |
+| Different lint requirements  | Less than 500 lines       |
+| Clear domain boundary        | No external consumers     |
 
 ---
 
@@ -125,23 +125,23 @@ cargo doc --no-deps --open
 
 ### Naming Conventions
 
-| Item | Convention | Example |
-|------|------------|---------|
-| Crates, modules, files | `snake_case` | `agent_registry` |
-| Types, traits | `UpperCamelCase` | `AgentRegistry` |
-| Functions, variables | `snake_case` | `resolve_agent` |
-| Constants | `SCREAMING_SNAKE_CASE` | `MAX_RETRY_COUNT` |
+| Item                   | Convention              | Example           |
+| ---------------------- | ----------------------- | ----------------- |
+| Crates, modules, files | `snake_case`            | `agent_registry`  |
+| Types, traits          | `UpperCamelCase`        | `AgentRegistry`   |
+| Functions, variables   | `snake_case`            | `resolve_agent`   |
+| Constants              | `SCREAMING_SNAKE_CASE`  | `MAX_RETRY_COUNT` |
 
 ### Size Limits (Hard)
 
-| Scope | Limit | Action |
-|-------|-------|--------|
-| Function body | 100 lines | Extract helpers |
-| impl block | 300 lines | Split or extract |
-| Module file | 800 lines | Split into submodules |
-| lib.rs | 200 lines | Re-exports only |
-| Function params | 5 | Use struct/builder |
-| Nesting depth | 4 levels | Extract, early return |
+| Scope           | Limit     | Action                |
+| --------------- | --------- | --------------------- |
+| Function body   | 100 lines | Extract helpers       |
+| impl block      | 300 lines | Split or extract      |
+| Module file     | 800 lines | Split into submodules |
+| lib.rs          | 200 lines | Re-exports only       |
+| Function params | 5         | Use struct/builder    |
+| Nesting depth   | 4 levels  | Extract, early return |
 
 ---
 
@@ -268,12 +268,12 @@ pub fn with_timeout(mut self, t: Duration) -> Self { }
 
 ### Clone vs Borrow Decision
 
-| Clone When | Borrow When |
-|------------|-------------|
-| Data is small (< 1KB) | Data is large |
-| Called infrequently | Called in hot loop |
-| Need owned for `Send` | No ownership transfer needed |
-| Simplifies API significantly | References work fine |
+| Clone When                   | Borrow When                  |
+| ---------------------------- | ---------------------------- |
+| Data is small (< 1KB)        | Data is large                |
+| Called infrequently          | Called in hot loop           |
+| Need owned for `Send`        | No ownership transfer needed |
+| Simplifies API significantly | References work fine         |
 
 ### `Arc<Mutex<T>>` Pattern
 
@@ -298,12 +298,12 @@ process(data).await;
 
 ### Choosing Sync Primitives
 
-| Primitive | Use When |
-|-----------|----------|
-| `tokio::sync::Mutex` | Lock held across `.await` |
-| `parking_lot::Mutex` | Short sync-only sections |
-| `DashMap` | Many readers, few writers |
-| `tokio::sync::RwLock` | Read-heavy async access |
+| Primitive              | Use When                   |
+| ---------------------- | -------------------------- |
+| `tokio::sync::Mutex`   | Lock held across `.await`  |
+| `parking_lot::Mutex`   | Short sync-only sections   |
+| `DashMap`              | Many readers, few writers  |
+| `tokio::sync::RwLock`  | Read-heavy async access    |
 
 ### NEVER Hold Locks Across Await
 
@@ -328,7 +328,7 @@ async fn good() {
 
 ### Async vs Sync Boundaries
 
-```
+```text
 ASYNC: I/O operations (network, file, bus)
 SYNC:  CPU-bound work (hashing, parsing, validation)
 
@@ -341,12 +341,12 @@ Use spawn_blocking for sync work > 1ms
 
 ### Coverage Requirements
 
-| Code Type | Minimum |
-|-----------|---------|
-| Core logic | 80% line coverage |
-| Error paths | All variants exercised |
-| Public API | Every function tested |
-| Unsafe code | 100% + property tests |
+| Code Type   | Minimum                 |
+| ----------- | ----------------------- |
+| Core logic  | 80% line coverage       |
+| Error paths | All variants exercised  |
+| Public API  | Every function tested   |
+| Unsafe code | 100% + property tests   |
 
 ### Test Organization
 
@@ -402,13 +402,13 @@ info!("operation {} completed in {}ms", trace_id, elapsed);
 
 ### Log Levels
 
-| Level | Use For |
-|-------|---------|
-| `error` | Unrecoverable failures |
-| `warn` | Recoverable issues |
-| `info` | Significant state changes |
-| `debug` | Troubleshooting detail |
-| `trace` | Hot path verbosity |
+| Level   | Use For                   |
+| ------- | ------------------------- |
+| `error` | Unrecoverable failures    |
+| `warn`  | Recoverable issues        |
+| `info`  | Significant state changes |
+| `debug` | Troubleshooting detail    |
+| `trace` | Hot path verbosity        |
 
 ### What NOT to Log
 
@@ -472,35 +472,38 @@ pub fn parse_opening(yaml: &str) -> Result<Opening, Error> {
 
 When working in these areas, consider advancing these goals:
 
-**1. KB Storage Abstraction**
+#### KB Storage Abstraction
+
 - Current: SQLite tightly coupled in `runloop-kb`
 - Target: Split to `runloop-kb-core` + `runloop-kb-sqlite`
 - Why: Enable PostgreSQL for multi-node deployments
 
-**2. Protocol Crate Extraction**
+#### Protocol Crate Extraction
+
 - Current: Content types in `runloop-core/src/content.rs`
 - Target: Standalone `runloop-protocol` crate
 - Why: Third-party tools need protocol without full runtime
 
-**3. WASM Agent SDK Consolidation**
+#### WASM Agent SDK Consolidation
+
 - Current: FFI boilerplate duplicated in 8+ agents
 - Target: Single impl in `runloop-agent-wasm-sdk`
 - Why: Reduce duplication, consistent safety comments
 
 ### Code Duplication Guidelines
 
-```
+```text
 2 places  → Probably coincidence, leave it
 3+ places → Consider extracting
 Identical → Definitely extract
 ```
 
-| Duplication Scope | Extract To |
-|-------------------|------------|
-| Within one crate | Private module |
-| Across related crates | Lowest common dependency |
-| Across unrelated crates | `runloop-core` or new crate |
-| Test utilities | `tests/common/mod.rs` |
+| Duplication Scope         | Extract To                     |
+| ------------------------- | ------------------------------ |
+| Within one crate          | Private module                 |
+| Across related crates     | Lowest common dependency       |
+| Across unrelated crates   | `runloop-core` or new crate    |
+| Test utilities            | `tests/common/mod.rs`          |
 
 ---
 
@@ -609,7 +612,7 @@ fn validate(s: &str) -> Result<(), ValidationError> { }
 
 ### Commit Messages
 
-```
+```text
 <type>(<scope>): <description>
 
 <body>
@@ -619,7 +622,7 @@ fn validate(s: &str) -> Result<(), ValidationError> { }
 
 Types: `feat`, `fix`, `docs`, `refactor`, `test`, `perf`, `chore`
 
-```
+```text
 feat(router): add case-insensitive matching
 
 Closes #42
@@ -628,18 +631,18 @@ Signed-off-by: Name <email>
 
 ### PR Size
 
-| Size | Lines | Action |
-|------|-------|--------|
-| Small | < 100 | Same day review |
-| Medium | 100-400 | 1-2 days |
-| Large | 400-800 | 2-3 days |
-| Too Large | > 800 | Split the PR |
+| Size      | Lines   | Action          |
+| --------- | ------- | --------------- |
+| Small     | < 100   | Same day review |
+| Medium    | 100-400 | 1-2 days        |
+| Large     | 400-800 | 2-3 days        |
+| Too Large | > 800   | Split the PR    |
 
 ---
 
 ## Quick Reference Card
 
-```
+```text
 +---------------------------------------------------------------+
 |                    RUNLOOP AGENT RULES                        |
 +---------------------------------------------------------------+
