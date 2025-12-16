@@ -7,7 +7,7 @@ edition = "2024"
 name = "runloop_registry"
 
 [dependencies]
-dirs = "5.0"
+dirs = "6.0"
 runloop-core = { path = "../core" }
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
