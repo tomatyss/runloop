@@ -626,13 +626,15 @@ impl KnowledgeBase {
         let hash = blake3::hash(envelope_canonical.as_bytes());
 
         let ts_ms = timestamp_ms();
+        let ts_ms_i64 = i64::try_from(ts_ms)
+            .map_err(|_| Error::Config(format!("timestamp out of range: {ts_ms}")))?;
         let mut conn = self.events.lock();
         let tx = conn.transaction()?;
         tx.execute(
             "INSERT INTO events (ts_ms, actor, kind, scope, payload_json, provenance_json, hash_blake3)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
-                ts_ms,
+                ts_ms_i64,
                 &delta.actor,
                 &delta.kind,
                 scope,
