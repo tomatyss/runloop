@@ -31,5 +31,5 @@ tracing = "0.1"
 
 [dev-dependencies]
 tempfile = "3.10"
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.38", features = ["bundled"] }
 serde_yaml = "0.9.34"
