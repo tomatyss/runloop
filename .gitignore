@@ -18,3 +18,4 @@ docs/book/
 # OS junk
 **/.DS_Store
 Thumbs.db
+.taskter/

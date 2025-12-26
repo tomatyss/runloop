@@ -104,6 +104,12 @@ cargo run -p rlp -- run examples/openings/note_taker.yaml --local \
   --params '{"prompt":"draft a standup note"}'
 ```
 
+Install a prebuilt bundle into a registry dir (directory or `.tar`/`.tar.gz`):
+
+```bash
+rlp agent install /path/to/agent.bundle.tar
+```
+
 ### Packages & images (daemon / system mode)
 
 When installed from a .deb or image, the service runs as **`runloop:runloop`**

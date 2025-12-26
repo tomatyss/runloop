@@ -56,16 +56,19 @@ installed from the `.deb` packages (no source checkout required).
 
 ## Picking an executor (local vs daemon)
 
-- `rlp ... --local` uses the built-in demo agents only; your new bundle will not
-  be found there.
+- `rlp ... --local` uses the same registry search dirs as the daemon. If your
+  bundle lives under `~/.runloop/agents` (default) or you pass `--agents-dir`,
+  it is discoverable in local runs.
 - The packaged daemon runs as user `runloop` with home `/var/lib/runloop`, and
   its default agent search dirs resolve under that home. Agents you scaffolded
-  in `/home/<you>/.runloop/agents` will not be visible until you point the
-  daemon at them.
+  in `/home/<you>/.runloop/agents` will not be visible to the daemon until you
+  point the daemon at them or install into a daemon-owned search dir.
 
 ## Running your agent with the packaged systemd service
 
-1. Point the daemon at your bundle/openings and keep the socket reachable:
+1. Point the daemon at your bundle/openings and keep the socket reachable (or
+   install the bundle into `/var/lib/runloop/agents` with
+   `rlp agent install --root /var/lib/runloop/agents <bundle.tar>`):
 
 ```bash
 mkdir -p ~/.runloop

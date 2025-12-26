@@ -21,6 +21,19 @@ Use `just build-agents-wasm` to rebuild the canonical bundles and refresh their
 digests, or `just test-agents-wasm` for an end-to-end smoke test of the
 `compose_email` opening.
 
+## Install prebuilt bundles
+
+If you have a packaged bundle (directory or `.tar`/`.tar.gz`), install it into a
+search dir with:
+
+```bash
+rlp agent install /path/to/agent.bundle.tar
+```
+
+Use `--root` to target a specific registry (e.g. `/var/lib/runloop/agents` for
+the system daemon). `rlp agent list` now reports bundle status and the source
+search dir so you can confirm discoverability.
+
 ## Scaffold → build → run (example)
 
 The CLI can generate a new agent plus a starter opening wired to it. This flow

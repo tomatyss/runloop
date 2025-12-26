@@ -481,7 +481,8 @@ async fn run() -> Result<i32, CliError> {
             Ok(0)
         }
         Commands::Config(cmd) => {
-            handle_config(cmd).await?;
+            let overrides = path_overrides.to_overrides();
+            handle_config(cmd, &overrides).await?;
             Ok(0)
         }
         Commands::Shell(cmd) => {
@@ -1132,17 +1133,18 @@ async fn handle_kb(cmd: KbCommands) -> Result<(), CliError> {
     Ok(())
 }
 
-async fn handle_config(cmd: ConfigCommands) -> Result<(), CliError> {
+async fn handle_config(cmd: ConfigCommands, overrides: &PathOverrides) -> Result<(), CliError> {
     match cmd {
-        ConfigCommands::Path(args) => handle_config_path(args),
+        ConfigCommands::Path(args) => handle_config_path(args, overrides),
     }
 }
 
-fn handle_config_path(args: ConfigPathArgs) -> Result<(), CliError> {
+fn handle_config_path(args: ConfigPathArgs, overrides: &PathOverrides) -> Result<(), CliError> {
     let (config, layers) = Config::load_with_layers()?;
+    let registry_paths = resolve_paths(&config, overrides);
     let settings = args.output.resolve();
     if matches!(settings.mode, OutputMode::Json) || args.all {
-        return render_config_chain(&config, &layers, &settings);
+        return render_config_chain(&config, &layers, &settings, Some(&registry_paths));
     }
     if let Some(path) = active_config_path(&layers) {
         println!("{}", path.display());
@@ -1401,9 +1403,10 @@ fn render_config_chain(
     config: &Config,
     layers: &[ConfigLayer],
     settings: &output::OutputSettings,
+    registry_paths: Option<&RegistryPaths>,
 ) -> Result<(), CliError> {
     if matches!(settings.mode, OutputMode::Json) {
-        let json_value = build_config_json(config, layers)?;
+        let json_value = build_config_json(config, layers, registry_paths)?;
         print_json(&json_value)?;
         return Ok(());
     }
@@ -1426,11 +1429,25 @@ fn render_config_chain(
     for note in config_override_notes(layers) {
         table.add_note(note);
     }
+    if let Some(paths) = registry_paths {
+        table.add_note(format!(
+            "resolved agent search dirs: {}",
+            format_search_dirs(&paths.agents)
+        ));
+        table.add_note(format!(
+            "resolved opening search dirs: {}",
+            format_search_dirs(&paths.openings)
+        ));
+    }
     print_table(&table, settings)?;
     Ok(())
 }
 
-fn build_config_json(config: &Config, layers: &[ConfigLayer]) -> Result<JsonValue, CliError> {
+fn build_config_json(
+    config: &Config,
+    layers: &[ConfigLayer],
+    registry_paths: Option<&RegistryPaths>,
+) -> Result<JsonValue, CliError> {
     let sources = layers
         .iter()
         .map(|layer| match &layer.source {
@@ -1466,11 +1483,28 @@ fn build_config_json(config: &Config, layers: &[ConfigLayer]) -> Result<JsonValu
         })
         .collect::<Vec<_>>();
     let resolved = to_value(config)?;
+    let registry = registry_paths.map(|paths| {
+        json!({
+            "agents": paths.agents,
+            "openings": paths.openings,
+            "demo_agents": paths.demo_agents,
+            "info": paths.info,
+            "warnings": paths.warnings,
+        })
+    });
     Ok(json!({
         "sources": sources,
         "overrides": overrides,
         "resolved": resolved,
+        "registry_paths": registry,
     }))
+}
+
+fn format_search_dirs(dirs: &[PathBuf]) -> String {
+    dirs.iter()
+        .map(|dir| dir.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn describe_layer(layer: &ConfigLayer) -> (String, String, String) {

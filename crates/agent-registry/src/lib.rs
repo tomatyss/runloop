@@ -180,6 +180,12 @@ impl AgentRegistry {
     fn find_manifest(&self, reference: &AgentRef) -> Result<PathBuf, AgentRegistryError> {
         let relative_roots = candidate_roots(reference);
         for base in &self.search_dirs {
+            if let Some(candidate) = manifest_at_search_root(base, reference)? {
+                return Ok(candidate);
+            }
+            if base.is_file() {
+                continue;
+            }
             for rel in &relative_roots {
                 let candidate = base.join(rel).join("manifest.toml");
                 if candidate.is_file() {
@@ -246,6 +252,43 @@ fn candidate_roots(reference: &AgentRef) -> Vec<PathBuf> {
     }
     roots.push(PathBuf::from(&reference.name));
     roots
+}
+
+fn manifest_at_search_root(
+    base: &Path,
+    reference: &AgentRef,
+) -> Result<Option<PathBuf>, AgentRegistryError> {
+    let candidate = if base.is_file() {
+        if base.file_name().is_some_and(|name| name == "manifest.toml") {
+            base.to_path_buf()
+        } else {
+            return Ok(None);
+        }
+    } else {
+        let candidate = base.join("manifest.toml");
+        if !candidate.is_file() {
+            return Ok(None);
+        }
+        candidate
+    };
+
+    let (_, doc) = match read_manifest(&candidate) {
+        Ok(result) => result,
+        Err(_) => return Ok(None),
+    };
+    if doc.agent.name != reference.name {
+        return Ok(None);
+    }
+    if let Some(ref_variant) = &reference.variant {
+        let Some(man_variant) = &doc.agent.variant else {
+            return Ok(None);
+        };
+        if man_variant != ref_variant {
+            return Ok(None);
+        }
+    }
+
+    Ok(Some(candidate))
 }
 
 fn read_manifest(path: &Path) -> Result<(String, ManifestDoc), AgentRegistryError> {
@@ -471,6 +514,12 @@ mod tests {
         manifest_path
     }
 
+    fn write_root_manifest(root: &Path, manifest: &str) -> PathBuf {
+        let manifest_path = root.join("manifest.toml");
+        std::fs::write(&manifest_path, manifest).expect("write manifest");
+        manifest_path
+    }
+
     fn basic_manifest() -> &'static str {
         r#"[agent]
 name = "writer"
@@ -479,6 +528,35 @@ version = "1.0.0"
 [ports]
 in = []
 out = []
+"#
+    }
+
+    fn other_manifest() -> &'static str {
+        r#"[agent]
+name = "other"
+version = "1.0.0"
+
+[ports]
+in = []
+out = []
+"#
+    }
+
+    fn variant_manifest() -> &'static str {
+        r#"[agent]
+name = "writer"
+version = "1.1.0"
+variant = "pro"
+
+[ports]
+in = []
+out = []
+"#
+    }
+
+    fn invalid_manifest() -> &'static str {
+        r#"[agent
+name = "writer"
 "#
     }
 
@@ -610,6 +688,61 @@ out = []
             Some("pro")
         );
         assert_eq!(listed[0].manifest_path, manifest_path);
+    }
+
+    #[test]
+    fn bundle_resolves_manifest_at_search_root() {
+        let tmp = tempdir().expect("tmp dir");
+        write_root_manifest(tmp.path(), basic_manifest());
+        let registry = AgentRegistry::new([tmp.path().to_path_buf()]);
+        let bundle = registry
+            .bundle(&AgentRef::new("writer", None))
+            .expect("bundle");
+        assert_eq!(bundle.manifest_dir, tmp.path());
+        assert_eq!(bundle.described.reference.name, "writer");
+    }
+
+    #[test]
+    fn bundle_skips_invalid_root_manifest() {
+        let tmp = tempdir().expect("tmp dir");
+        write_root_manifest(tmp.path(), invalid_manifest());
+        write_manifest(tmp.path(), basic_manifest());
+        let registry = AgentRegistry::new([tmp.path().to_path_buf()]);
+        let bundle = registry
+            .bundle(&AgentRef::new("writer", None))
+            .expect("bundle");
+        assert_eq!(bundle.described.reference.name, "writer");
+        assert!(bundle.manifest_dir.ends_with("writer"));
+    }
+
+    #[test]
+    fn bundle_ignores_root_manifest_for_other_agent() {
+        let tmp = tempdir().expect("tmp dir");
+        write_root_manifest(tmp.path(), other_manifest());
+        write_manifest(tmp.path(), basic_manifest());
+        let registry = AgentRegistry::new([tmp.path().to_path_buf()]);
+        let bundle = registry
+            .bundle(&AgentRef::new("writer", None))
+            .expect("bundle");
+        assert_eq!(bundle.described.reference.name, "writer");
+        assert!(bundle.manifest_dir.ends_with("writer"));
+    }
+
+    #[test]
+    fn bundle_ignores_root_manifest_without_variant_for_variant_request() {
+        let tmp = tempdir().expect("tmp dir");
+        write_root_manifest(tmp.path(), basic_manifest());
+        let variant_dir = tmp.path().join("writer").join("variants").join("pro");
+        std::fs::create_dir_all(&variant_dir).expect("variant dir");
+        std::fs::write(variant_dir.join("manifest.toml"), variant_manifest())
+            .expect("write manifest");
+
+        let registry = AgentRegistry::new([tmp.path().to_path_buf()]);
+        let bundle = registry
+            .bundle(&AgentRef::new("writer", Some("pro".into())))
+            .expect("bundle");
+        assert_eq!(bundle.manifest_dir, variant_dir);
+        assert_eq!(bundle.described.reference.variant.as_deref(), Some("pro"));
     }
 
     #[test]
