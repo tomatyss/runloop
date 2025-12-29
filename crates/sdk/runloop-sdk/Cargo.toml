@@ -20,4 +20,4 @@ uuid = { version = "1", features = ["serde"] }
 [dev-dependencies]
 tokio = { version = "1.38", features = ["macros", "rt-multi-thread"] }
 futures-util = "0.3"
-tempfile = "3.10"
+tempfile = "3.24"
