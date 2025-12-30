@@ -185,6 +185,7 @@ impl AgentRegistry {
             for manifest_path in discover_manifest_paths(base) {
                 let (raw, doc) = read_manifest(&manifest_path)?;
                 let reference = AgentRef::new(doc.agent.name.clone(), doc.agent.variant.clone());
+                validate_reference(&reference)?;
                 if !seen.insert(reference.clone()) {
                     continue;
                 }
@@ -199,6 +200,7 @@ impl AgentRegistry {
     }
 
     fn find_manifest(&self, reference: &AgentRef) -> Result<PathBuf, AgentRegistryError> {
+        validate_reference(reference)?;
         let relative_roots = candidate_roots(reference);
         for base in &self.search_dirs {
             if let Some(candidate) = manifest_at_search_root(base, reference)? {
@@ -256,6 +258,29 @@ pub fn schema_property_names(schema: &JsonValue) -> BTreeSet<String> {
         .and_then(|props| props.as_object())
         .map(|map| map.keys().cloned().collect())
         .unwrap_or_default()
+}
+
+fn validate_reference(reference: &AgentRef) -> Result<(), AgentRegistryError> {
+    validate_reference_component("agent name", &reference.name, reference)?;
+    if let Some(variant) = &reference.variant {
+        validate_reference_component("agent variant", variant, reference)?;
+    }
+    Ok(())
+}
+
+fn validate_reference_component(
+    label: &str,
+    value: &str,
+    reference: &AgentRef,
+) -> Result<(), AgentRegistryError> {
+    let mut components = Path::new(value).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(_)), None) => Ok(()),
+        _ => Err(AgentRegistryError::Reference {
+            reference: reference.clone(),
+            detail: format!("{label} '{value}' must be a single path segment"),
+        }),
+    }
 }
 
 fn candidate_roots(reference: &AgentRef) -> Vec<PathBuf> {
@@ -337,7 +362,11 @@ fn resolve_bundle_path(
         });
     }
     let rel_path = Path::new(raw);
-    if rel_path.is_absolute() || rel_path.components().any(|c| matches!(c, Component::Prefix(_))) {
+    if rel_path.is_absolute()
+        || rel_path
+            .components()
+            .any(|c| matches!(c, Component::Prefix(_)))
+    {
         return Err(AgentRegistryError::Path {
             reference: reference.clone(),
             detail: format!("{label} path must be relative: {raw}"),
@@ -356,13 +385,13 @@ fn resolve_bundle_path(
     let resolved = manifest_dir.join(rel_path);
     let base_canon = fs::canonicalize(manifest_dir).ok();
     let resolved_canon = fs::canonicalize(&resolved).ok();
-    if let (Some(base_canon), Some(resolved_canon)) = (base_canon, resolved_canon) {
-        if !resolved_canon.starts_with(&base_canon) {
-            return Err(AgentRegistryError::Path {
-                reference: reference.clone(),
-                detail: format!("{label} path escapes bundle root: {raw}"),
-            });
-        }
+    if let (Some(base_canon), Some(resolved_canon)) = (base_canon, resolved_canon)
+        && !resolved_canon.starts_with(&base_canon)
+    {
+        return Err(AgentRegistryError::Path {
+            reference: reference.clone(),
+            detail: format!("{label} path escapes bundle root: {raw}"),
+        });
     }
 
     Ok(resolved)
@@ -678,6 +707,37 @@ out = []
             msg.contains("variant mismatch"),
             "expected mismatch detail, got {msg}"
         );
+    }
+
+    #[test]
+    fn bundle_rejects_invalid_reference() {
+        let tmp = tempdir().expect("tmp dir");
+        let registry = AgentRegistry::new([tmp.path().to_path_buf()]);
+        let err = registry
+            .bundle(&AgentRef::new("../evil", None))
+            .expect_err("invalid reference should fail");
+        let msg = format!("{err}");
+        assert!(msg.contains("agent name"), "unexpected error: {msg}");
+    }
+
+    #[test]
+    fn list_rejects_invalid_reference() {
+        let tmp = tempdir().expect("tmp dir");
+        write_manifest(
+            tmp.path(),
+            r#"[agent]
+name = "../evil"
+version = "1.0.0"
+
+[ports]
+in = []
+out = []
+"#,
+        );
+        let registry = AgentRegistry::new([tmp.path().to_path_buf()]);
+        let err = registry.list().expect_err("invalid reference should fail");
+        let msg = format!("{err}");
+        assert!(msg.contains("agent name"), "unexpected error: {msg}");
     }
 
     #[test]

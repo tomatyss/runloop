@@ -790,7 +790,7 @@ fn load_bundle(
     bundle_root: &Path,
 ) -> Result<(AgentRef, runloop_agent_registry::AgentBundle), AgentError> {
     let registry = AgentRegistry::new([bundle_root]);
-    let listed = registry.list()?;
+    let listed = registry.list().map_err(map_registry_error)?;
     if listed.is_empty() {
         return Err(AgentError::Source(format!(
             "no manifest found in {}",
@@ -810,8 +810,17 @@ fn load_bundle(
         .map(Path::to_path_buf)
         .unwrap_or_else(|| bundle_root.to_path_buf());
     let bundle_registry = AgentRegistry::new([manifest_dir]);
-    let bundle = bundle_registry.bundle(&reference)?;
+    let bundle = bundle_registry
+        .bundle(&reference)
+        .map_err(map_registry_error)?;
     Ok((reference, bundle))
+}
+
+fn map_registry_error(err: AgentRegistryError) -> AgentError {
+    match err {
+        AgentRegistryError::Reference { detail, .. } => AgentError::Install(detail),
+        other => AgentError::Registry(other),
+    }
 }
 
 fn validate_bundle(bundle: &runloop_agent_registry::AgentBundle) -> Vec<String> {
