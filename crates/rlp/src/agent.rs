@@ -455,6 +455,24 @@ fn install(
     }
     let mut staging_guard = StagingGuard::new(staging_dir.clone());
     copy_dir_all(&bundle_root, &staging_dir)?;
+    let (staged_reference, staged_bundle) = load_bundle(&staging_dir)?;
+    if staged_reference != reference {
+        return Err(AgentError::Install(format!(
+            "staged bundle reference mismatch (expected {}, got {})",
+            reference.spec(),
+            staged_reference.spec()
+        )));
+    }
+    if !args.skip_verify {
+        let issues = validate_bundle(&staged_bundle);
+        if !issues.is_empty() {
+            return Err(AgentError::Bundle(format!(
+                "{}: {}",
+                staged_reference.spec(),
+                issues.join("; ")
+            )));
+        }
+    }
     fs::rename(&staging_dir, &dest_dir)?;
     staging_guard.commit();
 

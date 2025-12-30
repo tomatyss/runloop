@@ -31,6 +31,8 @@ pub enum AgentRegistryError {
     Schema { reference: AgentRef, detail: String },
     #[error("artifact error for {reference}: {detail}")]
     Artifact { reference: AgentRef, detail: String },
+    #[error("path error for {reference}: {detail}")]
+    Path { reference: AgentRef, detail: String },
     #[error("tools.json error: {detail}")]
     Tools {
         reference: Option<AgentRef>,

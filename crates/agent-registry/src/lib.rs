@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeSet, VecDeque};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 pub use tools::{Budget, Observability, ToolEntry, ToolsDoc, Transport, load_tools};
 
 mod tools;
@@ -24,11 +24,17 @@ pub struct AgentBinary {
 }
 
 impl AgentBinary {
-    fn from_entry(base: &Path, entry: &EntrySpec) -> Self {
-        Self {
-            path: base.join(&entry.path),
+    fn from_entry(
+        base: &Path,
+        entry: &EntrySpec,
+        reference: &AgentRef,
+        label: &'static str,
+    ) -> Result<Self, AgentRegistryError> {
+        let path = resolve_bundle_path(base, &entry.path, reference, label)?;
+        Ok(Self {
+            path,
             blake3: entry.blake3.clone(),
-        }
+        })
     }
 }
 
@@ -51,12 +57,18 @@ pub struct AgentArtifact {
 }
 
 impl AgentArtifact {
-    fn from_entry(base: &Path, entry: &ArtifactSpec) -> Self {
-        Self {
-            path: base.join(&entry.path),
+    fn from_entry(
+        base: &Path,
+        entry: &ArtifactSpec,
+        reference: &AgentRef,
+        label: &'static str,
+    ) -> Result<Self, AgentRegistryError> {
+        let path = resolve_bundle_path(base, &entry.path, reference, label)?;
+        Ok(Self {
+            path,
             blake3: entry.blake3.clone(),
             version: entry.version.unwrap_or(1),
-        }
+        })
     }
 }
 
@@ -112,18 +124,27 @@ impl AgentRegistry {
             .entry_wasm
             .as_ref()
             .or(doc.agent.entry_wasm.as_ref())
-            .map(|entry| AgentBinary::from_entry(&manifest_dir, entry));
+            .map(|entry| AgentBinary::from_entry(&manifest_dir, entry, reference, "entry_wasm"))
+            .transpose()?;
         let native_entry = doc
             .entry_native
             .as_ref()
             .or(doc.agent.entry_native.as_ref())
-            .map(|entry| AgentBinary::from_entry(&manifest_dir, entry));
-        let policy_path = doc.caps.as_ref().map(|caps| manifest_dir.join(&caps.file));
+            .map(|entry| AgentBinary::from_entry(&manifest_dir, entry, reference, "entry_native"))
+            .transpose()?;
+        let policy_path = doc
+            .caps
+            .as_ref()
+            .map(|caps| resolve_bundle_path(&manifest_dir, &caps.file, reference, "caps.file"))
+            .transpose()?;
         let tools = doc
             .artifacts
             .as_ref()
             .and_then(|artifacts| artifacts.tools.as_ref())
-            .map(|entry| AgentArtifact::from_entry(&manifest_dir, entry));
+            .map(|entry| {
+                AgentArtifact::from_entry(&manifest_dir, entry, reference, "artifacts.tools")
+            })
+            .transpose()?;
         Ok(AgentBundle {
             described,
             manifest_dir,
@@ -301,6 +322,50 @@ fn read_manifest(path: &Path) -> Result<(String, ManifestDoc), AgentRegistryErro
         source,
     })?;
     Ok((raw, doc))
+}
+
+fn resolve_bundle_path(
+    manifest_dir: &Path,
+    raw: &str,
+    reference: &AgentRef,
+    label: &str,
+) -> Result<PathBuf, AgentRegistryError> {
+    if raw.trim().is_empty() {
+        return Err(AgentRegistryError::Path {
+            reference: reference.clone(),
+            detail: format!("{label} path is empty"),
+        });
+    }
+    let rel_path = Path::new(raw);
+    if rel_path.is_absolute() || rel_path.components().any(|c| matches!(c, Component::Prefix(_))) {
+        return Err(AgentRegistryError::Path {
+            reference: reference.clone(),
+            detail: format!("{label} path must be relative: {raw}"),
+        });
+    }
+    if rel_path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(AgentRegistryError::Path {
+            reference: reference.clone(),
+            detail: format!("{label} path must not contain '..': {raw}"),
+        });
+    }
+
+    let resolved = manifest_dir.join(rel_path);
+    let base_canon = fs::canonicalize(manifest_dir).ok();
+    let resolved_canon = fs::canonicalize(&resolved).ok();
+    if let (Some(base_canon), Some(resolved_canon)) = (base_canon, resolved_canon) {
+        if !resolved_canon.starts_with(&base_canon) {
+            return Err(AgentRegistryError::Path {
+                reference: reference.clone(),
+                detail: format!("{label} path escapes bundle root: {raw}"),
+            });
+        }
+    }
+
+    Ok(resolved)
 }
 
 fn build_described(
@@ -781,6 +846,90 @@ version = 1
                 .expect("digest")
                 .blake3,
             "abcdef"
+        );
+    }
+
+    #[test]
+    fn bundle_rejects_entry_path_traversal() {
+        let tmp = tempdir().expect("tmp dir");
+        write_manifest(
+            tmp.path(),
+            r#"[agent]
+name = "writer"
+version = "1.0.0"
+entry_wasm = { path = "../bin/agent.wasm", blake3 = "abcdef" }
+
+[ports]
+in = []
+out = []
+"#,
+        );
+        let registry = AgentRegistry::new([tmp.path().to_path_buf()]);
+        let err = registry
+            .bundle(&AgentRef::new("writer", None))
+            .expect_err("path traversal should fail");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("entry_wasm path must not contain '..'"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn bundle_rejects_tools_path_traversal() {
+        let tmp = tempdir().expect("tmp dir");
+        write_manifest(
+            tmp.path(),
+            r#"[agent]
+name = "writer"
+version = "1.0.0"
+
+[ports]
+in = []
+out = []
+
+[artifacts.tools]
+path = "../tools.json"
+blake3 = "abcdef"
+version = 1
+"#,
+        );
+        let registry = AgentRegistry::new([tmp.path().to_path_buf()]);
+        let err = registry
+            .bundle(&AgentRef::new("writer", None))
+            .expect_err("path traversal should fail");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("artifacts.tools path must not contain '..'"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn bundle_rejects_caps_path_traversal() {
+        let tmp = tempdir().expect("tmp dir");
+        write_manifest(
+            tmp.path(),
+            r#"[agent]
+name = "writer"
+version = "1.0.0"
+
+[ports]
+in = []
+out = []
+
+[caps]
+file = "../policy.caps"
+"#,
+        );
+        let registry = AgentRegistry::new([tmp.path().to_path_buf()]);
+        let err = registry
+            .bundle(&AgentRef::new("writer", None))
+            .expect_err("path traversal should fail");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("caps.file path must not contain '..'"),
+            "unexpected error: {msg}"
         );
     }
 
