@@ -27,10 +27,14 @@ pub enum AgentRegistryError {
     },
     #[error("agent mismatch for {reference}: {detail}")]
     Mismatch { reference: AgentRef, detail: String },
+    #[error("invalid reference for {reference}: {detail}")]
+    Reference { reference: AgentRef, detail: String },
     #[error("schema error for {reference}: {detail}")]
     Schema { reference: AgentRef, detail: String },
     #[error("artifact error for {reference}: {detail}")]
     Artifact { reference: AgentRef, detail: String },
+    #[error("path error for {reference}: {detail}")]
+    Path { reference: AgentRef, detail: String },
     #[error("tools.json error: {detail}")]
     Tools {
         reference: Option<AgentRef>,

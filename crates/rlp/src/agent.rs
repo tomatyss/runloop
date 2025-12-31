@@ -1,12 +1,13 @@
 use crate::output::{Cell, OutputArgs, OutputMode, Table, print_json, print_table};
 use clap::{Args, Subcommand};
 use dirs::home_dir;
+use flate2::read::GzDecoder;
 use is_terminal::IsTerminal;
 use runloop_agent_registry::{
     AgentRegistry, AgentRegistryError, Budget, Observability, ToolEntry, ToolsDoc, Transport,
     digest_file_hex, load_tools,
 };
-use runloop_core::Config;
+use runloop_core::{AgentRef, Config};
 use runloop_registry::{PathOverrides, RegistryPaths, resolve_paths};
 use serde_json::json;
 use std::env;
@@ -14,9 +15,12 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tar::{Archive, EntryType};
+use tempfile::TempDir;
 use thiserror::Error;
 use toml_edit::{DocumentMut, value};
 use url::Url;
+use uuid::Uuid;
 
 const ZERO_DIGEST: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -25,6 +29,7 @@ pub enum AgentCommands {
     List(ListArgs),
     Scaffold(ScaffoldArgs),
     Build(BuildArgs),
+    Install(InstallArgs),
 }
 
 #[derive(Args, Debug)]
@@ -90,6 +95,21 @@ pub struct ListArgs {
     pub output: OutputArgs,
 }
 
+#[derive(Args, Debug)]
+pub struct InstallArgs {
+    /// Agent bundle path or file:// URL (directory, .tar, or .tar.gz).
+    pub source: String,
+    /// Root directory for installed bundles (defaults to first configured search dir).
+    #[arg(long = "root", value_name = "PATH")]
+    pub root_dir: Option<PathBuf>,
+    /// Overwrite an existing bundle if present.
+    #[arg(long)]
+    pub force: bool,
+    /// Skip digest and tools.json validation (not recommended).
+    #[arg(long = "skip-verify")]
+    pub skip_verify: bool,
+}
+
 #[derive(Debug)]
 pub struct ScaffoldResult {
     pub agent_dir: PathBuf,
@@ -105,6 +125,13 @@ pub struct BuildResult {
     pub crate_dir: PathBuf,
     pub manifest_path: PathBuf,
     pub wasm_path: PathBuf,
+}
+
+#[derive(Debug)]
+pub struct InstallResult {
+    pub agent_dir: PathBuf,
+    pub manifest_path: PathBuf,
+    pub reference: AgentRef,
 }
 
 #[derive(Debug, Error)]
@@ -137,6 +164,14 @@ pub enum AgentError {
     Digest(String),
     #[error("invalid tools.json: {0}")]
     Tools(String),
+    #[error("invalid bundle source: {0}")]
+    Source(String),
+    #[error("bundle validation failed: {0}")]
+    Bundle(String),
+    #[error("install failed: {0}")]
+    Install(String),
+    #[error("bundle signing required but signature verification is not available yet")]
+    SignatureRequired,
 }
 
 pub fn handle_agent(
@@ -163,6 +198,15 @@ pub fn handle_agent(
             println!("updated manifest: {}", result.manifest_path.display());
             println!("agent bundle at {}", result.agent_dir.display());
             println!("wasm crate at {}", result.crate_dir.display());
+        }
+        AgentCommands::Install(args) => {
+            let result = install(args, config, overrides, &registry_paths)?;
+            println!(
+                "installed {} to {}",
+                result.reference,
+                result.agent_dir.display()
+            );
+            println!("manifest: {}", result.manifest_path.display());
         }
     }
     Ok(())
@@ -194,16 +238,30 @@ fn list_agents(
         eprintln!("warning: {warning}");
     }
 
+    let audits = listed
+        .iter()
+        .map(|entry| {
+            audit_bundle(
+                &entry.described.reference,
+                &entry.manifest_path,
+                &search_dirs,
+            )
+        })
+        .collect::<Vec<_>>();
+
     match settings.mode {
         OutputMode::Json => {
             let payload = json!({
-                "agents": listed.iter().map(|entry| {
+                "agents": listed.iter().zip(audits.iter()).map(|(entry, audit)| {
                     json!({
                         "name": entry.described.reference.name,
                         "variant": entry.described.reference.variant,
                         "version": entry.described.version,
                         "digest": entry.described.digest,
                         "manifest": entry.manifest_path,
+                        "status": audit.status,
+                        "issues": audit.issues,
+                        "source_dir": audit.source_dir,
                     })
                 }).collect::<Vec<_>>(),
                 "search_dirs": search_dirs,
@@ -216,9 +274,11 @@ fn list_agents(
                 "variant".into(),
                 "version".into(),
                 "digest".into(),
+                "status".into(),
+                "source".into(),
                 "manifest".into(),
             ]);
-            for entry in &listed {
+            for (entry, audit) in listed.iter().zip(audits.iter()) {
                 table.add_row(vec![
                     Cell::text(&entry.described.reference.name),
                     Cell::text(
@@ -231,6 +291,14 @@ fn list_agents(
                     ),
                     Cell::text(&entry.described.version),
                     Cell::text(short_digest(&entry.described.digest)),
+                    Cell::text(&audit.status),
+                    Cell::text(
+                        audit
+                            .source_dir
+                            .as_ref()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_default(),
+                    ),
                     Cell::text(entry.manifest_path.display().to_string()),
                 ]);
             }
@@ -248,6 +316,9 @@ fn list_agents(
             } else {
                 table.add_note(format!("searched: {}", format_search_dirs(&search_dirs)));
                 table.add_note("digest = blake3(manifest.toml)");
+                if audits.iter().any(|audit| !audit.issues.is_empty()) {
+                    table.add_note("use --json to inspect bundle validation issues");
+                }
             }
             print_table(&table, &settings)?;
         }
@@ -324,6 +395,102 @@ fn build(
     overrides: &PathOverrides,
 ) -> Result<BuildResult, AgentError> {
     build_with_toolchain(args, config, overrides, "rustc", "cargo")
+}
+
+fn install(
+    args: InstallArgs,
+    config: &Config,
+    overrides: &PathOverrides,
+    registry_paths: &RegistryPaths,
+) -> Result<InstallResult, AgentError> {
+    if !config.security.allow_unsigned_agents {
+        return Err(AgentError::SignatureRequired);
+    }
+
+    let (source_root, _temp) = load_bundle_source(&args.source)?;
+    let (reference, bundle) = load_bundle(&source_root)?;
+    validate_reference_path(&reference)?;
+    let bundle_root = bundle.manifest_dir.clone();
+    if !args.skip_verify {
+        let issues = validate_bundle(&bundle);
+        if !issues.is_empty() {
+            return Err(AgentError::Bundle(format!(
+                "{}: {}",
+                reference.spec(),
+                issues.join("; ")
+            )));
+        }
+    }
+
+    let mut install_root =
+        resolve_agent_root(&args.root_dir, overrides.agents_dir.as_ref(), config);
+    if !registry_paths.agents.is_empty()
+        && args.root_dir.is_none()
+        && overrides.agents_dir.is_none()
+        && let Some(preferred) = registry_paths.agents.iter().find(|dir| {
+            registry_paths.demo_agents.as_ref() != Some(*dir) && !(dir.exists() && dir.is_file())
+        })
+    {
+        install_root = preferred.clone();
+    }
+
+    fs::create_dir_all(&install_root)?;
+    let dest_dir = install_root.join(reference.spec());
+    if paths_equivalent(&bundle_root, &dest_dir) {
+        return Err(AgentError::Install(
+            "bundle source resolves to install destination; choose a different --root".into(),
+        ));
+    }
+    if dest_dir.exists() {
+        if args.force {
+            fs::remove_dir_all(&dest_dir)?;
+        } else {
+            return Err(AgentError::Exists(dest_dir));
+        }
+    }
+
+    let staging_dir = install_root.join(format!(".{}.staging-{}", reference.name, Uuid::new_v4()));
+    if staging_dir.exists() {
+        fs::remove_dir_all(&staging_dir)?;
+    }
+    let mut staging_guard = StagingGuard::new(staging_dir.clone());
+    copy_dir_all(&bundle_root, &staging_dir)?;
+    let (staged_reference, staged_bundle) = load_bundle(&staging_dir)?;
+    if staged_reference != reference {
+        return Err(AgentError::Install(format!(
+            "staged bundle reference mismatch (expected {}, got {})",
+            reference.spec(),
+            staged_reference.spec()
+        )));
+    }
+    if !args.skip_verify {
+        let issues = validate_bundle(&staged_bundle);
+        if !issues.is_empty() {
+            return Err(AgentError::Bundle(format!(
+                "{}: {}",
+                staged_reference.spec(),
+                issues.join("; ")
+            )));
+        }
+    }
+    fs::rename(&staging_dir, &dest_dir)?;
+    staging_guard.commit();
+
+    Ok(InstallResult {
+        agent_dir: dest_dir.clone(),
+        manifest_path: dest_dir.join("manifest.toml"),
+        reference,
+    })
+}
+
+fn paths_equivalent(lhs: &Path, rhs: &Path) -> bool {
+    if lhs == rhs {
+        return true;
+    }
+    match (fs::canonicalize(lhs), fs::canonicalize(rhs)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
 }
 
 fn build_with_toolchain(
@@ -409,6 +576,473 @@ fn validate_name(name: &str) -> Result<(), AgentError> {
         return Err(AgentError::InvalidName(name.into()));
     }
     Ok(())
+}
+
+fn validate_reference_path(reference: &AgentRef) -> Result<(), AgentError> {
+    validate_reference_component("agent name", &reference.name)?;
+    if let Some(variant) = &reference.variant {
+        validate_reference_component("agent variant", variant)?;
+    }
+    Ok(())
+}
+
+fn validate_reference_component(label: &str, value: &str) -> Result<(), AgentError> {
+    let mut components = Path::new(value).components();
+    match (components.next(), components.next()) {
+        (Some(std::path::Component::Normal(_)), None) => Ok(()),
+        _ => Err(AgentError::Install(format!(
+            "{label} '{value}' must be a single path segment"
+        ))),
+    }
+}
+
+fn load_bundle_source(raw: &str) -> Result<(PathBuf, Option<TempDir>), AgentError> {
+    let path = parse_source_path(raw)?;
+    if path.is_dir() {
+        return Ok((path, None));
+    }
+    if path.is_file() {
+        if is_tar_archive(&path) || is_tar_gz_archive(&path) {
+            let temp = TempDir::new().map_err(|err| AgentError::Install(err.to_string()))?;
+            extract_archive(&path, temp.path())?;
+            let root = find_manifest_root(temp.path())?;
+            return Ok((root, Some(temp)));
+        }
+        if path.file_name().and_then(|name| name.to_str()) == Some("manifest.toml") {
+            let parent = path.parent().ok_or_else(|| {
+                AgentError::Source("manifest.toml path has no parent directory".into())
+            })?;
+            return Ok((parent.to_path_buf(), None));
+        }
+        return Err(AgentError::Source(format!(
+            "unsupported bundle file (expected directory or .tar/.tar.gz): {}",
+            path.display()
+        )));
+    }
+    Err(AgentError::Source(format!(
+        "bundle source not found: {}",
+        path.display()
+    )))
+}
+
+fn parse_source_path(raw: &str) -> Result<PathBuf, AgentError> {
+    if raw.contains("://") || raw.starts_with("file:") {
+        let url = Url::parse(raw).map_err(|err| AgentError::Source(err.to_string()))?;
+        if url.scheme() != "file" {
+            return Err(AgentError::Source(format!(
+                "unsupported URL scheme '{}'",
+                url.scheme()
+            )));
+        }
+        return url
+            .to_file_path()
+            .map_err(|_| AgentError::Source("invalid file:// URL".into()));
+    }
+    Ok(PathBuf::from(raw))
+}
+
+fn is_tar_archive(path: &Path) -> bool {
+    matches!(path.extension().and_then(|ext| ext.to_str()), Some("tar"))
+}
+
+fn is_tar_gz_archive(path: &Path) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    name.ends_with(".tar.gz") || name.ends_with(".tgz")
+}
+
+fn extract_archive(path: &Path, dest: &Path) -> Result<(), AgentError> {
+    let file = File::open(path)?;
+    if is_tar_gz_archive(path) {
+        let decoder = GzDecoder::new(file);
+        let mut archive = Archive::new(decoder);
+        unpack_archive(&mut archive, dest)?;
+        return Ok(());
+    }
+    if is_tar_archive(path) {
+        let mut archive = Archive::new(file);
+        unpack_archive(&mut archive, dest)?;
+        return Ok(());
+    }
+    Err(AgentError::Source(format!(
+        "unsupported archive type: {}",
+        path.display()
+    )))
+}
+
+fn unpack_archive<R: std::io::Read>(
+    archive: &mut Archive<R>,
+    dest: &Path,
+) -> Result<(), AgentError> {
+    for entry in archive
+        .entries()
+        .map_err(|err| AgentError::Install(err.to_string()))?
+    {
+        let mut entry = entry.map_err(|err| AgentError::Install(err.to_string()))?;
+        let entry_type = entry.header().entry_type();
+        if entry_type == EntryType::Symlink || entry_type == EntryType::Link {
+            return Err(AgentError::Install(
+                "archive contains symlink/hardlink entries; refusing for safety".into(),
+            ));
+        }
+        if matches!(
+            entry_type,
+            EntryType::XHeader
+                | EntryType::XGlobalHeader
+                | EntryType::GNULongName
+                | EntryType::GNULongLink
+        ) {
+            continue;
+        }
+        if entry_type != EntryType::Regular && entry_type != EntryType::Directory {
+            return Err(AgentError::Install(format!(
+                "unsupported archive entry type: {}",
+                entry_type_label(entry_type)
+            )));
+        }
+        let entry_path = entry
+            .path()
+            .map_err(|err| AgentError::Install(err.to_string()))?;
+        if entry_path.is_absolute()
+            || entry_path
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            return Err(AgentError::Install(format!(
+                "archive entry has unsafe path: {}",
+                entry_path.display()
+            )));
+        }
+        entry
+            .unpack_in(dest)
+            .map_err(|err| AgentError::Install(err.to_string()))?;
+    }
+    Ok(())
+}
+
+fn find_manifest_root(base: &Path) -> Result<PathBuf, AgentError> {
+    let manifests = discover_manifest_paths(base, 4);
+    match manifests.len() {
+        0 => Err(AgentError::Source(format!(
+            "no manifest.toml found under {}",
+            base.display()
+        ))),
+        1 => Ok(manifests[0]
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| base.to_path_buf())),
+        _ => Err(AgentError::Source(format!(
+            "multiple manifests found under {}",
+            base.display()
+        ))),
+    }
+}
+
+fn discover_manifest_paths(base: &Path, max_depth: usize) -> Vec<PathBuf> {
+    if base.is_file() {
+        if base.file_name().and_then(|name| name.to_str()) == Some("manifest.toml") {
+            return vec![base.to_path_buf()];
+        }
+        return Vec::new();
+    }
+    if !base.is_dir() {
+        return Vec::new();
+    }
+
+    let mut manifests = Vec::new();
+    let mut queue = Vec::new();
+    queue.push((base.to_path_buf(), 0usize));
+
+    while let Some((dir, depth)) = queue.pop() {
+        let manifest = dir.join("manifest.toml");
+        if manifest.is_file() {
+            manifests.push(manifest);
+            continue;
+        }
+        if depth >= max_depth {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut dirs = entries
+            .flatten()
+            .filter_map(|entry| {
+                let Ok(ft) = entry.file_type() else {
+                    return None;
+                };
+                if ft.is_dir() {
+                    Some(entry.path())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        dirs.sort();
+        for entry in dirs {
+            queue.push((entry, depth + 1));
+        }
+    }
+
+    manifests
+}
+
+fn load_bundle(
+    bundle_root: &Path,
+) -> Result<(AgentRef, runloop_agent_registry::AgentBundle), AgentError> {
+    let registry = AgentRegistry::new([bundle_root]);
+    let listed = registry.list().map_err(map_registry_error)?;
+    if listed.is_empty() {
+        return Err(AgentError::Source(format!(
+            "no manifest found in {}",
+            bundle_root.display()
+        )));
+    }
+    if listed.len() > 1 {
+        return Err(AgentError::Source(format!(
+            "multiple manifests found in {}",
+            bundle_root.display()
+        )));
+    }
+    let reference = listed[0].described.reference.clone();
+    let manifest_dir = listed[0]
+        .manifest_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| bundle_root.to_path_buf());
+    let bundle_registry = AgentRegistry::new([manifest_dir]);
+    let bundle = bundle_registry
+        .bundle(&reference)
+        .map_err(map_registry_error)?;
+    Ok((reference, bundle))
+}
+
+fn map_registry_error(err: AgentRegistryError) -> AgentError {
+    match err {
+        AgentRegistryError::Reference { detail, .. } => AgentError::Install(detail),
+        other => AgentError::Registry(other),
+    }
+}
+
+fn validate_bundle(bundle: &runloop_agent_registry::AgentBundle) -> Vec<String> {
+    let mut issues = Vec::new();
+    let mut has_entry = false;
+
+    if let Some(entry) = &bundle.wasm_entry {
+        has_entry = true;
+        if !entry.path.is_file() {
+            issues.push(format!("missing wasm binary at {}", entry.path.display()));
+        } else if let Ok(digest) = digest_file_hex(&entry.path) {
+            if digest != entry.blake3 {
+                issues.push(format!(
+                    "wasm digest mismatch (expected {}, got {})",
+                    entry.blake3, digest
+                ));
+            }
+        } else {
+            issues.push(format!(
+                "failed to read wasm binary at {}",
+                entry.path.display()
+            ));
+        }
+    }
+
+    if let Some(entry) = &bundle.native_entry {
+        has_entry = true;
+        if !entry.path.is_file() {
+            issues.push(format!("missing native binary at {}", entry.path.display()));
+        } else if let Ok(digest) = digest_file_hex(&entry.path) {
+            if digest != entry.blake3 {
+                issues.push(format!(
+                    "native digest mismatch (expected {}, got {})",
+                    entry.blake3, digest
+                ));
+            }
+        } else {
+            issues.push(format!(
+                "failed to read native binary at {}",
+                entry.path.display()
+            ));
+        }
+    }
+
+    if !has_entry {
+        issues.push("manifest missing entry_wasm/entry_native".into());
+    }
+
+    if let Some(policy_path) = &bundle.policy_path
+        && !policy_path.is_file()
+    {
+        issues.push(format!("missing policy.caps at {}", policy_path.display()));
+    }
+
+    if let Some(tools) = &bundle.tools {
+        if !tools.path.is_file() {
+            issues.push(format!("missing tools.json at {}", tools.path.display()));
+        } else if let Ok(digest) = digest_file_hex(&tools.path) {
+            if digest != tools.blake3 {
+                issues.push(format!(
+                    "tools.json digest mismatch (expected {}, got {})",
+                    tools.blake3, digest
+                ));
+            }
+            if load_tools(&tools.path).is_err() {
+                issues.push("tools.json failed schema validation".into());
+            }
+        } else {
+            issues.push(format!(
+                "failed to read tools.json at {}",
+                tools.path.display()
+            ));
+        }
+    }
+
+    issues
+}
+
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), AgentError> {
+    if !src.is_dir() {
+        return Err(AgentError::Install(format!(
+            "bundle root {} is not a directory",
+            src.display()
+        )));
+    }
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let src_path = entry.path();
+        let dest_path = dst.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_all(&src_path, &dest_path)?;
+        } else if file_type.is_file() {
+            fs::copy(&src_path, &dest_path)?;
+        } else if file_type.is_symlink() {
+            return Err(AgentError::Install(format!(
+                "symlinked file not allowed in bundle: {}",
+                src_path.display()
+            )));
+        } else {
+            return Err(AgentError::Install(format!(
+                "unsupported file type in bundle: {}",
+                src_path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+struct StagingGuard {
+    path: PathBuf,
+    committed: bool,
+}
+
+impl StagingGuard {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            committed: false,
+        }
+    }
+
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for StagingGuard {
+    fn drop(&mut self) {
+        if !self.committed && self.path.exists() {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+fn entry_type_label(entry_type: EntryType) -> &'static str {
+    if entry_type == EntryType::Regular {
+        return "regular";
+    }
+    if entry_type == EntryType::Directory {
+        return "directory";
+    }
+    if entry_type == EntryType::Symlink {
+        return "symlink";
+    }
+    if entry_type == EntryType::Link {
+        return "hardlink";
+    }
+    if entry_type == EntryType::XHeader {
+        return "pax-header";
+    }
+    if entry_type == EntryType::XGlobalHeader {
+        return "pax-global";
+    }
+    if entry_type == EntryType::GNULongName {
+        return "gnu-long-name";
+    }
+    if entry_type == EntryType::GNULongLink {
+        return "gnu-long-link";
+    }
+    "other"
+}
+
+#[derive(Debug)]
+struct BundleAudit {
+    status: String,
+    issues: Vec<String>,
+    source_dir: Option<PathBuf>,
+}
+
+fn audit_bundle(
+    reference: &AgentRef,
+    manifest_path: &Path,
+    search_dirs: &[PathBuf],
+) -> BundleAudit {
+    let source_dir = source_dir_for(manifest_path, search_dirs);
+    let mut issues = Vec::new();
+    let manifest_registry = AgentRegistry::new([manifest_path.to_path_buf()]);
+    match manifest_registry.bundle(reference) {
+        Ok(bundle) => {
+            issues.extend(validate_bundle(&bundle));
+        }
+        Err(err) => {
+            issues.push(format!("failed to load bundle: {err}"));
+        }
+    }
+    let status = bundle_status(&issues);
+    BundleAudit {
+        status,
+        issues,
+        source_dir,
+    }
+}
+
+fn bundle_status(issues: &[String]) -> String {
+    if issues.is_empty() {
+        return "ok".into();
+    }
+    if issues.iter().any(|issue| issue.contains("digest mismatch")) {
+        return "digest_mismatch".into();
+    }
+    if issues.iter().any(|issue| issue.contains("missing")) {
+        return "missing".into();
+    }
+    "invalid".into()
+}
+
+fn source_dir_for(manifest_path: &Path, search_dirs: &[PathBuf]) -> Option<PathBuf> {
+    let mut best: Option<PathBuf> = None;
+    for dir in search_dirs {
+        if manifest_path.starts_with(dir) {
+            let replace = match &best {
+                Some(current) => dir.as_os_str().len() > current.as_os_str().len(),
+                None => true,
+            };
+            if replace {
+                best = Some(dir.clone());
+            }
+        }
+    }
+    best
 }
 
 fn resolve_agent_root(
@@ -1364,9 +1998,12 @@ fn print_prompt(prompt: &str, default: Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
     use runloop_agent_registry::digest_file_hex;
     use runloop_core::Config;
     use std::os::unix::fs::PermissionsExt;
+    use tar::{Builder, Header};
     use tempfile::tempdir;
     use toml;
 
@@ -1393,6 +2030,34 @@ version = 1
         fs::write(agent_dir.join("manifest.toml"), manifest).expect("write manifest");
     }
 
+    fn write_manifest_with_digests(
+        agent_dir: &Path,
+        name: &str,
+        wasm_digest: &str,
+        tools_digest: &str,
+    ) {
+        let manifest = format!(
+            r#"[agent]
+name = "{name}"
+version = "0.1.0"
+entry_wasm = {{ path = "bin/{name}.wasm", blake3 = "{wasm_digest}" }}
+
+[ports]
+in = []
+out = []
+
+[caps]
+file = "policy.caps"
+
+[artifacts.tools]
+path = "tools.json"
+blake3 = "{tools_digest}"
+version = 1
+"#
+        );
+        fs::write(agent_dir.join("manifest.toml"), manifest).expect("write manifest");
+    }
+
     fn write_policy(agent_dir: &Path) {
         let policy = r#"[capabilities]
 fs = []
@@ -1413,6 +2078,65 @@ exec = false
             r#"{ "version": 1, "tools": [] }"#,
         )
         .expect("write tools");
+    }
+
+    fn write_wasm_file(agent_dir: &Path, name: &str) -> PathBuf {
+        let bin_dir = agent_dir.join("bin");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        let wasm_path = bin_dir.join(format!("{name}.wasm"));
+        fs::write(&wasm_path, b"wasm").expect("write wasm");
+        wasm_path
+    }
+
+    fn write_valid_bundle(agent_dir: &Path, name: &str) {
+        fs::create_dir_all(agent_dir).expect("create agent dir");
+        write_policy(agent_dir);
+        write_tools_file(agent_dir);
+        let wasm_path = write_wasm_file(agent_dir, name);
+        let wasm_digest = digest_file_hex(&wasm_path).expect("wasm digest");
+        let tools_digest = digest_file_hex(&agent_dir.join("tools.json")).expect("tools digest");
+        write_manifest_with_digests(agent_dir, name, &wasm_digest, &tools_digest);
+    }
+
+    fn write_tar_archive(src: &Path, tar_path: &Path) {
+        let file = File::create(tar_path).expect("create tar");
+        let mut builder = Builder::new(file);
+        builder
+            .append_dir_all("bundle", src)
+            .expect("append bundle");
+        builder.finish().expect("finish tar");
+    }
+
+    fn write_tar_gz_archive(src: &Path, tar_path: &Path) {
+        let file = File::create(tar_path).expect("create tar.gz");
+        let encoder = GzEncoder::new(file, Compression::default());
+        let mut builder = Builder::new(encoder);
+        builder
+            .append_dir_all("bundle", src)
+            .expect("append bundle");
+        builder.finish().expect("finish tar");
+        let encoder = builder.into_inner().expect("tar writer");
+        encoder.finish().expect("finish gzip");
+    }
+
+    fn write_tar_with_raw_entry(tar_path: &Path, entry_name: &str) {
+        let mut header = Header::new_gnu();
+        header.set_entry_type(EntryType::Regular);
+        header.set_size(0);
+        header.set_mode(0o644);
+        header.set_mtime(0);
+        {
+            let bytes = header.as_mut_bytes();
+            bytes[..100].fill(0);
+            let name_bytes = entry_name.as_bytes();
+            bytes[..name_bytes.len()].copy_from_slice(name_bytes);
+        }
+        header.set_cksum();
+
+        let mut file = File::create(tar_path).expect("create tar");
+        file.write_all(header.as_bytes()).expect("write header");
+        let padding = [0u8; 1024];
+        file.write_all(&padding).expect("write trailer");
     }
 
     fn install_fake_toolchain(bin_dir: &Path) -> (PathBuf, PathBuf) {
@@ -1874,5 +2598,275 @@ exit 0
             matches!(result, Err(AgentError::Tools(_))),
             "missing tools should fail build"
         );
+    }
+
+    #[test]
+    fn install_copies_bundle() {
+        let temp = tempdir().expect("temp");
+        let source_root = temp.path().join("source");
+        let agent_dir = source_root.join("my_agent");
+        write_valid_bundle(&agent_dir, "my_agent");
+
+        let dest_root = temp.path().join("dest");
+        let config = Config::default();
+        let overrides = PathOverrides::default();
+        let registry_paths = resolve_paths(&config, &overrides);
+        let args = InstallArgs {
+            source: agent_dir.display().to_string(),
+            root_dir: Some(dest_root.clone()),
+            force: false,
+            skip_verify: false,
+        };
+
+        let result = install(args, &config, &overrides, &registry_paths).expect("install");
+        assert_eq!(result.reference.name, "my_agent");
+        assert!(result.agent_dir.join("manifest.toml").is_file());
+        assert!(result.agent_dir.join("bin/my_agent.wasm").is_file());
+    }
+
+    #[test]
+    fn install_uses_manifest_parent_when_nested() {
+        let temp = tempdir().expect("temp");
+        let source_root = temp.path().join("source");
+        let nested_dir = source_root.join("nested").join("my_agent");
+        write_valid_bundle(&nested_dir, "my_agent");
+
+        let dest_root = temp.path().join("dest");
+        let config = Config::default();
+        let overrides = PathOverrides::default();
+        let registry_paths = resolve_paths(&config, &overrides);
+        let args = InstallArgs {
+            source: source_root.display().to_string(),
+            root_dir: Some(dest_root.clone()),
+            force: false,
+            skip_verify: false,
+        };
+
+        let result = install(args, &config, &overrides, &registry_paths).expect("install");
+        assert!(result.agent_dir.join("manifest.toml").is_file());
+        assert!(result.agent_dir.join("bin/my_agent.wasm").is_file());
+        assert!(
+            !result.agent_dir.join("nested").exists(),
+            "nested source root should not be copied"
+        );
+    }
+
+    #[test]
+    fn install_rejects_source_is_destination() {
+        let temp = tempdir().expect("temp");
+        let dest_root = temp.path().join("agents");
+        let agent_dir = dest_root.join("my_agent");
+        write_valid_bundle(&agent_dir, "my_agent");
+
+        let config = Config::default();
+        let overrides = PathOverrides::default();
+        let registry_paths = RegistryPaths::default();
+        let args = InstallArgs {
+            source: agent_dir.display().to_string(),
+            root_dir: Some(dest_root),
+            force: true,
+            skip_verify: false,
+        };
+
+        let err = install(args, &config, &overrides, &registry_paths).unwrap_err();
+        match err {
+            AgentError::Install(msg) => {
+                assert!(msg.contains("source resolves"), "unexpected error: {msg}");
+            }
+            other => panic!("expected install error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn install_chooses_non_file_root() {
+        let temp = tempdir().expect("temp");
+        let file_root = temp.path().join("manifest.toml");
+        fs::write(&file_root, "placeholder").expect("write manifest");
+        let install_root = temp.path().join("registry");
+        fs::create_dir_all(&install_root).expect("create registry dir");
+        let source_root = temp.path().join("source");
+        let agent_dir = source_root.join("my_agent");
+        write_valid_bundle(&agent_dir, "my_agent");
+
+        let config = Config::default();
+        let overrides = PathOverrides::default();
+        let registry_paths = RegistryPaths {
+            agents: vec![file_root, install_root.clone()],
+            openings: Vec::new(),
+            demo_agents: None,
+            info: Vec::new(),
+            warnings: Vec::new(),
+        };
+        let args = InstallArgs {
+            source: agent_dir.display().to_string(),
+            root_dir: None,
+            force: false,
+            skip_verify: false,
+        };
+
+        let result = install(args, &config, &overrides, &registry_paths).expect("install");
+        assert!(result.agent_dir.starts_with(&install_root));
+    }
+
+    #[test]
+    fn install_from_tar_copies_bundle() {
+        let temp = tempdir().expect("temp");
+        let source_root = temp.path().join("source");
+        write_valid_bundle(&source_root, "my_agent");
+        let tar_path = temp.path().join("bundle.tar");
+        write_tar_archive(&source_root, &tar_path);
+
+        let dest_root = temp.path().join("dest");
+        let config = Config::default();
+        let overrides = PathOverrides::default();
+        let registry_paths = RegistryPaths::default();
+        let args = InstallArgs {
+            source: tar_path.display().to_string(),
+            root_dir: Some(dest_root),
+            force: false,
+            skip_verify: false,
+        };
+
+        let result = install(args, &config, &overrides, &registry_paths).expect("install");
+        assert!(result.agent_dir.join("manifest.toml").is_file());
+        assert!(result.agent_dir.join("bin/my_agent.wasm").is_file());
+    }
+
+    #[test]
+    fn install_from_tar_gz_copies_bundle() {
+        let temp = tempdir().expect("temp");
+        let source_root = temp.path().join("source");
+        write_valid_bundle(&source_root, "my_agent");
+        let tar_path = temp.path().join("bundle.tar.gz");
+        write_tar_gz_archive(&source_root, &tar_path);
+
+        let dest_root = temp.path().join("dest");
+        let config = Config::default();
+        let overrides = PathOverrides::default();
+        let registry_paths = RegistryPaths::default();
+        let args = InstallArgs {
+            source: tar_path.display().to_string(),
+            root_dir: Some(dest_root),
+            force: false,
+            skip_verify: false,
+        };
+
+        let result = install(args, &config, &overrides, &registry_paths).expect("install");
+        assert!(result.agent_dir.join("manifest.toml").is_file());
+        assert!(result.agent_dir.join("bin/my_agent.wasm").is_file());
+    }
+
+    #[test]
+    fn install_rejects_bad_digest() {
+        let temp = tempdir().expect("temp");
+        let source_root = temp.path().join("source");
+        let agent_dir = source_root.join("bad_agent");
+        fs::create_dir_all(&agent_dir).expect("create agent dir");
+        write_policy(&agent_dir);
+        write_tools_file(&agent_dir);
+        let _ = write_wasm_file(&agent_dir, "bad_agent");
+        write_manifest_with_digests(&agent_dir, "bad_agent", ZERO_DIGEST, ZERO_DIGEST);
+
+        let dest_root = temp.path().join("dest");
+        let config = Config::default();
+        let overrides = PathOverrides::default();
+        let registry_paths = resolve_paths(&config, &overrides);
+        let args = InstallArgs {
+            source: agent_dir.display().to_string(),
+            root_dir: Some(dest_root),
+            force: false,
+            skip_verify: false,
+        };
+
+        let err = install(args, &config, &overrides, &registry_paths).unwrap_err();
+        match err {
+            AgentError::Bundle(_) => {}
+            other => panic!("expected bundle error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn install_rejects_unsafe_reference() {
+        let temp = tempdir().expect("temp");
+        let source_root = temp.path().join("source");
+        fs::create_dir_all(&source_root).expect("create source dir");
+        write_manifest_with_digests(&source_root, "../evil", ZERO_DIGEST, ZERO_DIGEST);
+
+        let dest_root = temp.path().join("dest");
+        let config = Config::default();
+        let overrides = PathOverrides::default();
+        let registry_paths = resolve_paths(&config, &overrides);
+        let args = InstallArgs {
+            source: source_root.display().to_string(),
+            root_dir: Some(dest_root),
+            force: false,
+            skip_verify: true,
+        };
+
+        let err = install(args, &config, &overrides, &registry_paths).unwrap_err();
+        match err {
+            AgentError::Install(msg) => {
+                assert!(msg.contains("agent name"), "unexpected error: {msg}");
+            }
+            other => panic!("expected install error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn staging_guard_removes_on_drop() {
+        let temp = tempdir().expect("temp");
+        let staging = temp.path().join(".staging");
+        fs::create_dir_all(&staging).expect("create staging");
+        fs::write(staging.join("marker.txt"), "test").expect("write marker");
+        {
+            let _guard = StagingGuard::new(staging.clone());
+        }
+        assert!(!staging.exists(), "staging dir should be cleaned up");
+    }
+
+    #[test]
+    fn extract_archive_rejects_symlink_entry() {
+        let temp = tempdir().expect("temp");
+        let tar_path = temp.path().join("bundle.tar");
+        let file = File::create(&tar_path).expect("create tar");
+        let mut builder = Builder::new(file);
+        let mut header = Header::new_gnu();
+        header.set_entry_type(EntryType::Symlink);
+        header.set_size(0);
+        header.set_mode(0o777);
+        header.set_mtime(0);
+        header.set_cksum();
+        header.set_link_name("target").expect("set link name");
+        builder
+            .append_data(&mut header, "link", io::empty())
+            .expect("append symlink");
+        builder.finish().expect("finish tar");
+
+        let dest = temp.path().join("dest");
+        fs::create_dir_all(&dest).expect("create dest");
+        let err = extract_archive(&tar_path, &dest).unwrap_err();
+        match err {
+            AgentError::Install(msg) => {
+                assert!(msg.contains("symlink"), "unexpected error: {msg}");
+            }
+            other => panic!("expected install error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extract_archive_rejects_path_traversal() {
+        let temp = tempdir().expect("temp");
+        let tar_path = temp.path().join("bundle.tar");
+        write_tar_with_raw_entry(&tar_path, "../evil");
+
+        let dest = temp.path().join("dest");
+        fs::create_dir_all(&dest).expect("create dest");
+        let err = extract_archive(&tar_path, &dest).unwrap_err();
+        match err {
+            AgentError::Install(msg) => {
+                assert!(msg.contains("unsafe path"), "unexpected error: {msg}");
+            }
+            other => panic!("expected install error, got {other:?}"),
+        }
     }
 }

@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::collections::{BTreeSet, VecDeque};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 pub use tools::{Budget, Observability, ToolEntry, ToolsDoc, Transport, load_tools};
 
 mod tools;
@@ -24,11 +24,17 @@ pub struct AgentBinary {
 }
 
 impl AgentBinary {
-    fn from_entry(base: &Path, entry: &EntrySpec) -> Self {
-        Self {
-            path: base.join(&entry.path),
+    fn from_entry(
+        base: &Path,
+        entry: &EntrySpec,
+        reference: &AgentRef,
+        label: &'static str,
+    ) -> Result<Self, AgentRegistryError> {
+        let path = resolve_bundle_path(base, &entry.path, reference, label)?;
+        Ok(Self {
+            path,
             blake3: entry.blake3.clone(),
-        }
+        })
     }
 }
 
@@ -51,12 +57,18 @@ pub struct AgentArtifact {
 }
 
 impl AgentArtifact {
-    fn from_entry(base: &Path, entry: &ArtifactSpec) -> Self {
-        Self {
-            path: base.join(&entry.path),
+    fn from_entry(
+        base: &Path,
+        entry: &ArtifactSpec,
+        reference: &AgentRef,
+        label: &'static str,
+    ) -> Result<Self, AgentRegistryError> {
+        let path = resolve_bundle_path(base, &entry.path, reference, label)?;
+        Ok(Self {
+            path,
             blake3: entry.blake3.clone(),
             version: entry.version.unwrap_or(1),
-        }
+        })
     }
 }
 
@@ -112,18 +124,27 @@ impl AgentRegistry {
             .entry_wasm
             .as_ref()
             .or(doc.agent.entry_wasm.as_ref())
-            .map(|entry| AgentBinary::from_entry(&manifest_dir, entry));
+            .map(|entry| AgentBinary::from_entry(&manifest_dir, entry, reference, "entry_wasm"))
+            .transpose()?;
         let native_entry = doc
             .entry_native
             .as_ref()
             .or(doc.agent.entry_native.as_ref())
-            .map(|entry| AgentBinary::from_entry(&manifest_dir, entry));
-        let policy_path = doc.caps.as_ref().map(|caps| manifest_dir.join(&caps.file));
+            .map(|entry| AgentBinary::from_entry(&manifest_dir, entry, reference, "entry_native"))
+            .transpose()?;
+        let policy_path = doc
+            .caps
+            .as_ref()
+            .map(|caps| resolve_bundle_path(&manifest_dir, &caps.file, reference, "caps.file"))
+            .transpose()?;
         let tools = doc
             .artifacts
             .as_ref()
             .and_then(|artifacts| artifacts.tools.as_ref())
-            .map(|entry| AgentArtifact::from_entry(&manifest_dir, entry));
+            .map(|entry| {
+                AgentArtifact::from_entry(&manifest_dir, entry, reference, "artifacts.tools")
+            })
+            .transpose()?;
         Ok(AgentBundle {
             described,
             manifest_dir,
@@ -164,6 +185,7 @@ impl AgentRegistry {
             for manifest_path in discover_manifest_paths(base) {
                 let (raw, doc) = read_manifest(&manifest_path)?;
                 let reference = AgentRef::new(doc.agent.name.clone(), doc.agent.variant.clone());
+                validate_reference(&reference)?;
                 if !seen.insert(reference.clone()) {
                     continue;
                 }
@@ -178,8 +200,15 @@ impl AgentRegistry {
     }
 
     fn find_manifest(&self, reference: &AgentRef) -> Result<PathBuf, AgentRegistryError> {
+        validate_reference(reference)?;
         let relative_roots = candidate_roots(reference);
         for base in &self.search_dirs {
+            if let Some(candidate) = manifest_at_search_root(base, reference)? {
+                return Ok(candidate);
+            }
+            if base.is_file() {
+                continue;
+            }
             for rel in &relative_roots {
                 let candidate = base.join(rel).join("manifest.toml");
                 if candidate.is_file() {
@@ -231,6 +260,29 @@ pub fn schema_property_names(schema: &JsonValue) -> BTreeSet<String> {
         .unwrap_or_default()
 }
 
+fn validate_reference(reference: &AgentRef) -> Result<(), AgentRegistryError> {
+    validate_reference_component("agent name", &reference.name, reference)?;
+    if let Some(variant) = &reference.variant {
+        validate_reference_component("agent variant", variant, reference)?;
+    }
+    Ok(())
+}
+
+fn validate_reference_component(
+    label: &str,
+    value: &str,
+    reference: &AgentRef,
+) -> Result<(), AgentRegistryError> {
+    let mut components = Path::new(value).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(_)), None) => Ok(()),
+        _ => Err(AgentRegistryError::Reference {
+            reference: reference.clone(),
+            detail: format!("{label} '{value}' must be a single path segment"),
+        }),
+    }
+}
+
 fn candidate_roots(reference: &AgentRef) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(variant) = &reference.variant
@@ -248,6 +300,43 @@ fn candidate_roots(reference: &AgentRef) -> Vec<PathBuf> {
     roots
 }
 
+fn manifest_at_search_root(
+    base: &Path,
+    reference: &AgentRef,
+) -> Result<Option<PathBuf>, AgentRegistryError> {
+    let candidate = if base.is_file() {
+        if base.file_name().is_some_and(|name| name == "manifest.toml") {
+            base.to_path_buf()
+        } else {
+            return Ok(None);
+        }
+    } else {
+        let candidate = base.join("manifest.toml");
+        if !candidate.is_file() {
+            return Ok(None);
+        }
+        candidate
+    };
+
+    let (_, doc) = match read_manifest(&candidate) {
+        Ok(result) => result,
+        Err(_) => return Ok(None),
+    };
+    if doc.agent.name != reference.name {
+        return Ok(None);
+    }
+    if let Some(ref_variant) = &reference.variant {
+        let Some(man_variant) = &doc.agent.variant else {
+            return Ok(None);
+        };
+        if man_variant != ref_variant {
+            return Ok(None);
+        }
+    }
+
+    Ok(Some(candidate))
+}
+
 fn read_manifest(path: &Path) -> Result<(String, ManifestDoc), AgentRegistryError> {
     let raw = fs::read_to_string(path).map_err(|source| AgentRegistryError::Io {
         path: path.to_path_buf(),
@@ -258,6 +347,54 @@ fn read_manifest(path: &Path) -> Result<(String, ManifestDoc), AgentRegistryErro
         source,
     })?;
     Ok((raw, doc))
+}
+
+fn resolve_bundle_path(
+    manifest_dir: &Path,
+    raw: &str,
+    reference: &AgentRef,
+    label: &str,
+) -> Result<PathBuf, AgentRegistryError> {
+    if raw.trim().is_empty() {
+        return Err(AgentRegistryError::Path {
+            reference: reference.clone(),
+            detail: format!("{label} path is empty"),
+        });
+    }
+    let rel_path = Path::new(raw);
+    if rel_path.is_absolute()
+        || rel_path
+            .components()
+            .any(|c| matches!(c, Component::Prefix(_)))
+    {
+        return Err(AgentRegistryError::Path {
+            reference: reference.clone(),
+            detail: format!("{label} path must be relative: {raw}"),
+        });
+    }
+    if rel_path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(AgentRegistryError::Path {
+            reference: reference.clone(),
+            detail: format!("{label} path must not contain '..': {raw}"),
+        });
+    }
+
+    let resolved = manifest_dir.join(rel_path);
+    let base_canon = fs::canonicalize(manifest_dir).ok();
+    let resolved_canon = fs::canonicalize(&resolved).ok();
+    if let (Some(base_canon), Some(resolved_canon)) = (base_canon, resolved_canon)
+        && !resolved_canon.starts_with(&base_canon)
+    {
+        return Err(AgentRegistryError::Path {
+            reference: reference.clone(),
+            detail: format!("{label} path escapes bundle root: {raw}"),
+        });
+    }
+
+    Ok(resolved)
 }
 
 fn build_described(
@@ -471,6 +608,12 @@ mod tests {
         manifest_path
     }
 
+    fn write_root_manifest(root: &Path, manifest: &str) -> PathBuf {
+        let manifest_path = root.join("manifest.toml");
+        std::fs::write(&manifest_path, manifest).expect("write manifest");
+        manifest_path
+    }
+
     fn basic_manifest() -> &'static str {
         r#"[agent]
 name = "writer"
@@ -479,6 +622,35 @@ version = "1.0.0"
 [ports]
 in = []
 out = []
+"#
+    }
+
+    fn other_manifest() -> &'static str {
+        r#"[agent]
+name = "other"
+version = "1.0.0"
+
+[ports]
+in = []
+out = []
+"#
+    }
+
+    fn variant_manifest() -> &'static str {
+        r#"[agent]
+name = "writer"
+version = "1.1.0"
+variant = "pro"
+
+[ports]
+in = []
+out = []
+"#
+    }
+
+    fn invalid_manifest() -> &'static str {
+        r#"[agent
+name = "writer"
 "#
     }
 
@@ -535,6 +707,37 @@ out = []
             msg.contains("variant mismatch"),
             "expected mismatch detail, got {msg}"
         );
+    }
+
+    #[test]
+    fn bundle_rejects_invalid_reference() {
+        let tmp = tempdir().expect("tmp dir");
+        let registry = AgentRegistry::new([tmp.path().to_path_buf()]);
+        let err = registry
+            .bundle(&AgentRef::new("../evil", None))
+            .expect_err("invalid reference should fail");
+        let msg = format!("{err}");
+        assert!(msg.contains("agent name"), "unexpected error: {msg}");
+    }
+
+    #[test]
+    fn list_rejects_invalid_reference() {
+        let tmp = tempdir().expect("tmp dir");
+        write_manifest(
+            tmp.path(),
+            r#"[agent]
+name = "../evil"
+version = "1.0.0"
+
+[ports]
+in = []
+out = []
+"#,
+        );
+        let registry = AgentRegistry::new([tmp.path().to_path_buf()]);
+        let err = registry.list().expect_err("invalid reference should fail");
+        let msg = format!("{err}");
+        assert!(msg.contains("agent name"), "unexpected error: {msg}");
     }
 
     #[test]
@@ -613,6 +816,61 @@ out = []
     }
 
     #[test]
+    fn bundle_resolves_manifest_at_search_root() {
+        let tmp = tempdir().expect("tmp dir");
+        write_root_manifest(tmp.path(), basic_manifest());
+        let registry = AgentRegistry::new([tmp.path().to_path_buf()]);
+        let bundle = registry
+            .bundle(&AgentRef::new("writer", None))
+            .expect("bundle");
+        assert_eq!(bundle.manifest_dir, tmp.path());
+        assert_eq!(bundle.described.reference.name, "writer");
+    }
+
+    #[test]
+    fn bundle_skips_invalid_root_manifest() {
+        let tmp = tempdir().expect("tmp dir");
+        write_root_manifest(tmp.path(), invalid_manifest());
+        write_manifest(tmp.path(), basic_manifest());
+        let registry = AgentRegistry::new([tmp.path().to_path_buf()]);
+        let bundle = registry
+            .bundle(&AgentRef::new("writer", None))
+            .expect("bundle");
+        assert_eq!(bundle.described.reference.name, "writer");
+        assert!(bundle.manifest_dir.ends_with("writer"));
+    }
+
+    #[test]
+    fn bundle_ignores_root_manifest_for_other_agent() {
+        let tmp = tempdir().expect("tmp dir");
+        write_root_manifest(tmp.path(), other_manifest());
+        write_manifest(tmp.path(), basic_manifest());
+        let registry = AgentRegistry::new([tmp.path().to_path_buf()]);
+        let bundle = registry
+            .bundle(&AgentRef::new("writer", None))
+            .expect("bundle");
+        assert_eq!(bundle.described.reference.name, "writer");
+        assert!(bundle.manifest_dir.ends_with("writer"));
+    }
+
+    #[test]
+    fn bundle_ignores_root_manifest_without_variant_for_variant_request() {
+        let tmp = tempdir().expect("tmp dir");
+        write_root_manifest(tmp.path(), basic_manifest());
+        let variant_dir = tmp.path().join("writer").join("variants").join("pro");
+        std::fs::create_dir_all(&variant_dir).expect("variant dir");
+        std::fs::write(variant_dir.join("manifest.toml"), variant_manifest())
+            .expect("write manifest");
+
+        let registry = AgentRegistry::new([tmp.path().to_path_buf()]);
+        let bundle = registry
+            .bundle(&AgentRef::new("writer", Some("pro".into())))
+            .expect("bundle");
+        assert_eq!(bundle.manifest_dir, variant_dir);
+        assert_eq!(bundle.described.reference.variant.as_deref(), Some("pro"));
+    }
+
+    #[test]
     fn bundle_exposes_tools_attachment() {
         let tmp = tempdir().expect("tmp dir");
         write_manifest(
@@ -648,6 +906,90 @@ version = 1
                 .expect("digest")
                 .blake3,
             "abcdef"
+        );
+    }
+
+    #[test]
+    fn bundle_rejects_entry_path_traversal() {
+        let tmp = tempdir().expect("tmp dir");
+        write_manifest(
+            tmp.path(),
+            r#"[agent]
+name = "writer"
+version = "1.0.0"
+entry_wasm = { path = "../bin/agent.wasm", blake3 = "abcdef" }
+
+[ports]
+in = []
+out = []
+"#,
+        );
+        let registry = AgentRegistry::new([tmp.path().to_path_buf()]);
+        let err = registry
+            .bundle(&AgentRef::new("writer", None))
+            .expect_err("path traversal should fail");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("entry_wasm path must not contain '..'"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn bundle_rejects_tools_path_traversal() {
+        let tmp = tempdir().expect("tmp dir");
+        write_manifest(
+            tmp.path(),
+            r#"[agent]
+name = "writer"
+version = "1.0.0"
+
+[ports]
+in = []
+out = []
+
+[artifacts.tools]
+path = "../tools.json"
+blake3 = "abcdef"
+version = 1
+"#,
+        );
+        let registry = AgentRegistry::new([tmp.path().to_path_buf()]);
+        let err = registry
+            .bundle(&AgentRef::new("writer", None))
+            .expect_err("path traversal should fail");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("artifacts.tools path must not contain '..'"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn bundle_rejects_caps_path_traversal() {
+        let tmp = tempdir().expect("tmp dir");
+        write_manifest(
+            tmp.path(),
+            r#"[agent]
+name = "writer"
+version = "1.0.0"
+
+[ports]
+in = []
+out = []
+
+[caps]
+file = "../policy.caps"
+"#,
+        );
+        let registry = AgentRegistry::new([tmp.path().to_path_buf()]);
+        let err = registry
+            .bundle(&AgentRef::new("writer", None))
+            .expect_err("path traversal should fail");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("caps.file path must not contain '..'"),
+            "unexpected error: {msg}"
         );
     }
 

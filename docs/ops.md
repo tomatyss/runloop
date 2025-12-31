@@ -226,6 +226,9 @@ trait VectorStore {
   / `/var/log/runloop`, call `systemd-tmpfiles --create`, run
   `systemctl daemon-reload`, and **enable but do not start** `runloopd.service`
   on a first-time install so operators can edit config before launching.
+  They should also create `/var/lib/runloop/agents` and `/var/lib/runloop/openings`
+  (owned by `runloop:runloop`) so `rlp agent install --root /var/lib/runloop/agents`
+  is immediately usable.
   Upgrades capture whether the daemon was running prior to `dpkg` stopping it
   and automatically restart `runloopd.service` once the new bits are configured,
   keeping CLI/agent traffic flowing with zero downtime.
@@ -251,9 +254,11 @@ trait VectorStore {
 
 Runloop enforces signatures on agent bundles before install/launch.
 
-> **Status:** `rlp agent install|remove` and `rlp trust update` are landing with
-> the upcoming packaging milestone; until then, edit trust policy files manually
-> per the steps below. `rlp agent list` is available to show discovered bundles.
+> **Status:** `rlp agent install` is available for local bundles and validates
+> manifest digests + `tools.json` schema, but signature verification and
+> `rlp trust update` are still landing with the packaging milestone. Edit trust
+> policy files manually per the steps below. `rlp agent list` shows discovered
+> bundles plus digest status.
 
 - **Algorithm:** Ed25519 detached signature over `manifest.toml` (canonicalized)
   and referenced files.
@@ -303,9 +308,11 @@ dev = {
   - Third-party vendors sign with their key; operators add the corresponding
     anchor.
   - `rlp trust update` fetches keysets/CRLs.
-  - Install flow: `rlp agent install bundle.tar` → verify signature → enforce
-    trust policy → stage bundle.
+  - Install flow: `rlp agent install bundle.tar` → verify digests → (signature
+  verification pending) → enforce trust policy (pending) → stage bundle.
   - Launch flow re-verifies manifest + signature as defense in depth.
+  - If `security.allow_unsigned_agents=false`, `rlp agent install` will refuse
+    bundles until signature verification is implemented.
 
 - **Parameter schemas:** agent manifests embed JSON Schemas under
   `[schemas.with]` so tooling can validate `with` payloads before execution.

@@ -759,7 +759,9 @@ disable integration via a documented toggle.
 - [ ] Keep `rlp agent scaffold/build` in the `.deb` and ensure it writes into a
       search dir the executors already honor (system: `/var/lib/runloop/agents`
       or a user-configured override; user mode: `~/.runloop/agents`).
-- [ ] Add a small helper (`rlp agent list`) that enumerates discovered bundles
+- [x] Add `rlp agent install` for local bundles (`dir|.tar|.tar.gz`) with
+      manifest digest + tools.json validation (signature verification pending).
+- [x] Add a small helper (`rlp agent list`) that enumerates discovered bundles
       with their source dir and digest status so users can verify visibility.
 - [ ] Update postinst or first-run guidance to create the default search dirs
       with correct ownership/permissions for the `runloop` user/group.
@@ -774,7 +776,7 @@ disable integration via a documented toggle.
 
 ### R5. Docs
 
-- [ ] Refresh `docs/authoring-on-deb.md` and `README.md` to remove the
+- [x] Refresh `docs/authoring-on-deb.md` and `README.md` to remove the
       “demo-only” caveat, document search-dir defaults, and show how to override
       them in both modes.
 - [ ] Add a troubleshooting snippet for permission issues (daemon user cannot

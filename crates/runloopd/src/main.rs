@@ -34,6 +34,7 @@ async fn main() -> Result<(), Error> {
     let registry_paths = resolve_paths(&config, &PathOverrides::default());
     for warning in &registry_paths.warnings {
         if warning.contains("opening search dirs") {
+            tracing::info!("{warning}");
             continue;
         }
         tracing::warn!("{warning}");
@@ -45,6 +46,10 @@ async fn main() -> Result<(), Error> {
         );
     }
     tracing::info!("agent search dirs: {}", format_dirs(&registry_paths.agents));
+    tracing::info!(
+        "opening search dirs: {}",
+        format_dirs(&registry_paths.openings)
+    );
     warn_unreadable_dirs(&registry_paths.agents);
     let registry = Arc::new(AgentRegistry::new(registry_paths.agents.clone()));
     let bus_path = bus_socket_path(&config)?;
