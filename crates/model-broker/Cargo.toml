@@ -16,7 +16,7 @@ thiserror = "2.0"
 lru = "0.16"
 async-trait = "0.1"
 metrics = "0.24"
-blake3 = "1.5"
+blake3 = "1.8"
 
 [dev-dependencies]
 httpmock = "0.8.2"
