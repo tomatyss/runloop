@@ -52,5 +52,5 @@ procfs = { version = "0.18", optional = true }
 [dev-dependencies]
 criterion = { version = "0.8", default-features = false }
 tokio = { version = "1.38", features = ["rt-multi-thread", "macros"] }
-wat = "1.243.0"
+wat = "1.244.0"
 tempfile = "3.24"
