@@ -14,7 +14,7 @@ rusqlite = { version = "0.38", features = ["bundled", "chrono", "backup"] }
 thiserror = "2.0"
 parking_lot = "0.12"
 blake3 = "1.8"
-jsonschema = "0.37"
+jsonschema = "0.40"
 json-canon = "0.1"
 hex = "0.4"
 runloop-openings = { path = "../openings" }
