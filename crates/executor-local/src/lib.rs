@@ -91,6 +91,7 @@ pub fn build_executor(
         .audit_policy(audit_policy)
         .allow_missing_secrets(config.allow_missing_secrets())
         .expose_raw_secrets(config.expose_raw_secrets())
+        .strict_fs_caps(config.runtime.strict_fs_caps)
         .build()?;
 
     Ok(Arc::new(LocalExecutor::new(

@@ -403,6 +403,28 @@ impl KnowledgeBase {
         })
     }
 
+    /// Open an existing knowledge base in read-only mode.
+    ///
+    /// This skips migrations and write-related pragmas, making it suitable for
+    /// callers that only need to read materialized views.
+    pub fn open_readonly(config: &KbConfig) -> Result<Self, Error> {
+        let (_, events_path, views_path) = resolve_paths(config)?;
+        let events = Connection::open_with_flags(&events_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let views = Connection::open_with_flags(&views_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+
+        let redactor = Arc::new(Redactor::new(config.redaction.clone()));
+
+        Ok(Self {
+            events: Arc::new(Mutex::new(events)),
+            views: Arc::new(Mutex::new(views)),
+            events_path: Arc::new(events_path),
+            views_path: Arc::new(views_path),
+            schemas: Arc::new(SchemaRegistry::load()?),
+            cap_audits: Arc::new(Mutex::new(Vec::new())),
+            redactor,
+        })
+    }
+
     /// Run idempotent migrations across both databases (ledger + views).
     pub fn migrate(&self) -> Result<(), Error> {
         {

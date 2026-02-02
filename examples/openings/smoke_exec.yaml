@@ -1,0 +1,29 @@
+version: 0
+name: smoke_exec
+goals:
+  - "verify the agent runtime can execute a host command"
+
+params:
+  command: "true"
+
+policy:
+  budget_tokens: 512
+  timeout_ms: 5000
+  confirm_external: false
+
+nodes:
+  - id: exec
+    use: agent:system_helper
+    with:
+      command: "{{params.command}}"
+    timeout_ms: 5000
+
+edges: []
+
+success:
+  any_of:
+    - exists(exec.out)
+
+artifacts:
+  save:
+    - exec.out

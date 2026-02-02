@@ -86,6 +86,7 @@ impl Default for Config {
                     "~/.runloop/openings".into(),
                     "~/.runloop/examples/openings".into(),
                     "./examples/openings".into(),
+                    "/usr/share/runloop/openings".into(),
                     "/var/lib/runloop/openings".into(),
                     "/etc/runloop/openings".into(),
                 ],
@@ -338,6 +339,8 @@ pub struct RuntimeConfig {
     #[serde(default)]
     pub max_agents: u32,
     #[serde(default)]
+    pub strict_fs_caps: bool,
+    #[serde(default)]
     pub pressure_threshold: PressureThreshold,
 }
 
@@ -350,6 +353,7 @@ impl Default for RuntimeConfig {
             workdir: default_runtime_workdir(),
             sockets_dir: default_runtime_sockets_dir(),
             max_agents: 0,
+            strict_fs_caps: false,
             pressure_threshold: PressureThreshold::default(),
         }
     }
@@ -1324,11 +1328,12 @@ fn known_keys_for_path(path: &Path) -> BTreeSet<&'static str> {
             "workdir",
             "sockets_dir",
             "max_agents",
+            "strict_fs_caps",
             "pressure_threshold",
         ]),
         "runtime/pressure_threshold" => BTreeSet::from(["cpu_pct", "mem_pct", "io_wait_pct"]),
         "models" => BTreeSet::from(["default", "broker"]),
-        "models/broker" => BTreeSet::from(["providers", "routing", "budgets"]),
+        "models/broker" => BTreeSet::from(["providers", "routing", "route", "cache", "budgets"]),
         "kb" => BTreeSet::from([
             "root_dir",
             "events_db",

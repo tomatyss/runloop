@@ -15,7 +15,8 @@ ExecStart=/usr/bin/runloopd
 Restart=on-failure
 RestartSec=2s
 RuntimeDirectory=runloop
-RuntimeDirectoryMode=0755
+RuntimeDirectoryMode=0775
+UMask=0002
 LimitNOFILE=65535
 
 [Install]

@@ -3,7 +3,7 @@ name = "system_helper"
 version = "0.1.0"
 kind = "wasm32-wasip1"
 
-entry_wasm = { path = "bin/system_helper.wasm", blake3 = "9939052ef1466bbde7dbd0a378057095236ce2598117608c0fe428b4f02a13d6" }
+entry_wasm = { path = "bin/system_helper.wasm", blake3 = "d7f7e17cffc3109fec05ad4b6aab0e65d92ab2760166c5b944f4dac43ad82855" }
 
 [ports]
 in = ["intent.system_helper.run.v1"]

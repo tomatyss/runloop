@@ -20,7 +20,7 @@ build:
 build-release:
 	@cargo build --workspace --release
 
-deb:
+deb: build-agents-wasm
 	@cargo deb -p runloopd
 	@cargo deb -p rlp
 	@cargo deb -p agtop

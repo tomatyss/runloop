@@ -1086,12 +1086,20 @@ fn resolve_crate_root_with_cwd(root: &Option<PathBuf>, cwd: Option<&Path>) -> Pa
 }
 
 fn default_opening_dir(paths: &RegistryPaths) -> Option<PathBuf> {
-    paths
+    let expanded = paths
         .openings
         .iter()
-        .find(|p| p.to_string_lossy().contains("examples"))
         .cloned()
-        .or_else(|| paths.openings.first().cloned())
+        .map(expand_tilde)
+        .collect::<Vec<_>>();
+    let examples = expanded
+        .iter()
+        .filter(|p| p.to_string_lossy().contains("examples"))
+        .cloned()
+        .collect::<Vec<_>>();
+    first_writable_dir(&examples)
+        .or_else(|| first_writable_dir(&expanded))
+        .or_else(|| expanded.first().cloned())
 }
 
 fn format_search_dirs(dirs: &[PathBuf]) -> String {
@@ -1106,13 +1114,14 @@ fn short_digest(digest: &str) -> String {
 }
 
 fn preferred_config_agent_dir(config: &Config) -> Option<PathBuf> {
-    config
+    let dirs = config
         .agents
         .search_dirs
         .iter()
         .map(PathBuf::from)
         .map(expand_tilde)
-        .next()
+        .collect::<Vec<_>>();
+    first_writable_dir(&dirs).or_else(|| dirs.first().cloned())
 }
 
 fn workspace_root(cwd: Option<&Path>) -> Option<PathBuf> {
@@ -1190,6 +1199,30 @@ fn expand_tilde(path: PathBuf) -> PathBuf {
             .map(|home| home.join(raw.trim_start_matches("~/")))
             .unwrap_or(path),
         _ => path,
+    }
+}
+
+fn first_writable_dir(dirs: &[PathBuf]) -> Option<PathBuf> {
+    dirs.iter().find_map(|dir| {
+        if is_writable_dir(dir) {
+            Some(dir.clone())
+        } else {
+            None
+        }
+    })
+}
+
+fn is_writable_dir(dir: &Path) -> bool {
+    if !dir.is_dir() {
+        return false;
+    }
+    let probe = dir.join(format!(".runloop-write-{}", Uuid::new_v4()));
+    match File::create(&probe) {
+        Ok(_) => {
+            let _ = fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
     }
 }
 

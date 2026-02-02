@@ -11,7 +11,20 @@ TARGET_DIR="$ROOT/target/$WASM_TARGET/release"
 export CARGO_TARGET_DIR="$ROOT/target"
 ALLOW_MISSING_MANIFESTS="${ALLOW_MISSING_MANIFESTS:-0}"
 
-if ! rustc --print target-list | grep -q "$WASM_TARGET"; then
+TOOLCHAIN=""
+if [[ -f "$ROOT/rust-toolchain.toml" ]]; then
+  TOOLCHAIN="$(awk -F '\"' '/^channel/ { print $2; exit }' "$ROOT/rust-toolchain.toml" || true)"
+fi
+
+if command -v rustup >/dev/null 2>&1 && [[ -n "$TOOLCHAIN" ]]; then
+  CARGO_CMD=(rustup run "$TOOLCHAIN" cargo)
+  RUSTC_CMD=(rustup run "$TOOLCHAIN" rustc)
+else
+  CARGO_CMD=(cargo)
+  RUSTC_CMD=(rustc)
+fi
+
+if ! "${RUSTC_CMD[@]}" --print target-list | grep -q "$WASM_TARGET"; then
   echo "rustc missing $WASM_TARGET target (install via 'rustup target add $WASM_TARGET')" >&2
   exit 1
 fi
@@ -48,7 +61,7 @@ discover_agents() {
 
 compute_digest() {
   local path="$1"
-  cargo run -q -p b3sum -- "$path" | awk '/^[0-9a-f]{64}([[:space:]]|$)/ { print $1; exit }'
+  "${CARGO_CMD[@]}" run -q -p b3sum -- "$path" | awk '/^[0-9a-f]{64}([[:space:]]|$)/ { print $1; exit }'
 }
 
 update_tools_block() {
@@ -80,7 +93,7 @@ for agent_dir in "${AGENT_DIRS[@]}"; do
   agent_dir_name="$(basename "$agent_dir")"
   agent_name="${agent_dir_name//-/_}"
   bin_name="${agent_name}_wasm"
-  cargo build --release \
+  "${CARGO_CMD[@]}" build --release \
     --target "$WASM_TARGET" \
     --manifest-path "$agent_dir/Cargo.toml" \
     --bin "$bin_name"

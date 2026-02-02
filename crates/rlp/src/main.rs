@@ -1042,15 +1042,50 @@ async fn write_daemon_trace(
 ) -> Result<(), CliError> {
     const MAX_ATTEMPTS: usize = 15;
     const BASE_DELAY_MS: u64 = 200;
-    let kb = KnowledgeBase::open(&config.kb)?;
+    let mut can_mutate = false;
+    let mut kb = match KnowledgeBase::open_readonly(&config.kb) {
+        Ok(kb) => kb,
+        Err(_) => match KnowledgeBase::open(&config.kb) {
+            Ok(kb) => {
+                can_mutate = true;
+                kb
+            }
+            Err(err) => return Err(CliError::Kb(err)),
+        },
+    };
+    let mut attempted_write_open = can_mutate;
     for attempt in 0..MAX_ATTEMPTS {
-        catch_up_views(&kb)?;
-        if let Some(value) = kb.load_run_trace(&trace_id)? {
-            let trace: RunTrace = serde_json::from_value(value)
-                .map_err(|err| CliError::InvalidTrace(err.to_string()))?;
-            let file = File::create(trace_path)?;
-            to_writer_pretty(file, &trace)?;
-            return Ok(());
+        if can_mutate {
+            catch_up_views(&kb)?;
+        }
+        match kb.load_run_trace(&trace_id) {
+            Ok(Some(value)) => {
+                let trace: RunTrace = serde_json::from_value(value)
+                    .map_err(|err| CliError::InvalidTrace(err.to_string()))?;
+                let file = File::create(trace_path)?;
+                to_writer_pretty(file, &trace)?;
+                return Ok(());
+            }
+            Ok(None) => {}
+            Err(err) => {
+                if !can_mutate && !attempted_write_open {
+                    attempted_write_open = true;
+                    if let Ok(kb_rw) = KnowledgeBase::open(&config.kb) {
+                        kb = kb_rw;
+                        can_mutate = true;
+                        continue;
+                    }
+                }
+                return Err(CliError::Kb(err));
+            }
+        }
+        if !can_mutate && !attempted_write_open {
+            attempted_write_open = true;
+            if let Ok(kb_rw) = KnowledgeBase::open(&config.kb) {
+                kb = kb_rw;
+                can_mutate = true;
+                continue;
+            }
         }
         if attempt + 1 == MAX_ATTEMPTS {
             break;

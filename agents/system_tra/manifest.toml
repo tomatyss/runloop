@@ -3,7 +3,7 @@ name = "system_tra"
 version = "0.1.0"
 kind = "wasm32-wasip1"
 
-entry_wasm = { path = "bin/system_tra.wasm", blake3 = "7c35f0d057ebc67c22b1a1eb902c8986ada8828d1cc5dd0e27c950f42c027737" }
+entry_wasm = { path = "bin/system_tra.wasm", blake3 = "4621caa46b5901220f3b3025887a80f97ace72d0dd6b5e67fc7165f7f3f061f0" }
 
 [ports]
 in = []

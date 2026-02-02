@@ -1,0 +1,10 @@
+.git
+.gitignore
+.DS_Store
+.claude
+.taskter
+**/.DS_Store
+**/*.dSYM
+target
+**/target
+agents/**/bin/*.wasm

@@ -28,6 +28,7 @@ Then, from the repo root:
 ```bash
 just deb
 # or to build an individual crate:
+just build-agents-wasm
 cargo deb -p runloopd
 cargo deb -p rlp
 cargo deb -p agtop
@@ -46,6 +47,12 @@ sudo systemctl status runloopd
 The daemon runs in the background, persists data under `/var/lib/runloop`, and
 listens on `/run/runloop/rmp.sock`. Update `/etc/runloop/config.yaml` and
 restart the service when changing models, capabilities, or socket locations.
+Default agent bundles ship under `/usr/lib/runloop/agents` and the
+`compose_email` and `smoke_exec` openings ship to
+`/etc/runloop/openings/compose_email.yaml` and
+`/etc/runloop/openings/smoke_exec.yaml`. The postinst script seeds writable
+copies into `/var/lib/runloop/{agents,openings}` and refreshes them on upgrade
+only if the seeded directories are unchanged (tracked via a directory hash).
 
 ## Release checklist
 

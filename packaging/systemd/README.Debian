@@ -11,6 +11,17 @@ Runloop Debian Notes
 
       sudo systemctl restart runloopd
 
+- Default agent bundles are installed under `/usr/lib/runloop/agents`, and the
+  `compose_email` and `smoke_exec` openings are installed under
+  `/etc/runloop/openings/compose_email.yaml` and
+  `/etc/runloop/openings/smoke_exec.yaml`. On first install, writable copies
+  are seeded into `/var/lib/runloop/{agents,openings}` so runloop group members
+  can edit them without touching `/usr/lib` or `/etc`. Upgrades refresh seeded
+  copies only when they are unmodified (tracked via a directory hash).
+  To run the daemon from a user shell, add your user to the `runloop` group:
+
+      sudo usermod -a -G runloop "$USER"
+
 - Use the `rlp` CLI (installed with the package) to run openings or inspect
   configuration layers. All binaries respect the same config file/environment
   overrides.
