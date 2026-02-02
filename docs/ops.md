@@ -241,8 +241,8 @@ trait VectorStore {
   `/etc/runloop/openings/compose_email.yaml` and
   `/etc/runloop/openings/smoke_exec.yaml`. It seeds writable copies into
   `/var/lib/runloop/{agents,openings}` and refreshes them on upgrade only when
-  they remain unmodified (tracked via a directory hash). Upgrades capture whether the
-  daemon was running prior to
+  they remain unmodified (tracked via a directory hash). Upgrades capture whether
+  the daemon was running prior to
   `dpkg` stopping it and automatically restart `runloopd.service` once the new
   bits are configured, keeping CLI/agent traffic flowing with zero downtime.
 - The CLI (`rlp`) and monitor (`agtop`) ship as independent packages so they can

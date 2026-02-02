@@ -1,37 +1,37 @@
 Goal (incl. success criteria):
-- Review recent changes (postinst + docs) for issues and commit the git diff with proper message/sign-off.
+- Run `just pre-commit`, fix any issues it reports, and leave the repo passing the pre-commit checks.
 
 Constraints/Assumptions:
 - Follow AGENTS.md ledger updates each turn.
-- Sandbox: workspace-write; network restricted.
-- Review should prioritize correctness, data-loss risks, regressions, missing tests.
+- Use repo tooling (`just pre-commit`).
+- Avoid destructive git actions and keep changes scoped to fixes.
 
 Key decisions:
-- Directory-hash based seeding for agent bundles in postinst.
-- Docs updated to reflect directory-hash tracking.
+- Capture `strict_fs_caps` before thread spawn to avoid borrowing `self` across thread boundary.
 
 State:
-- Done: Implemented directory hash seeding + conservative legacy handling; updated docs.
-- Now: Perform code review of changes and commit.
-- Next: Provide review findings summary and commit details.
+- Done: `just pre-commit` passes after fixes; status/diff checked.
+- Now: Await user direction (commit or further changes).
+- Next: Commit if requested.
 
 Done:
-- Updated `packaging/systemd/scripts/runloopd/postinst` with directory hashing and safe legacy seed handling.
-- Updated docs: `README.md`, `packaging/systemd/README.md`, `packaging/systemd/README.Debian`, `docs/ops.md`.
+- Updated `crates/runtime/src/runtime.rs` to move `strict_fs_caps` into the thread context.
+- Updated `docs/ops.md` to wrap a long line (MD013).
+- Ran `just pre-commit` successfully.
+- Checked `git status` and `git diff --stat`.
 
 Now:
-- Review changes for risks/bugs.
+- Await user direction.
 
 Next:
-- Commit the changes with Signed-off-by.
+- Commit changes if requested.
 
 Open questions (UNCONFIRMED if needed):
 - None.
 
 Working set (files/ids/commands):
-- packaging/systemd/scripts/runloopd/postinst
-- README.md
-- packaging/systemd/README.md
-- packaging/systemd/README.Debian
+- crates/runtime/src/runtime.rs
 - docs/ops.md
 - CONTINUITY.md
+- `git status -sb`
+- `git diff --stat`

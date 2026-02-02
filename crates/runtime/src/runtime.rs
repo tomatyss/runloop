@@ -504,6 +504,7 @@ impl Runtime {
         let policy_caps = spec.caps.clone();
         let stdout_stream = RingStdout::new(stdout_ring.clone(), stdout_buffer.clone());
         let stderr_stream = RingStdout::new(stderr_ring.clone(), stderr_buffer.clone());
+        let strict_fs_caps = self.inner.strict_fs_caps;
         let process_for_thread = Arc::clone(&process);
         let host_state_for_thread = host_state.clone();
         let mailbox_for_thread = mailbox.clone();
@@ -567,7 +568,6 @@ impl Runtime {
                             .map_err(|err| Error::spawn_failed(cwd.clone(), err.to_string()))?;
                     }
 
-                    let strict_fs_caps = self.inner.strict_fs_caps;
                     for entry in &policy_caps.fs {
                         let host_path = PathBuf::from(entry.root.as_str());
                         match std::fs::metadata(&host_path) {
