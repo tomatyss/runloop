@@ -1,37 +1,32 @@
 Goal (incl. success criteria):
-- Run `just pre-commit`, fix any issues it reports, and leave the repo passing the pre-commit checks.
+- Add `CONTINUITY.md` to gitignore and commit the change.
 
 Constraints/Assumptions:
 - Follow AGENTS.md ledger updates each turn.
-- Use repo tooling (`just pre-commit`).
-- Avoid destructive git actions and keep changes scoped to fixes.
+- Avoid destructive git actions; keep changes scoped to gitignore update.
 
 Key decisions:
-- Capture `strict_fs_caps` before thread spawn to avoid borrowing `self` across thread boundary.
+- None yet.
 
 State:
-- Done: `just pre-commit` passes after fixes; status/diff checked.
-- Now: Await user direction (commit or further changes).
-- Next: Commit if requested.
+- Done: None yet.
+- Now: Update `.gitignore` to include `CONTINUITY.md`.
+- Next: Commit the gitignore change.
 
 Done:
-- Updated `crates/runtime/src/runtime.rs` to move `strict_fs_caps` into the thread context.
-- Updated `docs/ops.md` to wrap a long line (MD013).
-- Ran `just pre-commit` successfully.
-- Checked `git status` and `git diff --stat`.
+- None yet.
 
 Now:
-- Await user direction.
+- Update `.gitignore`.
 
 Next:
-- Commit changes if requested.
+- Commit changes with sign-off.
 
 Open questions (UNCONFIRMED if needed):
 - None.
 
 Working set (files/ids/commands):
-- crates/runtime/src/runtime.rs
-- docs/ops.md
+- .gitignore
 - CONTINUITY.md
-- `git status -sb`
-- `git diff --stat`
+- `git add -A`
+- `git commit -m ... -s`
