@@ -30,5 +30,7 @@
   - [TUI](tui.md)
 
 - [Contributor Guide](contributor-guide.md)
+- [Codex Workflow](codex-workflow.md)
+  - [Execution Plans](exec-plans/README.md)
 - [Roadmap](roadmap.md)
 - [ADRs](adr/README.md)

@@ -1,707 +1,162 @@
-# Repository Guidelines for AI Agents
+# Runloop Agent Guide
 
-This document provides comprehensive instructions for AI coding agents working on
-Runloop OS. Follow these guidelines to maintain code quality and consistency.
+This file is the short, always-loaded map for coding agents working on Runloop.
+Keep detailed standards in docs and update this file only for rules that should
+be active on every task.
 
-For the full technical standards with all examples, see
-[docs/engineering-standards.md](docs/engineering-standards.md).
+For full technical standards, see
+[docs/engineering-standards.md](docs/engineering-standards.md). For
+Codex-specific workflow, see [docs/codex-workflow.md](docs/codex-workflow.md).
 
-## Continuity Ledger (compaction-safe)
-Maintain a single Continuity Ledger for this workspace in CONTINUITY.md. The ledger is the canonical session briefing designed to survive context compaction; do not rely on earlier chat text unless it’s reflected in the ledger.
+## Continuity Ledger
 
-### How it works
-- At the start of every assistant turn: read CONTINUITY.md, update it to reflect the latest goal/constraints/decisions/state, then proceed with the work.
-- Update CONTINUITY.md again whenever any of these change: goal, constraints/assumptions, key decisions, progress state (Done/Now/Next), or important tool outcomes.
-- Keep it short and stable: facts only, no transcripts. Prefer bullets. Mark uncertainty as UNCONFIRMED (never guess).
-- If you notice missing recall or a compaction/summary event: refresh/rebuild the ledger from visible context, mark gaps AGENTS.md ask up to 1–3 targeted questions, then continue.
+Maintain a single continuity ledger in [CONTINUITY.md](CONTINUITY.md).
 
-### functions.update_plan vs the Ledger
-- functions.update_plan is for short-term execution scaffolding while you work (a small 3–7 step plan with pending/in_progress/completed).
-- CONTINUITY.md is for long-running continuity across compaction (the “what/why/current state”), not a step-by-step task list.
-- Keep them consistent: when the plan or state changes, update the ledger at the intent/progress level (not every micro-step).
+- At the start of every assistant turn, read `CONTINUITY.md`, update it for the
+  latest goal, constraints, decisions, state, and next step, then proceed.
+- Update it again whenever the goal, assumptions, decisions, progress, or
+  important tool outcomes change.
+- Keep it short: stable facts only, no transcript. Mark uncertainty as
+  `UNCONFIRMED`.
+- Begin user replies with a brief "Ledger Snapshot" containing Goal, Now/Next,
+  and Open Questions.
 
-### In replies
-- Begin with a brief “Ledger Snapshot” (Goal + Now/Next + Open Questions). Print the full ledger only when it materially changes or when the user asks.
+Use `functions.update_plan` for short-lived execution steps. Use `CONTINUITY.md`
+for durable context that must survive compaction.
 
-### CONTINUITY.md format (keep headings)
-- Goal (incl. success criteria):
-- Constraints/Assumptions:
-- Key decisions:
-- State:
-- Done:
-- Now:
-- Next:
-- Open questions (UNCONFIRMED if needed):
-- Working set (files/ids/commands):
-
----
-
-## Table of Contents
-
-1. [Project Structure](#project-structure)
-2. [Architecture Overview](#architecture-overview)
-3. [Build and Test Commands](#build-and-test-commands)
-4. [Code Style Rules](#code-style-rules)
-5. [Error Handling](#error-handling)
-6. [Type System Rules](#type-system-rules)
-7. [Ownership and Borrowing](#ownership-and-borrowing)
-8. [Async and Concurrency](#async-and-concurrency)
-9. [Testing Requirements](#testing-requirements)
-10. [Logging and Observability](#logging-and-observability)
-11. [API Design](#api-design)
-12. [Architectural Decisions](#architectural-decisions)
-13. [Anti-Patterns to Avoid](#anti-patterns-to-avoid)
-14. [Commit and PR Guidelines](#commit-and-pr-guidelines)
-15. [Quick Reference Card](#quick-reference-card)
-
----
-
-## Project Structure
+## Project Map
 
 ```text
-runloop-os/
-├── crates/
-│   ├── runloopd/          # Main daemon
-│   ├── rlp/               # CLI tool
-│   ├── agtop/             # TUI monitoring
-│   ├── core/              # Shared types, IDs, config
-│   ├── bus/               # Message bus (pub/sub)
-│   ├── kb/                # Knowledge base (SQLite)
-│   ├── runtime/           # WASM runtime
-│   ├── openings/          # Workflow DSL
-│   ├── router/            # Prompt classification
-│   ├── agent-registry/    # Agent discovery
-│   ├── model-broker/      # LLM abstraction
-│   └── agents-wasm/       # WASM agent implementations
-├── docs/                  # Documentation
-├── packaging/             # Debian/systemd files
-├── examples/              # Sample openings
-└── agents/                # Agent manifests
+crates/
+  core/              shared types, IDs, config
+  rmp/               message envelope encoding
+  bus/               pub/sub and IPC
+  kb/                SQLite knowledge base and trace storage
+  runtime/           WASM runtime, hostcalls, capabilities
+  openings/          workflow DSL parser and runner
+  router/            shell-vs-agent prompt classification
+  agent-registry/    agent manifest discovery and bundle validation
+  model-broker/      LLM provider abstraction
+  executor-local/    local executor wiring runtime, KB, broker, agents
+  runloopd/          daemon and control plane
+  rlp/               CLI
+  agtop/             TUI monitor
+  agents/            native agent implementations
+  agents-wasm/       WASM agent implementations, mostly outside root workspace
+docs/                architecture, standards, mdbook
+agents/              agent manifests
+examples/            sample openings
+packaging/           Debian and systemd assets
 ```
 
----
+Dependency direction matters: shared crates (`core`, `rmp`) sit below bus, KB,
+runtime, openings, executors, and binaries. Libraries must not depend on
+binaries. Avoid circular dependencies; extract shared contracts downward.
 
-## Architecture Overview
+## Build And Test
 
-### Crate Dependency Diagram
-
-```text
-                 runloop-core (shared types)
-                        │
-        ┌───────────────┼───────────────┐
-        │               │               │
-        ▼               ▼               ▼
-   runloop-bus    runloop-kb     runloop-rmp
-        │               │
-        └───────┬───────┘
-                │
-                ▼
-        runloop-runtime
-                │
-                ▼
-        runloop-openings
-                │
-        ┌───────┼───────┐
-        │       │       │
-        ▼       ▼       ▼
-    runloopd   rlp    agtop  (binaries)
-```
-
-### Dependency Rules
-
-1. **Dependencies flow downward only** — Never import from higher layers
-2. **Core has no internal deps** — Only external crates (serde, thiserror)
-3. **Binaries at leaf** — Libraries never depend on binaries
-4. **No circular deps** — Extract common code if A needs B and B needs A
-
-### When to Create a New Crate
-
-| Create New Crate When        | Keep as Module When       |
-| ---------------------------- | ------------------------- |
-| Different dependency tree    | Tightly coupled to parent |
-| Reusable by external tools   | Shares private types      |
-| Different lint requirements  | Less than 500 lines       |
-| Clear domain boundary        | No external consumers     |
-
----
-
-## Build and Test Commands
+Prefer the `Justfile` targets when available:
 
 ```bash
-# Format (required before commit)
+just fmt
+just clippy
+just test
+just all
+```
+
+Equivalent raw commands:
+
+```bash
 cargo fmt --all
-
-# Lint (must pass with no warnings)
 cargo clippy --workspace -- -D warnings
-
-# Build
-cargo build --workspace
-cargo build --workspace --release  # For packaging
-
-# Test
 cargo test --workspace
-cargo test -p <crate>              # Single crate
-cargo test -p runloop-executor-local --test golden -- --ignored  # Golden tests
-
-# Documentation
-cargo doc --no-deps --open
+cargo check --workspace
 ```
 
----
+Targeted checks:
 
-## Code Style Rules
-
-### Naming Conventions
-
-| Item                   | Convention              | Example           |
-| ---------------------- | ----------------------- | ----------------- |
-| Crates, modules, files | `snake_case`            | `agent_registry`  |
-| Types, traits          | `UpperCamelCase`        | `AgentRegistry`   |
-| Functions, variables   | `snake_case`            | `resolve_agent`   |
-| Constants              | `SCREAMING_SNAKE_CASE`  | `MAX_RETRY_COUNT` |
-
-### Size Limits (Hard)
-
-| Scope           | Limit     | Action                |
-| --------------- | --------- | --------------------- |
-| Function body   | 100 lines | Extract helpers       |
-| impl block      | 300 lines | Split or extract      |
-| Module file     | 800 lines | Split into submodules |
-| lib.rs          | 200 lines | Re-exports only       |
-| Function params | 5         | Use struct/builder    |
-| Nesting depth   | 4 levels  | Extract, early return |
-
----
-
-## Error Handling
-
-### Use `thiserror` for Library Errors
-
-```rust
-use thiserror::Error;
-
-#[derive(Debug, Error)]
-#[non_exhaustive]  // ALWAYS add this
-pub enum Error {
-    #[error("config error: {0}")]
-    Config(String),
-
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-}
+```bash
+cargo test -p <crate>
+cargo test -p runloop-executor-local --test golden -- --ignored
+just build-agents-wasm
+just test-agents-wasm
 ```
 
-### NEVER in Library Code
-
-```rust
-// FORBIDDEN:
-.unwrap()
-.expect("...")
-panic!()
-unreachable!()  // unless proven by types
-
-// USE INSTEAD:
-.ok_or_else(|| Error::Missing("field"))?
-.unwrap_or_default()
-.map_or(fallback, |v| transform(v))
-```
-
-### Error Propagation
-
-```rust
-// HANDLE when you can recover
-fn retry_on_network_error() {
-    match fetch() {
-        Err(Error::Network(_)) => retry(),
-        other => other,
-    }
-}
-
-// PROPAGATE when caller has more context
-fn library_function() -> Result<T, Error> {
-    inner_call()?  // Let caller decide
-}
-
-// LOG AND PROPAGATE at boundaries
-async fn handle_request() -> Result<Response, Error> {
-    process().await.map_err(|e| {
-        tracing::error!(error = %e, "request failed");
-        e
-    })
-}
-```
-
----
-
-## Type System Rules
-
-### Use Newtypes for Domain Concepts
-
-```rust
-// GOOD: Distinct types prevent mixing arguments
-pub struct TraceId(pub u128);
-pub struct AgentId(pub Uuid);
-
-fn process(trace: TraceId, agent: AgentId) { }
-
-// BAD: Easy to swap arguments
-fn process(trace_id: u128, agent_id: Uuid) { }
-```
-
-### Prefer Slices and Borrowed Types
-
-```rust
-// GOOD: Accepts Vec, array, or slice
-fn process_items(items: &[Item]) { }
-
-// GOOD: Accepts String or &str
-fn process_name(name: &str) { }
-
-// BAD: Too restrictive
-fn process_items(items: &Vec<Item>) { }
-fn process_name(name: &String) { }
-```
-
-### Use `Cow` for Flexible Ownership
-
-```rust
-use std::borrow::Cow;
-
-fn log_error(msg: impl Into<Cow<'static, str>>) {
-    let msg: Cow<'static, str> = msg.into();
-    // No allocation for "static string"
-    // Works with format!("dynamic {}", x) too
-}
-```
-
-### Required Attributes
-
-```rust
-// Public enums that may grow
-#[non_exhaustive]
-pub enum NodeState { Running, Done }
-
-// Important return values
-#[must_use = "RunReport contains the trace"]
-pub struct RunReport { }
-
-// Builder methods
-#[must_use]
-pub fn with_timeout(mut self, t: Duration) -> Self { }
-```
-
----
-
-## Ownership and Borrowing
-
-### Clone vs Borrow Decision
-
-| Clone When                   | Borrow When                  |
-| ---------------------------- | ---------------------------- |
-| Data is small (< 1KB)        | Data is large                |
-| Called infrequently          | Called in hot loop           |
-| Need owned for `Send`        | No ownership transfer needed |
-| Simplifies API significantly | References work fine         |
-
-### `Arc<Mutex<T>>` Pattern
-
-```rust
-// Use for shared mutable state across tasks
-struct Service {
-    state: Arc<Mutex<State>>,
-}
-
-// Minimize lock scope
-let data = {
-    let guard = self.state.lock();
-    guard.data.clone()
-};
-// Lock released here
-process(data).await;
-```
-
----
-
-## Async and Concurrency
-
-### Choosing Sync Primitives
-
-| Primitive              | Use When                   |
-| ---------------------- | -------------------------- |
-| `tokio::sync::Mutex`   | Lock held across `.await`  |
-| `parking_lot::Mutex`   | Short sync-only sections   |
-| `DashMap`              | Many readers, few writers  |
-| `tokio::sync::RwLock`  | Read-heavy async access    |
-
-### NEVER Hold Locks Across Await
-
-```rust
-// BAD: Blocks other tasks
-async fn bad() {
-    let guard = self.state.lock();
-    do_io().await;  // Lock held during I/O!
-    guard.update();
-}
-
-// GOOD: Release before await
-async fn good() {
-    let data = {
-        let guard = self.state.lock();
-        guard.data.clone()
-    };  // Lock released
-    let result = do_io().await;
-    self.state.lock().update(result);
-}
-```
-
-### Async vs Sync Boundaries
-
-```text
-ASYNC: I/O operations (network, file, bus)
-SYNC:  CPU-bound work (hashing, parsing, validation)
-
-Use spawn_blocking for sync work > 1ms
-```
-
----
-
-## Testing Requirements
-
-### Coverage Requirements
-
-| Code Type   | Minimum                 |
-| ----------- | ----------------------- |
-| Core logic  | 80% line coverage       |
-| Error paths | All variants exercised  |
-| Public API  | Every function tested   |
-| Unsafe code | 100% + property tests   |
-
-### Test Organization
-
-```rust
-// Unit tests: same file
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_valid_input() { }
-}
-
-// Integration tests: tests/ directory
-// Property tests: for parsers and security code
-proptest! {
-    #[test]
-    fn never_panics(input in ".*") {
-        let _ = parse(&input);
-    }
-}
-```
-
-### Test Naming
-
-```rust
-fn <unit>_<scenario>_<expected>() { }
-
-// Examples:
-fn router_shell_command_routes_to_shell() { }
-fn kb_duplicate_hash_is_rejected() { }
-```
-
----
-
-## Logging and Observability
-
-### Use Structured Logging
-
-```rust
-use tracing::{info, warn, error};
-
-// GOOD: Structured fields
-info!(
-    trace_id = %trace_id,
-    duration_ms = elapsed.as_millis(),
-    "operation completed"
-);
-
-// BAD: String interpolation
-info!("operation {} completed in {}ms", trace_id, elapsed);
-```
-
-### Log Levels
-
-| Level   | Use For                   |
-| ------- | ------------------------- |
-| `error` | Unrecoverable failures    |
-| `warn`  | Recoverable issues        |
-| `info`  | Significant state changes |
-| `debug` | Troubleshooting detail    |
-| `trace` | Hot path verbosity        |
-
-### What NOT to Log
-
-- Secrets (API keys, tokens)
-- PII (emails, names) — use IDs instead
-- Large payloads — log size/hash instead
-
----
-
-## API Design
-
-### Public API Minimization
-
-```rust
-// lib.rs — Only re-export what's public
-pub use config::Config;
-pub use error::Error;
-pub use store::KnowledgeBase;
-
-// Keep internal modules private
-mod cache;
-mod internal;
-```
-
-### Generics vs Trait Objects
-
-```rust
-// GENERICS: Compile-time known, zero-cost
-fn serialize<T: Serialize>(v: &T) -> Vec<u8> { }
-
-// TRAIT OBJECTS: Runtime polymorphism, plugins
-struct Runtime {
-    executor: Box<dyn Executor>,
-}
-```
-
-### Input Validation at Boundaries
-
-```rust
-/// Parse untrusted input — this is a trust boundary.
-pub fn parse_opening(yaml: &str) -> Result<Opening, Error> {
-    // 1. Size limit (DoS prevention)
-    if yaml.len() > MAX_SIZE { return Err(...) }
-
-    // 2. Parse
-    let raw: RawOpening = serde_yaml::from_str(yaml)?;
-
-    // 3. Validate schema
-    validate_schema(&raw)?;
-
-    // 4. Return trusted type
-    Ok(Opening::from_raw(raw))
-}
-```
-
----
-
-## Architectural Decisions
-
-### Planned Refactorings
-
-When working in these areas, consider advancing these goals:
-
-#### KB Storage Abstraction
-
-- Current: SQLite tightly coupled in `runloop-kb`
-- Target: Split to `runloop-kb-core` + `runloop-kb-sqlite`
-- Why: Enable PostgreSQL for multi-node deployments
-
-#### Protocol Crate Extraction
-
-- Current: Content types in `runloop-core/src/content.rs`
-- Target: Standalone `runloop-protocol` crate
-- Why: Third-party tools need protocol without full runtime
-
-#### WASM Agent SDK Consolidation
-
-- Current: FFI boilerplate duplicated in 8+ agents
-- Target: Single impl in `runloop-agent-wasm-sdk`
-- Why: Reduce duplication, consistent safety comments
-
-### Code Duplication Guidelines
-
-```text
-2 places  → Probably coincidence, leave it
-3+ places → Consider extracting
-Identical → Definitely extract
-```
-
-| Duplication Scope         | Extract To                     |
-| ------------------------- | ------------------------------ |
-| Within one crate          | Private module                 |
-| Across related crates     | Lowest common dependency       |
-| Across unrelated crates   | `runloop-core` or new crate    |
-| Test utilities            | `tests/common/mod.rs`          |
-
----
-
-## Anti-Patterns to Avoid
-
-### 1. The "Flexible Framework" Trap
-
-```rust
-// BAD: Over-engineered
-trait Processor<I, O, E, C> {
-    fn process(&self, input: I, ctx: C) -> Result<O, E>;
-}
-
-// GOOD: Solve today's problem
-fn process_message(msg: &Message) -> Result<Response, Error> { }
-```
-
-### 2. The "Just In Case" Clone
-
-```rust
-// BAD
-let owned = data.items.clone();  // "just in case"
-for item in &owned { }
-
-// GOOD
-for item in &data.items { }
-```
-
-### 3. The "God Module"
-
-```rust
-// BAD: lib.rs with 3000 lines
-
-// GOOD: Focused modules
-mod parse;     // ~200 lines
-mod validate;  // ~150 lines
-mod execute;   // ~300 lines
-```
-
-### 4. The "Silent Failure"
-
-```rust
-// BAD: Error swallowed
-let _ = sender.send(msg);
-
-// GOOD: Handle or propagate
-sender.send(msg).map_err(|e| {
-    warn!(?e, "send failed");
-    SendError::ChannelFull
-})?;
-```
-
-### 5. The "Stringly Typed" API
-
-```rust
-// BAD
-fn create(kind: &str, mode: &str) { }
-
-// GOOD
-enum Kind { Writer, Critic }
-fn create(kind: Kind, mode: Mode) { }
-```
-
-### 6. The "Primitive Obsession"
-
-```rust
-// BAD: Easy to swap args
-fn schedule(timeout_ms: u64, delay_ms: u64) { }
-
-// GOOD: Newtypes
-struct TimeoutMs(u64);
-struct DelayMs(u64);
-fn schedule(timeout: TimeoutMs, delay: DelayMs) { }
-```
-
-### 7. The "Async Infection"
-
-```rust
-// BAD: Async for pure computation
-async fn parse(s: &str) -> Config {
-    toml::from_str(s)  // No I/O!
-}
-
-// GOOD: Sync for computation
-fn parse(s: &str) -> Config { toml::from_str(s) }
-```
-
-### 8. The "Error String"
-
-```rust
-// BAD
-fn validate(s: &str) -> Result<(), String> { }
-
-// GOOD
-#[derive(Error)]
-enum ValidationError {
-    #[error("empty input")]
-    Empty,
-}
-fn validate(s: &str) -> Result<(), ValidationError> { }
-```
-
----
-
-## Commit and PR Guidelines
-
-### Commit Messages
-
-```text
-<type>(<scope>): <description>
-
-<body>
-
-<footer>
-```
-
-Types: `feat`, `fix`, `docs`, `refactor`, `test`, `perf`, `chore`
-
-```text
-feat(router): add case-insensitive matching
-
-Closes #42
-Signed-off-by: Name <email>
-```
-
-### PR Size
-
-| Size      | Lines   | Action          |
-| --------- | ------- | --------------- |
-| Small     | < 100   | Same day review |
-| Medium    | 100-400 | 1-2 days        |
-| Large     | 400-800 | 2-3 days        |
-| Too Large | > 800   | Split the PR    |
-
----
-
-## Quick Reference Card
-
-```text
-+---------------------------------------------------------------+
-|                    RUNLOOP AGENT RULES                        |
-+---------------------------------------------------------------+
-| FORBIDDEN                                                     |
-|   .unwrap() / .expect() in library code                       |
-|   panic!() / unreachable!() without type proof                |
-|   unsafe without // SAFETY: comment                           |
-|   Holding locks across .await                                 |
-|   String for fixed enum values                                |
-|   Raw primitives for domain IDs                               |
-+---------------------------------------------------------------+
-| REQUIRED                                                      |
-|   #[non_exhaustive] on public enums                           |
-|   #[must_use] on builders and important returns               |
-|   /// doc comments on all public items                        |
-|   // SAFETY: comment on every unsafe block                    |
-|   Tests for new functionality                                 |
-|   Signed-off-by on commits                                    |
-+---------------------------------------------------------------+
-| SIZE LIMITS                                                   |
-|   Function: 100 lines    Module: 800 lines                    |
-|   impl: 300 lines        lib.rs: 200 lines                    |
-|   Params: 5 max          Nesting: 4 levels                    |
-+---------------------------------------------------------------+
-| DECISION PRIORITY                                             |
-|   1. Reliability    2. Security    3. Debuggability           |
-|   4. Maintainability    5. Performance                        |
-+---------------------------------------------------------------+
-| PRE-COMMIT                                                    |
-|   cargo fmt --all                                             |
-|   cargo clippy --workspace -- -D warnings                     |
-|   cargo test --workspace                                      |
-+---------------------------------------------------------------+
-```
+Use the narrowest check that validates the change while iterating, then run the
+broader checks before finishing when the change touches shared behavior,
+runtime/capabilities, daemon control flow, parser/runner behavior, or public CLI
+surfaces.
+
+## Done Criteria
+
+Before handing work back:
+
+- Explain what changed and why.
+- Run relevant formatting, linting, and tests, or state why they were not run.
+- Review your own diff for regressions, security issues, and accidental churn.
+- Leave unrelated user changes untouched.
+- Keep `CONTINUITY.md` current.
+
+## Rust Standards
+
+Use the detailed rules in
+[docs/engineering-standards.md](docs/engineering-standards.md). The high-signal
+rules are:
+
+- Reliability first, then security, debuggability, maintainability, performance.
+- No `.unwrap()`, `.expect()`, `panic!()`, or `unreachable!()` in library code
+  unless the invariant is type-proven and documented. Tests may use them.
+- Library errors use `thiserror`; public enums that may grow use
+  `#[non_exhaustive]`.
+- Use newtypes for domain IDs and fixed concepts. Avoid stringly typed APIs.
+- Prefer borrowed inputs (`&str`, slices) unless ownership is required.
+- Do not hold locks across `.await`; minimize lock scope.
+- Use structured `tracing` fields. Do not log secrets, PII, or large payloads.
+- Public APIs should be small, documented, and exported intentionally from
+  `lib.rs`.
+- Add tests for new behavior and for relevant error paths.
+
+## Security-Sensitive Areas
+
+Be conservative in these paths and run broader checks:
+
+- `crates/runtime/src/hostcalls.rs`
+- `crates/runtime/src/caps.rs`
+- `crates/runtime/src/secrets.rs`
+- `crates/bus/`
+- `crates/kb/`
+- `crates/runloopd/src/control.rs`
+- `crates/runloopd/src/engine.rs`
+- `crates/agent-registry/`
+- `crates/rlp/src/agent.rs`
+
+For these areas, explicitly consider capability enforcement, path traversal,
+secret exposure, message spoofing, replay/idempotency, and audit visibility.
+
+## Workflow Expectations
+
+- Use `rg`/`rg --files` for code search.
+- Read nearby code and existing tests before editing.
+- Keep changes scoped to the requested behavior; do not bundle unrelated
+  refactors.
+- Use `apply_patch` for manual edits.
+- If work is complex, ambiguous, or likely to span multiple milestones, create
+  or update an execution plan as described in
+  [docs/codex-workflow.md](docs/codex-workflow.md).
+- For code review requests, lead with findings ordered by severity, with
+  file/line references. If there are no findings, say so and name residual test
+  gaps.
+
+## Git And PR
+
+Follow [CONTRIBUTING.md](CONTRIBUTING.md) and the PR template.
+
+- Commit messages use `<type>(<scope>): <description>`.
+- Include a `Signed-off-by` trailer on commits.
+- Do not rewrite, revert, or clean up user changes unless explicitly asked.
+- Before a PR or handoff, report tests run and any ignored/skipped coverage.
+
+## Keeping This Useful
+
+When an agent makes the same mistake twice, update this file if the rule should
+apply globally. If the rule is detailed, put it in docs and link to it here.
