@@ -8,6 +8,12 @@ installed from the `.deb` packages (no source checkout required).
 - Rust toolchain installed via `rustup`.
 - WebAssembly target installed once: `rustup target add wasm32-wasip1`.
 - Runloop packages (`runloopd`, `rlp`, `agtop`) installed from the `.deb`.
+- The packages ship the default `compose_email` bundles under
+  `/usr/lib/runloop/agents`, plus writable copies under
+  `/var/lib/runloop/agents`. The openings land at
+  `/etc/runloop/openings/compose_email.yaml` and
+  `/etc/runloop/openings/smoke_exec.yaml`, with writable copies under
+  `/var/lib/runloop/openings`.
 - Verify the CLI you installed exposes agent commands:
 
   ```bash
@@ -26,16 +32,19 @@ installed from the `.deb` packages (no source checkout required).
    ```
 
    This creates:
-   - `~/.runloop/agents/my_agent/` bundle with `manifest.toml`, `policy.caps`,
+   - Agent bundle under the first writable `agents.search_dirs` entry (typically
+     `/var/lib/runloop/agents/my_agent/` for users in the `runloop` group, else
+     `~/.runloop/agents/my_agent/`) with `manifest.toml`, `policy.caps`,
      `tools.json`, `bin/`.
    - `~/.runloop/agents-wasm/my_agent/` crate with a stub `src/main.rs`.
-   - Optional starter opening YAML under
-     `~/.runloop/examples/openings/<name>.yaml` if requested.
+   - Optional starter opening YAML under the first writable openings search dir
+     (for example, `/var/lib/runloop/openings/<name>.yaml` or
+     `~/.runloop/examples/openings/<name>.yaml`) if requested.
 
 2. **Author**
    - Edit `~/.runloop/agents-wasm/my_agent/src/main.rs` with your logic.
-   - Adjust capabilities in `~/.runloop/agents/my_agent/policy.caps`.
-   - Add tools in `~/.runloop/agents/my_agent/tools.json` (version 1).
+   - Adjust capabilities in your bundle's `policy.caps`.
+   - Add tools in your bundle's `tools.json` (version 1).
 
 3. **Build + install into the bundle**
 
@@ -44,21 +53,24 @@ installed from the `.deb` packages (no source checkout required).
    ```
 
    The command compiles the wasm
-   (`cargo build --release --target wasm32-wasip1`), copies it into
-   `~/.runloop/agents/my_agent/bin/`, recomputes BLAKE3 digests for `entry_wasm`
-   and `tools.json`, and validates the caps file.
+   (`cargo build --release --target wasm32-wasip1`), copies it into the bundle
+   `bin/` directory, recomputes BLAKE3 digests for `entry_wasm` and
+   `tools.json`, and validates the caps file.
 
 4. **Run**
-   - If you generated a starter opening:
-     `rlp run ~/.runloop/examples/openings/my_agent.yaml --params '{"prompt":"..."}'`
+   - If you generated a starter opening (use the path printed by the scaffold
+     command, or check your writable openings dir):
+     `rlp run /path/to/openings/my_agent.yaml --params '{"prompt":"..."}'`
    - Otherwise wire the agent into an opening and run it via
      `rlp run <opening.yaml>`.
 
 ## Picking an executor (local vs daemon)
 
-- `rlp ... --local` uses the same registry search dirs as the daemon. If your
-  bundle lives under `~/.runloop/agents` (default) or you pass `--agents-dir`,
-  it is discoverable in local runs.
+- `rlp ... --local` uses the same registry search dirs as the daemon. When
+  scaffolding, Runloop picks the first writable `agents.search_dirs` entry. On
+  Debian installs this is typically `/var/lib/runloop/agents` for users in the
+  `runloop` group; otherwise it falls back to `~/.runloop/agents` unless you
+  pass `--agents-dir`.
 - The packaged daemon runs as user `runloop` with home `/var/lib/runloop`, and
   its default agent search dirs resolve under that home. Agents you scaffolded
   in `/home/<you>/.runloop/agents` will not be visible to the daemon until you
@@ -66,58 +78,27 @@ installed from the `.deb` packages (no source checkout required).
 
 ## Running your agent with the packaged systemd service
 
-1. Point the daemon at your bundle/openings and keep the socket reachable (or
-   install the bundle into `/var/lib/runloop/agents` with
-   `rlp agent install --root /var/lib/runloop/agents <bundle.tar>`):
+1. Install your bundle into the daemon-visible registry and drop your opening
+   into a system search dir:
 
 ```bash
-mkdir -p ~/.runloop
-cat > ~/.runloop/config.yaml <<EOF
-agents:
-  search_dirs:
-    - $HOME/.runloop/agents
-openings:
-  search_dirs:
-    - $HOME/.runloop/examples/openings   # adjust to where you keep openings
-runtime:
-  sockets_dir: /run/runloop   # matches the packaged service default
-EOF
+sudo rlp agent install --root /var/lib/runloop/agents <bundle.tar>
+sudo install -m 0644 /path/to/my_agent.yaml /var/lib/runloop/openings/my_agent.yaml
 ```
 
-1. Add a systemd drop-in so the service uses your config and creates a
-   group-writable socket:
-
-```bash
-sudo mkdir -p /etc/systemd/system/runloopd.service.d
-cat <<EOF | sudo tee /etc/systemd/system/runloopd.service.d/override.conf
-[Service]
-Environment=RUNLOOP_CONFIG=$HOME/.runloop/config.yaml
-UMask=0002
-RuntimeDirectoryMode=0775
-EOF
-```
+`/var/lib/runloop/{agents,openings}` is group-writable for `runloop`, so users
+in that group can manage bundles and openings without changing system config.
 
 1. Make sure your user can connect to `/run/runloop/rmp.sock`:
    - Add yourself to the `runloop` group: `sudo usermod -a -G runloop "$USER"`
      (open a new shell so the group is applied).
-   - Keep the socket group-writable via the drop-in above.
-
-1. Ensure the daemon user can read your bundle:
-   - Simplest: make your home traversable (`chmod 711 "$HOME"`) so
-     `$HOME/.runloop/agents/...` is readable, or copy the bundle to a
-     daemon-owned path such as `/usr/lib/runloop/agents/my_agent`.
-
-1. Reload and restart the service:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl restart runloopd
-```
+   - The socket is created with `0660` permissions for `runloop:runloop`, so
+     group membership is required.
 
 1. Run your opening (no `--local` so it goes through the daemon):
 
 ```bash
-rlp run "$HOME/examples/openings/my_agent.yaml" --params '{"prompt":"..."}'
+rlp run /var/lib/runloop/openings/my_agent.yaml --params '{"prompt":"..."}'
 ```
 
 If you prefer not to touch the system service, point both daemon and CLI at a

@@ -3,7 +3,7 @@ name = "writer"
 version = "0.1.0"
 kind = "wasm32-wasip1"
 
-entry_wasm = { path = "bin/writer.wasm", blake3 = "af2a3eaf6b3ae6bdd7812615c5166a9cc9c7b688aa2dd32f138e196a82aa84b0" }
+entry_wasm = { path = "bin/writer.wasm", blake3 = "01321aa8d3fda1acdcff32a5bacaad1349ab611e8869d1a3fc15872024d5d39b" }
 
 [ports]
 in = ["intent.draft.email.v1"]

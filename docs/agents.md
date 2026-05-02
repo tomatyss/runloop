@@ -16,6 +16,9 @@ built from the companion crate.
   `./examples/openings`) and system paths (`/var/lib/runloop/agents`) searched
   as fallbacks; use `--agents-dir`/`--openings-dir` to point `rlp` at custom
   locations.
+- Packaged installs seed writable copies of the default bundles and openings
+  into `/var/lib/runloop/{agents,openings}` so runloop group members can edit
+  them without touching `/usr/lib` or `/etc`.
 
 Use `just build-agents-wasm` to rebuild the canonical bundles and refresh their
 digests, or `just test-agents-wasm` for an end-to-end smoke test of the

@@ -3,7 +3,7 @@ name = "mailer"
 version = "0.1.0"
 kind = "wasm32-wasip1"
 
-entry_wasm = { path = "bin/mailer.wasm", blake3 = "50b37b73a6ed84e41509cc323df9e77b5f45f7c6e85f63d74f45d12307b73d56" }
+entry_wasm = { path = "bin/mailer.wasm", blake3 = "3f3ccbf5ad3c23987b69713ed6bbd08087c76c7a54acd4ab169722c14524a441" }
 
 [ports]
 in = ["intent.send.mail.v1"]

@@ -35,7 +35,8 @@ reference for code quality expectations.
 
 ## 1. Project Objectives
 
-Every technical decision must be evaluated against these priorities **in order**:
+Every technical decision must be evaluated against these priorities **in
+order**:
 
 ### Priority 1: Reliability
 
@@ -279,22 +280,22 @@ The workspace follows a layered architecture:
 
 **Create a new crate when:**
 
-| Signal                   | Example                               |
-| ------------------------ | ------------------------------------- |
-| Separate compilation     | WASM agents must be separate crates   |
-| Different dependency     | `agtop` needs `ratatui`, not daemon   |
-| External consumers       | `runloop-rmp` for 3rd-party tools     |
-| Different lint needs     | WASM SDK: `#![allow(unsafe_code)]`    |
-| Clear domain boundary    | KB, Bus, Runtime are distinct         |
+| Signal                | Example                             |
+| --------------------- | ----------------------------------- |
+| Separate compilation  | WASM agents must be separate crates |
+| Different dependency  | `agtop` needs `ratatui`, not daemon |
+| External consumers    | `runloop-rmp` for 3rd-party tools   |
+| Different lint needs  | WASM SDK: `#![allow(unsafe_code)]`  |
+| Clear domain boundary | KB, Bus, Runtime are distinct       |
 
 **Keep as a module when:**
 
-| Signal                    | Example                               |
-| ------------------------- | ------------------------------------- |
-| Tightly coupled to parent | `runner.rs` + `openings` inseparable  |
-| Shares private types      | Internal state machines               |
-| Less than 500 lines       | Doesn't warrant its own crate         |
-| No external consumers     | Implementation details                |
+| Signal                    | Example                              |
+| ------------------------- | ------------------------------------ |
+| Tightly coupled to parent | `runner.rs` + `openings` inseparable |
+| Shares private types      | Internal state machines              |
+| Less than 500 lines       | Doesn't warrant its own crate        |
+| No external consumers     | Implementation details               |
 
 ### Crate Naming Convention
 
@@ -307,11 +308,12 @@ runloop-{domain}-{sub}   # Sub-components: runloop-agent-registry
 ### Dependency Direction Rules
 
 1. **Dependencies flow downward** — Lower layers never import higher layers
-2. **Core has no internal dependencies** — Only external crates (serde, thiserror)
+2. **Core has no internal dependencies** — Only external crates (serde,
+   thiserror)
 3. **Binaries depend on libraries** — Never library -> binary
 4. **No circular dependencies** — If A needs B and B needs A, extract to C
-5. **Trait in lower layer, impl in higher** — e.g., `Executor` trait in openings,
-   impl in runtime
+5. **Trait in lower layer, impl in higher** — e.g., `Executor` trait in
+   openings, impl in runtime
 
 ### Async vs Sync Boundaries
 
@@ -393,8 +395,8 @@ changes require touching all consumers anyway.
 runloop-protocol    # Message schemas, content types, wire format
 ```
 
-**Why:** Third-party tools (monitoring, debugging, custom agents) need to
-parse Runloop messages without depending on full runtime.
+**Why:** Third-party tools (monitoring, debugging, custom agents) need to parse
+Runloop messages without depending on full runtime.
 
 **When to do it:** When external consumers request protocol access, or when
 versioning the protocol independently becomes necessary.
@@ -448,12 +450,12 @@ Identical code in 2+ places → Definitely extract
 
 #### Step 2: Where should shared code live?
 
-| Duplication Scope              | Extract To                              |
-| ------------------------------ | --------------------------------------- |
-| Within one crate               | Private module in that crate            |
-| Across crates in same domain   | Lowest common dependency                |
-| Across unrelated crates        | `runloop-core` or new shared crate      |
-| Test utilities only            | `tests/common/mod.rs` or test-utils     |
+| Duplication Scope            | Extract To                          |
+| ---------------------------- | ----------------------------------- |
+| Within one crate             | Private module in that crate        |
+| Across crates in same domain | Lowest common dependency            |
+| Across unrelated crates      | `runloop-core` or new shared crate  |
+| Test utilities only          | `tests/common/mod.rs` or test-utils |
 
 #### Step 3: Environment Variable Helpers (Specific Example)
 
@@ -466,7 +468,7 @@ Identical code in 2+ places → Definitely extract
 
 **Target state:** Single helper in `runloop-core`:
 
-```rust
+````rust
 // runloop-core/src/env.rs
 
 use std::ffi::OsStr;
@@ -512,7 +514,7 @@ where
 
     result
 }
-```
+````
 
 #### Step 4: Refactoring Checklist
 
@@ -532,23 +534,23 @@ Before extracting shared code:
 
 ### Hard Limits
 
-| Scope              | Limit     | Action if Exceeded           |
-| ------------------ | --------- | ---------------------------- |
-| **Function body**  | 100 lines | Extract helper functions     |
-| **impl block**     | 300 lines | Split or extract types       |
-| **Module file**    | 800 lines | Split into submodules        |
-| **Crate lib.rs**   | 200 lines | Keep lib.rs as re-exports    |
-| **Test module**    | 500 lines | Split into test files        |
+| Scope             | Limit     | Action if Exceeded        |
+| ----------------- | --------- | ------------------------- |
+| **Function body** | 100 lines | Extract helper functions  |
+| **impl block**    | 300 lines | Split or extract types    |
+| **Module file**   | 800 lines | Split into submodules     |
+| **Crate lib.rs**  | 200 lines | Keep lib.rs as re-exports |
+| **Test module**   | 500 lines | Split into test files     |
 
 ### Soft Limits (triggers review discussion)
 
-| Scope            | Limit      | Rationale                     |
-| ---------------- | ---------- | ----------------------------- |
-| **Fn parameters**| 5          | Use struct/builder if more    |
-| **Match arms**   | 10         | Consider lookup or dispatch   |
-| **Nesting depth**| 4 levels   | Extract, use early returns    |
-| **Complexity**   | 15         | Split into smaller functions  |
-| **Crate size**   | 5000 lines | Consider splitting domain     |
+| Scope             | Limit      | Rationale                    |
+| ----------------- | ---------- | ---------------------------- |
+| **Fn parameters** | 5          | Use struct/builder if more   |
+| **Match arms**    | 10         | Consider lookup or dispatch  |
+| **Nesting depth** | 4 levels   | Extract, use early returns   |
+| **Complexity**    | 15         | Split into smaller functions |
+| **Crate size**    | 5000 lines | Consider splitting domain    |
 
 ### Measuring Code Size
 
@@ -639,7 +641,8 @@ mod ffi {
 
 - Every `unsafe` block MUST have a `// SAFETY:` comment directly above it
 - Prefer safe abstractions even at slight performance cost
-- When unsafe is required (WASM FFI, Pin projections), isolate in dedicated modules
+- When unsafe is required (WASM FFI, Pin projections), isolate in dedicated
+  modules
 - Get maintainer sign-off before adding new unsafe code
 
 ### Error Handling
@@ -891,12 +894,12 @@ async fn orchestrate() -> Result<(), Error> {
 
 ### Coverage Requirements
 
-| Code Type            | Minimum Coverage                   |
-| -------------------- | ---------------------------------- |
-| Core logic           | 80% line coverage                  |
-| Error paths          | All error variants exercised       |
-| Public API           | Every public function tested       |
-| Unsafe code          | 100% coverage + property tests     |
+| Code Type   | Minimum Coverage               |
+| ----------- | ------------------------------ |
+| Core logic  | 80% line coverage              |
+| Error paths | All error variants exercised   |
+| Public API  | Every public function tested   |
+| Unsafe code | 100% coverage + property tests |
 
 ### Test Organization
 
@@ -1011,7 +1014,7 @@ proptest! {
 
 ### Every Public Item Must Be Documented
 
-```rust
+````rust
 /// Knowledge base access layer backed by SQLite event logs.
 ///
 /// The KB uses a dual-database architecture:
@@ -1043,11 +1046,11 @@ pub struct KnowledgeBase { }
 ///
 /// This function does not panic.
 pub fn propose(&self, delta: StateDelta) -> Result<EventId, Error> { }
-```
+````
 
 ### Module-Level Documentation
 
-```rust
+````rust
 //! Message bus for inter-component communication.
 //!
 //! # Architecture
@@ -1068,7 +1071,7 @@ pub fn propose(&self, delta: StateDelta) -> Result<EventId, Error> { }
 //!     process(msg)?;
 //! }
 //! ```
-```
+````
 
 ### Documentation Sections
 
@@ -1182,17 +1185,17 @@ Answer these questions:
 
 ### Preferred Crates
 
-| Purpose       | Recommended               | Avoid                       |
-| ------------- | ------------------------- | --------------------------- |
-| Errors        | `thiserror`               | `failure`, `error-chain`    |
-| Async runtime | `tokio`                   | `async-std` (consistency)   |
-| Serialization | `serde` + `serde_json`    | hand-rolled                 |
-| Hashing       | `blake3`                  | `sha2` (non-crypto), `md5`  |
-| CLI           | `clap`                    | `structopt` (use clap)      |
-| HTTP client   | `reqwest`                 | `hyper` (unless low-level)  |
-| Concurrency   | `parking_lot`, `dashmap`  | `crossbeam` (unless chans)  |
-| Regex         | `regex`                   | `pcre2`, `fancy-regex`      |
-| UUID          | `uuid`                    | `ulid` (unless ordering)    |
+| Purpose       | Recommended              | Avoid                      |
+| ------------- | ------------------------ | -------------------------- |
+| Errors        | `thiserror`              | `failure`, `error-chain`   |
+| Async runtime | `tokio`                  | `async-std` (consistency)  |
+| Serialization | `serde` + `serde_json`   | hand-rolled                |
+| Hashing       | `blake3`                 | `sha2` (non-crypto), `md5` |
+| CLI           | `clap`                   | `structopt` (use clap)     |
+| HTTP client   | `reqwest`                | `hyper` (unless low-level) |
+| Concurrency   | `parking_lot`, `dashmap` | `crossbeam` (unless chans) |
+| Regex         | `regex`                  | `pcre2`, `fancy-regex`     |
+| UUID          | `uuid`                   | `ulid` (unless ordering)   |
 
 ### Updating Dependencies
 
@@ -1256,13 +1259,13 @@ pub async fn execute(&self, node_id: &str) -> Result<(), Error> {
 
 ### Log Levels
 
-| Level   | Use For                    | Example                     |
-| ------- | -------------------------- | --------------------------- |
-| `error` | Unrecoverable failures     | DB write failed             |
-| `warn`  | Recoverable issues         | Retry succeeded             |
-| `info`  | Significant state changes  | Agent started               |
-| `debug` | Troubleshooting detail     | Message received            |
-| `trace` | Hot path verbosity         | Per-byte parsing            |
+| Level   | Use For                   | Example          |
+| ------- | ------------------------- | ---------------- |
+| `error` | Unrecoverable failures    | DB write failed  |
+| `warn`  | Recoverable issues        | Retry succeeded  |
+| `info`  | Significant state changes | Agent started    |
+| `debug` | Troubleshooting detail    | Message received |
+| `trace` | Hot path verbosity        | Per-byte parsing |
 
 ### Metrics
 
@@ -1675,8 +1678,7 @@ Brief description of what this PR does.
 
 ## Related
 
-Closes #123
-Related to #456
+Closes #123 Related to #456
 ```
 
 ### Review Etiquette

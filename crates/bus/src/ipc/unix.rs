@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io;
 use std::mem;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -52,6 +53,9 @@ pub(crate) fn spawn_ipc_server(path: &Path, server: Arc<Server>) -> io::Result<O
         std::fs::remove_file(path)?;
     }
     let listener = UnixListener::bind(path)?;
+    if let Err(err) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660)) {
+        warn!(path = ?path, ?err, "failed to set ipc socket permissions");
+    }
     let path_buf = path.to_path_buf();
     let handle = tokio::spawn(async move {
         loop {

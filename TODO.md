@@ -498,11 +498,17 @@ ids.
 
 ### L1. Debian packages (dev grade)
 
-- [ ] Use `cargo-deb` for `runloopd`, `rlp`, `agtop`.
-- [ ] Install `runloopd.service` (enable but **do not start automatically** in
+- [x] Use `cargo-deb` for `runloopd`, `rlp`, `agtop`.
+- [x] Install `runloopd.service` (enable but **do not start automatically** in
       dev package).
-- [ ] Postinst: create system user `runloop:runloop`, own `/var/lib/runloop`,
+- [x] Postinst: create system user `runloop:runloop`, own `/var/lib/runloop`,
       and place the bus socket under `/run/runloop/rmp.sock`.
+- [x] Ensure runtime + registry directories exist with group-writable perms:
+      `/run/runloop`, `/var/lib/runloop/agents`, `/var/lib/runloop/openings`.
+- [x] Ensure the daemon socket is group-writable for `runloop` users (systemd
+      `UMask=0002` + `RuntimeDirectoryMode=0775`, plus socket perms on bind).
+- [x] Ship default agent bundles and a default opening (e.g., `compose_email`)
+      in the .deb so first-run routing succeeds without scaffolding.
 
 **DoD:** `dpkg -i` installs binaries; `systemctl enable --now runloopd` starts
 cleanly.
@@ -555,7 +561,7 @@ cleanly.
 - [ ] `docs/kb-schemas.md`: list MVP event kinds with fields.
 - [ ] `docs/openings-dsl.md`: grammar + `compose_email` example.
 - [ ] `docs/tui.md`: pane screenshots (ASCII ok).
-- [ ] `docs/ops.md`: how to run dev packages and ISO.
+- [x] `docs/ops.md`: how to run dev packages and ISO.
 
 **DoD:** README links render; no TODO placeholders remain for MVP sections.
 
@@ -763,8 +769,11 @@ disable integration via a documented toggle.
       manifest digest + tools.json validation (signature verification pending).
 - [x] Add a small helper (`rlp agent list`) that enumerates discovered bundles
       with their source dir and digest status so users can verify visibility.
-- [ ] Update postinst or first-run guidance to create the default search dirs
+- [x] Update postinst or first-run guidance to create the default search dirs
       with correct ownership/permissions for the `runloop` user/group.
+- [x] Package default agent bundles into `/usr/lib/runloop/agents` and a default
+      opening into `/etc/runloop/openings` (or add `/usr/share/runloop/openings`
+      to the default search dirs).
 
 ### R4. Tests and acceptance
 
@@ -773,6 +782,10 @@ disable integration via a documented toggle.
       registry finds the bundle and the opening executes.
 - [ ] Regression test: when no user agents exist, `rlp agent list` shows the
       demo bundles and logs guidance on adding custom agents.
+- [x] Scripted acceptance flow for Debian installs in
+      `scripts/acceptance_debian_install.sh` (scaffold → build → install → run).
+- [x] Debian container acceptance harness (`packaging/container/` +
+      `scripts/acceptance_debian_container.sh`).
 
 ### R5. Docs
 

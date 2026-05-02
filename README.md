@@ -114,7 +114,7 @@ rlp agent install /path/to/agent.bundle.tar
 
 When installed from a .deb or image, the service runs as **`runloop:runloop`**
 and writes state under **`/var/lib/runloop`**; its UDS socket lives at
-`/run/runloop/rmp.sock`. User mode continues to use `~/.runloop` for
+`/run/runloop/rmp.sock` (owned by `runloop:runloop`, mode `0660`). User mode continues to use `~/.runloop` for
 config/artifacts. Runtime socket discovery precedence:
 
 1. `runtime.socket_path` (short‑circuit; error if unreachable)
@@ -142,6 +142,11 @@ sudo systemctl restart runloopd   # when updating /etc/runloop/config.yaml
 The package ships `runloopd`, `rlp`, and `agtop`, configures the `runloop`
 system user, and writes state under `/var/lib/runloop`. Remove with
 `sudo apt purge runloop` to drop both configuration and data.
+Default agent bundles are installed under `/usr/lib/runloop/agents`, with
+writable copies seeded under `/var/lib/runloop/agents` (refreshed on upgrade
+only when the seeded directory is unchanged). The `compose_email` opening is installed at
+`/etc/runloop/openings/compose_email.yaml` and copied to
+`/var/lib/runloop/openings/compose_email.yaml` for easy editing.
 
 ---
 

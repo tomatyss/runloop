@@ -96,6 +96,8 @@ struct RuntimeInner {
     allow_missing_secrets: bool,
     /// Dev-only: when true, hostcalls will expose raw secret values to guests.
     expose_raw_secrets: bool,
+    /// When true, missing or invalid fs caps abort spawn instead of warning.
+    strict_fs_caps: bool,
 }
 
 struct AsyncSpawner {
@@ -201,6 +203,7 @@ pub struct RuntimeBuilder {
     audit_policy: AuditPolicy,
     allow_missing_secrets: bool,
     expose_raw_secrets: bool,
+    strict_fs_caps: bool,
 }
 
 impl RuntimeBuilder {
@@ -222,6 +225,7 @@ impl RuntimeBuilder {
             audit_policy: AuditPolicy::default(),
             allow_missing_secrets: false,
             expose_raw_secrets: true,
+            strict_fs_caps: false,
         }
     }
 
@@ -294,6 +298,12 @@ impl RuntimeBuilder {
         self
     }
 
+    #[must_use]
+    pub fn strict_fs_caps(mut self, strict: bool) -> Self {
+        self.strict_fs_caps = strict;
+        self
+    }
+
     pub fn build(self) -> Result<Runtime, Error> {
         let mut config = wasmtime::Config::default();
         config
@@ -340,6 +350,7 @@ impl RuntimeBuilder {
             audit_policy: self.audit_policy,
             allow_missing_secrets: self.allow_missing_secrets,
             expose_raw_secrets: self.expose_raw_secrets,
+            strict_fs_caps: self.strict_fs_caps,
         };
 
         Ok(Runtime {
@@ -493,6 +504,7 @@ impl Runtime {
         let policy_caps = spec.caps.clone();
         let stdout_stream = RingStdout::new(stdout_ring.clone(), stdout_buffer.clone());
         let stderr_stream = RingStdout::new(stderr_ring.clone(), stderr_buffer.clone());
+        let strict_fs_caps = self.inner.strict_fs_caps;
         let process_for_thread = Arc::clone(&process);
         let host_state_for_thread = host_state.clone();
         let mailbox_for_thread = mailbox.clone();
@@ -558,6 +570,38 @@ impl Runtime {
 
                     for entry in &policy_caps.fs {
                         let host_path = PathBuf::from(entry.root.as_str());
+                        match std::fs::metadata(&host_path) {
+                            Ok(meta) if !meta.is_dir() => {
+                                if strict_fs_caps {
+                                    return Err(Error::spawn_failed(
+                                        host_path.clone(),
+                                        "fs capability root is not a directory",
+                                    ));
+                                } else {
+                                    tracing::warn!(
+                                        path = %host_path.display(),
+                                        "fs capability root is not a directory; skipping preopen"
+                                    );
+                                    continue;
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(err) => {
+                                if strict_fs_caps {
+                                    return Err(Error::spawn_failed(
+                                        host_path.clone(),
+                                        err.to_string(),
+                                    ));
+                                } else {
+                                    tracing::warn!(
+                                        path = %host_path.display(),
+                                        %err,
+                                        "fs capability root missing; skipping preopen"
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
                         let dir_perms = if entry.write {
                             DirPerms::all()
                         } else {

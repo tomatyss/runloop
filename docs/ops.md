@@ -66,6 +66,12 @@ runtime:
   sockets_dir: "/var/run/runloop" # used only when socket_path is empty
 ```
 
+Optional:
+
+- `runtime.strict_fs_caps: true` forces agent spawn to fail if a declared fs
+  capability root is missing or not a directory (default `false`, which warns
+  and skips the preopen).
+
 The CLI refuses to silently fall back to local execution when the daemon is
 unavailable. It fails fast with guidance to start the daemon (or re-run with
 `--local`).
@@ -207,11 +213,12 @@ trait VectorStore {
 - Build requirements: `build-essential`, `cargo`, `rustc`, `pkg-config`,
   `libssl-dev`, `libsqlite3-dev`, `systemd`, and `cargo-deb`
   (`cargo install cargo-deb`). The `just deb` recipe runs the three builds in
-  sequence:
+  sequence and rebuilds the canonical WASM bundles:
 
   ```bash
   just deb
   # equivalent to:
+  just build-agents-wasm
   cargo deb -p runloopd
   cargo deb -p rlp
   cargo deb -p agtop
@@ -225,13 +232,19 @@ trait VectorStore {
   maintainer scripts create the `runloop` system user, chown `/var/lib/runloop`
   / `/var/log/runloop`, call `systemd-tmpfiles --create`, run
   `systemctl daemon-reload`, and **enable but do not start** `runloopd.service`
-  on a first-time install so operators can edit config before launching.
-  They should also create `/var/lib/runloop/agents` and `/var/lib/runloop/openings`
-  (owned by `runloop:runloop`) so `rlp agent install --root /var/lib/runloop/agents`
-  is immediately usable.
-  Upgrades capture whether the daemon was running prior to `dpkg` stopping it
-  and automatically restart `runloopd.service` once the new bits are configured,
-  keeping CLI/agent traffic flowing with zero downtime.
+  on a first-time install so operators can edit config before launching. They
+  should also create `/var/lib/runloop/agents` and `/var/lib/runloop/openings`
+  (owned by `runloop:runloop`) so
+  `rlp agent install --root /var/lib/runloop/agents` is immediately usable. The
+  package also ships the default agent bundles under `/usr/lib/runloop/agents`
+  and the `compose_email` and `smoke_exec` openings under
+  `/etc/runloop/openings/compose_email.yaml` and
+  `/etc/runloop/openings/smoke_exec.yaml`. It seeds writable copies into
+  `/var/lib/runloop/{agents,openings}` and refreshes them on upgrade only when
+  they remain unmodified (tracked via a directory hash). Upgrades capture whether
+  the daemon was running prior to
+  `dpkg` stopping it and automatically restart `runloopd.service` once the new
+  bits are configured, keeping CLI/agent traffic flowing with zero downtime.
 - The CLI (`rlp`) and monitor (`agtop`) ship as independent packages so they can
   be updated without restarting the daemon; they just depend on
   `ca-certificates` plus transitive Rust runtime libraries.
@@ -309,7 +322,7 @@ dev = {
     anchor.
   - `rlp trust update` fetches keysets/CRLs.
   - Install flow: `rlp agent install bundle.tar` → verify digests → (signature
-  verification pending) → enforce trust policy (pending) → stage bundle.
+    verification pending) → enforce trust policy (pending) → stage bundle.
   - Launch flow re-verifies manifest + signature as defense in depth.
   - If `security.allow_unsigned_agents=false`, `rlp agent install` will refuse
     bundles until signature verification is implemented.

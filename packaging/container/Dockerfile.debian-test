@@ -1,0 +1,28 @@
+FROM debian:trixie-slim
+
+ARG RUST_TOOLCHAIN=1.90.0
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    adduser \
+    build-essential \
+    ca-certificates \
+    curl \
+    git \
+    libsqlite3-dev \
+    libssl-dev \
+    pkg-config \
+    systemd \
+    xz-utils \
+  && rm -rf /var/lib/apt/lists/*
+
+ENV CARGO_HOME=/usr/local/cargo
+ENV RUSTUP_HOME=/usr/local/rustup
+ENV PATH=$CARGO_HOME/bin:$PATH
+
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-toolchain ${RUST_TOOLCHAIN} \
+  && rustup target add wasm32-wasip1 \
+  && cargo install cargo-deb
+
+WORKDIR /work
+COPY . /work
