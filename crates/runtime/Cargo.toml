@@ -38,7 +38,7 @@ url = "2.5"
 anyhow = "1.0"
 blake3 = "1.8"
 uuid = { version = "1.19", features = ["v4"] }
-data-encoding = "2.6"
+data-encoding = "2.10"
 
 
 [features]
