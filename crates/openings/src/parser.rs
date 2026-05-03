@@ -1167,14 +1167,13 @@ fn extract_template(value: &str) -> Option<&str> {
 
 fn validate_no_templates(value: &JsonValue, loc: SourceLocation) -> Result<(), Error> {
     match value {
-        JsonValue::String(text) => {
-            if text.contains("{{") || text.contains("}}") {
-                return Err(Error::validation(
-                    format!("embedded template syntax not allowed in parameter value '{text}'"),
-                    loc,
-                ));
-            }
+        JsonValue::String(text) if text.contains("{{") || text.contains("}}") => {
+            return Err(Error::validation(
+                format!("embedded template syntax not allowed in parameter value '{text}'"),
+                loc,
+            ));
         }
+        JsonValue::String(_) => {}
         JsonValue::Array(arr) => {
             for item in arr {
                 validate_no_templates(item, loc)?;
