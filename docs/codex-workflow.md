@@ -15,8 +15,6 @@ Use these sources when updating this workflow:
 - AGENTS.md open format: <https://agents.md/>
 - OpenAI execution-plan cookbook:
   <https://developers.openai.com/cookbook/articles/codex_exec_plans>
-- OpenAI note on keeping repo knowledge concise:
-  <https://openai.com/index/harness-engineering/>
 
 The practical takeaways are:
 

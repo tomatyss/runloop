@@ -10,7 +10,7 @@ Codex-specific workflow, see [docs/codex-workflow.md](docs/codex-workflow.md).
 
 ## Continuity Ledger
 
-Maintain a single continuity ledger in [CONTINUITY.md](CONTINUITY.md).
+Maintain a single continuity ledger in `CONTINUITY.md`.
 
 - At the start of every assistant turn, read `CONTINUITY.md`, update it for the
   latest goal, constraints, decisions, state, and next step, then proceed.
